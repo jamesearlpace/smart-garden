@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Garden Query API
+After=network-online.target smart-garden-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jamesearlpace
+WorkingDirectory=/home/jamesearlpace/smart-garden/server
+ExecStart=/usr/bin/python3 /home/jamesearlpace/smart-garden/server/query_api.py --port 5150
+Restart=always
+RestartSec=10
+Environment=DB_PATH=/home/jamesearlpace/smart-garden/server/smart-garden.db
+
+[Install]
+WantedBy=multi-user.target

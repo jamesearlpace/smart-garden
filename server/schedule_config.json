@@ -1,0 +1,110 @@
+{
+  "_comment": "Smart Garden Scheduler Configuration",
+  "_units": "times are 24h local (America/Los_Angeles), durations in minutes, thresholds in %",
+
+  "global": {
+    "timezone": "America/Los_Angeles",
+    "rain_skip_hours": 24,
+    "max_valve_runtime_min": 60,
+    "cycle_pause_sec": 30,
+    "enabled": true
+  },
+
+  "zones": [
+    {
+      "id": 0,
+      "name": "Zone 1 - Garden (drip)",
+      "enabled": true,
+      "soil_sensor": 0,
+      "schedules": [
+        { "days": ["mon", "wed", "fri"], "start": "06:00", "duration_min": 20 },
+        { "days": ["mon", "wed", "fri"], "start": "19:00", "duration_min": 15 }
+      ],
+      "soil_threshold": {
+        "enabled": true,
+        "min_moisture_pct": 30,
+        "max_moisture_pct": 80,
+        "auto_duration_min": 15,
+        "cooldown_hours": 4
+      }
+    },
+    {
+      "id": 1,
+      "name": "Zone 2 - Grapes (drip)",
+      "enabled": true,
+      "soil_sensor": 1,
+      "schedules": [
+        { "days": ["tue", "thu", "sat"], "start": "06:30", "duration_min": 25 }
+      ],
+      "soil_threshold": {
+        "enabled": true,
+        "min_moisture_pct": 25,
+        "max_moisture_pct": 75,
+        "auto_duration_min": 20,
+        "cooldown_hours": 6
+      }
+    },
+    {
+      "id": 2,
+      "name": "Zone 3 - Fruit Trees",
+      "enabled": true,
+      "soil_sensor": 2,
+      "schedules": [
+        { "days": ["mon", "thu"], "start": "05:30", "duration_min": 30 }
+      ],
+      "soil_threshold": {
+        "enabled": true,
+        "min_moisture_pct": 25,
+        "max_moisture_pct": 70,
+        "auto_duration_min": 25,
+        "cooldown_hours": 8
+      }
+    },
+    {
+      "id": 3,
+      "name": "Zone 4 - South Lawn",
+      "enabled": true,
+      "soil_sensor": 3,
+      "schedules": [
+        { "days": ["mon", "wed", "fri"], "start": "05:00", "duration_min": 15 }
+      ],
+      "soil_threshold": {
+        "enabled": true,
+        "min_moisture_pct": 35,
+        "max_moisture_pct": 80,
+        "auto_duration_min": 12,
+        "cooldown_hours": 4
+      }
+    },
+    {
+      "id": 4,
+      "name": "Zone 5 - East Lawn",
+      "enabled": true,
+      "soil_sensor": null,
+      "schedules": [
+        { "days": ["mon", "wed", "fri"], "start": "05:20", "duration_min": 15 }
+      ],
+      "soil_threshold": { "enabled": false }
+    },
+    {
+      "id": 5,
+      "name": "Zone 6 - West/NW Lawn",
+      "enabled": true,
+      "soil_sensor": null,
+      "schedules": [
+        { "days": ["tue", "thu", "sat"], "start": "05:00", "duration_min": 15 }
+      ],
+      "soil_threshold": { "enabled": false }
+    },
+    {
+      "id": 6,
+      "name": "Zone 7 - NE Lawn",
+      "enabled": true,
+      "soil_sensor": null,
+      "schedules": [
+        { "days": ["tue", "thu", "sat"], "start": "05:20", "duration_min": 15 }
+      ],
+      "soil_threshold": { "enabled": false }
+    }
+  ]
+}

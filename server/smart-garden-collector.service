@@ -1,0 +1,18 @@
+[Unit]
+Description=Smart Garden Data Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jamesearlpace
+WorkingDirectory=/home/jamesearlpace/smart-garden/server
+ExecStart=/usr/bin/python3 /home/jamesearlpace/smart-garden/server/collector.py
+Restart=always
+RestartSec=30
+Environment=ESP32_URL=http://192.168.0.150
+Environment=POLL_INTERVAL=60
+Environment=DB_PATH=/home/jamesearlpace/smart-garden/server/smart-garden.db
+
+[Install]
+WantedBy=multi-user.target

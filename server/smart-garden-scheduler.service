@@ -1,0 +1,19 @@
+[Unit]
+Description=Smart Garden Scheduler
+After=network-online.target smart-garden-collector.service
+Wants=network-online.target
+Requires=smart-garden-collector.service
+
+[Service]
+Type=simple
+User=jamesearlpace
+WorkingDirectory=/home/jamesearlpace/smart-garden/server
+ExecStart=/usr/bin/python3 /home/jamesearlpace/smart-garden/server/scheduler.py
+Restart=on-failure
+RestartSec=30
+Environment=ESP32_URL=http://192.168.0.150
+Environment=DB_PATH=/home/jamesearlpace/smart-garden/server/smart-garden.db
+Environment=SCHEDULE_CONFIG=/home/jamesearlpace/smart-garden/server/schedule_config.json
+
+[Install]
+WantedBy=multi-user.target

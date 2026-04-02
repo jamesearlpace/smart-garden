@@ -230,10 +230,69 @@ pio device monitor --baud 115200
 
 ---
 
+## 2026-07-08 — Irrigation Intelligence Research & Zimmerman Implementation
+
+**Context:** Comprehensive research into commercial and academic irrigation scheduling best practices, followed by a full audit of the production server code at `C:\MyCode\smart-garden-server\`.
+
+### System Reassessment
+
+Previous audit examined the OLD scheduler (`smart-garden/server/scheduler.py`) and incorrectly classified the system as "Level 1: Timer + Reactive Sensors." The REAL production code at `smart-garden-server/` is **Level 2: Weather-Aware with ET₀** — Open-Meteo integration, FAO Penman-Monteith ET₀, rain/wind/freeze/budget skip rules, Kc crop coefficients, cycle-soak scheduling, and Duvall billing tier awareness.
+
+**What was already working (Phase 1 — complete):**
+- Open-Meteo weather client with 30-min cache
+- ET₀ daily calculation via FAO Penman-Monteith
+- Rain forecast skip (≥5mm AND ≥60% probability)
+- Recent rain skip (≥8mm in 24h)
+- Wind skip for sprinklers (>15 mph)
+- Freeze protection (<35°F)
+- Budget-aware billing tier tracking
+- Kc crop coefficients by season [spring, early_summer, peak, fall]
+- 9 zones with soil moisture sensors and cycle-soak
+
+**What was missing:** Runtime is always `max_runtime_min` (fixed). The system calculates `et_demand = et0 * kc` but only logs it — never uses it to scale how long to water.
+
+### Research Sources & Findings
+
+| Source | Method | Key Insight |
+|--------|--------|-------------|
+| **Rachio** (commercial) | Weather Intelligence Plus | Zimmerman weather adjustment ±200% of base runtime |
+| **OpenSprinkler** (open source) | Zimmerman method | `scale = 100 + (30-humidity) + (temp-70)*4 + rain*-200`, clamped 0-200% |
+| **NDSU Extension** | Checkbook method | Track soil water balance: ET₀ withdrawals vs rain/irrigation deposits |
+| **UF/IFAS** (Florida) | ET-based scheduling | `runtime = (ET₀ × Kc × area) / (precip_rate × efficiency)` |
+| **FAO-56** (UN) | Penman-Monteith | Gold standard reference ET₀ — already implemented via Open-Meteo |
+| **Hunter** (commercial) | Solar Sync | Hardware sensor; irrelevant to software system |
+
+### Three-Phase Improvement Roadmap
+
+**Phase 1 — Weather Integration (✅ COMPLETE)**
+- ET₀ via Open-Meteo, rain/wind/freeze skip rules, Kc per zone, billing tiers
+
+**Phase 2 — Zimmerman Weather-Adjusted Runtimes (IMPLEMENTING NOW)**
+- Scale `max_runtime_min` by a weather factor based on temperature, humidity, and recent rain
+- Formula: `scale = clamp(100 + humidity_delta + temp_delta + rain_delta, 0, 200)`
+- Baselines calibrated for Duvall WA (cooler/wetter than standard 70°F/30% humidity)
+- Configurable via `config.yaml` under `weather_adjustment` section
+
+**Phase 3 — Soil Water Balance / Checkbook Method (FUTURE)**
+- Track cumulative soil water depletion per zone across days
+- `balance -= ET₀ × Kc` daily, `balance += rain + irrigation`
+- Water when balance drops below Management Allowed Depletion (MAD) threshold
+- Replaces reactive soil-sensor-only triggering with predictive scheduling
+
+### Changes Made
+
+**`irrigation.py`** — Added `calculate_weather_scale()` method implementing Zimmerman formula with Duvall-calibrated baselines. Applied scale factor to runtime in `start_zone_watering()`. Scale factor logged in decision details and exposed via API.
+
+**`config.yaml`** — Added `weather_adjustment` section with baseline_temp_f, baseline_humidity_pct, rain_scale_factor, min/max scale bounds.
+
+**`dashboard.py`** — Added `weather_scale` to `/api/dashboard` response.
+
+**`templates/index.html`** — Added 9th "About" panel with research citations, 3-phase roadmap, and live weather scale display.
+
+---
+
 ## Next Steps
-1. Order 4 more L298N boards for remaining valves
-2. Add 3 more valve pin definitions to config.h (valves 8-10)
-3. Wire remaining valves
-4. Connect soil moisture sensors and DHT22
-5. Build server-side automation on Acer (Python service with scheduling)
-6. Connect to actual irrigation pipes
+1. Phase 3: Implement soil water balance (checkbook) tracking
+2. Tune Zimmerman baselines after observing real-world behavior for 2-4 weeks
+3. Add runtime adjustment logging to analytics charts
+4. Consider adding precipitation rate data per zone for ET₀-based exact runtime calculation

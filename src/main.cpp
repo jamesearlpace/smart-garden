@@ -17,6 +17,7 @@
 #include <WebServer.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include <Preferences.h>
 #include "config.h"
 
@@ -788,6 +789,23 @@ void setup() {
     mqtt.setCallback(mqttCallback);
     #endif
 
+    // OTA firmware updates — allows wireless flashing via PlatformIO
+    ArduinoOTA.setHostname("smart-garden");
+    ArduinoOTA.onStart([]() {
+        Serial.println("[OTA] Update starting...");
+        // Close all valves before OTA (safe state during reflash)
+        for (int i = 0; i < NUM_VALVES; i++) {
+            closeValve(i);
+        }
+    });
+    ArduinoOTA.onEnd([]()   { Serial.println("\n[OTA] Update complete — rebooting"); });
+    ArduinoOTA.onError([](ota_error_t err) { Serial.printf("[OTA] Error %u\n", err); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("[OTA] %u%%\r", progress * 100 / total);
+    });
+    ArduinoOTA.begin();
+    Serial.println("[INIT] OTA updates enabled (hostname: smart-garden)");
+
     // Initial sensor read
     readSensors();
     lastSensorRead = millis();
@@ -797,6 +815,7 @@ void setup() {
 }
 
 void loop() {
+    ArduinoOTA.handle();
     server.handleClient();
 
     // WiFi watchdog — reconnect if dropped, reboot if stuck

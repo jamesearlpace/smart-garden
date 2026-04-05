@@ -78,4 +78,13 @@ const char* MQTT_PASS     = "";
 #define EVENT_RING_SIZE    100   // Max valve/system events kept in memory
 #define NVS_NAMESPACE      "smartgarden"  // Non-volatile storage namespace
 
+// ============================================================
+// Power Management
+// ============================================================
+#define BOOT_CPU_MHZ          80    // CPU freq during boot (lower = less current draw)
+#define RUN_CPU_MHZ           240   // CPU freq after WiFi connects (full speed)
+#define SAFE_MODE_THRESHOLD   5     // Consecutive crashes before entering safe mode
+#define SAFE_MODE_DELAY_SEC   15    // Extra stabilization delay in safe mode
+#define WIFI_TX_DBM           WIFI_POWER_8_5dBm  // Reduced TX power (default is 19.5dBm)
+
 #endif // CONFIG_H

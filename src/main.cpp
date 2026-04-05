@@ -10,6 +10,9 @@
  */
 
 #include <Arduino.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+#include "esp_system.h"  // esp_reset_reason()
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DHT.h>
@@ -26,6 +29,48 @@ PubSubClient mqtt(espClient);
 // ============================================================
 // Telemetry — boot count, event log, valve counters
 // ============================================================
+
+// ============================================================
+// Power Test Mode — bare minimum firmware for buck converter testing.
+// Built with: pio run -e power-test --target upload --upload-port COM3
+// No WiFi, no GPIO, no sensors. Just proves the ESP32 can boot.
+// ============================================================
+#ifdef POWER_TEST_ONLY
+void setup() {
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    setCpuFrequencyMhz(80);  // Minimum current draw
+    Serial.begin(115200);
+    delay(100);
+    Serial.println();
+    Serial.println("==========================================");
+    Serial.println("  POWER TEST MODE — no WiFi, no GPIO");
+    Serial.println("==========================================");
+    Serial.printf("  CPU freq: %u MHz\n", getCpuFrequencyMhz());
+    Serial.printf("  Reset reason: %d\n", (int)esp_reset_reason());
+    Serial.printf("  Free heap: %u / %u bytes\n", ESP.getFreeHeap(), ESP.getHeapSize());
+    Serial.printf("  Chip temp: %.1f°C / %.1f°F\n", temperatureRead(), temperatureRead() * 9.0/5.0 + 32.0);
+    Serial.printf("  Flash size: %u bytes\n", ESP.getFlashChipSize());
+    Serial.printf("  SDK: %s\n", ESP.getSdkVersion());
+    Serial.println("==========================================");
+    Serial.println("If you see this repeating, the buck converter");
+    Serial.println("can't sustain even idle ESP32 power draw.");
+    Serial.println("If this is stable, try: pio run -e esp32 --target upload");
+    Serial.println("==========================================");
+}
+
+void loop() {
+    static unsigned long lastPrint = 0;
+    static uint32_t heartbeat = 0;
+    if (millis() - lastPrint >= 2000) {
+        lastPrint = millis();
+        heartbeat++;
+        Serial.printf("[POWER OK] #%u  uptime=%lus  heap=%u  temp=%.1f°C\n",
+            heartbeat, millis() / 1000, ESP.getFreeHeap(), temperatureRead());
+    }
+}
+#else  // Full firmware below
+// ============================================================
+
 Preferences nvs;
 uint32_t bootCount = 0;
 unsigned long bootTimeMillis = 0;  // millis() at boot for uptime calc
@@ -613,6 +658,10 @@ void setupWiFi() {
     #endif
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.setTxPower(WIFI_TX_DBM);  // Reduce TX power: ~120mA vs ~380mA at default 19.5dBm
+    Serial.printf(" (TX power: %.1f dBm)\n", WiFi.getTxPower() / 4.0);
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
 
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 40) {
@@ -641,24 +690,51 @@ void setupWiFi() {
 // Setup & Loop
 // ============================================================
 void setup() {
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // disable brownout detector
+    setCpuFrequencyMhz(BOOT_CPU_MHZ);  // Reduce current draw during boot (80MHz vs 240MHz)
     Serial.begin(115200);
-    delay(1000);
-    Serial.println("\n🌱 Smart Garden Controller v2.0 (telemetry)");
-    Serial.println("================================");
+    delay(100);
 
-    // Boot count — persisted in NVS
+    // === DIAGNOSTIC: early serial before any peripheral init ===
+    Serial.println();
+    Serial.println("=== POWER DIAG: serial OK ===");
+    Serial.printf("  CPU freq: %u MHz (reduced for boot)\n", getCpuFrequencyMhz());
+    Serial.printf("  Reset reason: %d\n", (int)esp_reset_reason());
+    Serial.printf("  Free heap: %u bytes\n", ESP.getFreeHeap());
+    Serial.printf("  Chip temp: %.1f°C\n", temperatureRead());
+
+    // === Crash counter — detect repeated power failures ===
     nvs.begin(NVS_NAMESPACE, false);
+    uint32_t crashCount = nvs.getUInt("crashCnt", 0) + 1;
+    nvs.putUInt("crashCnt", crashCount);
     bootCount = nvs.getUInt("bootCount", 0) + 1;
     nvs.putUInt("bootCount", bootCount);
     nvs.end();
-    Serial.printf("Boot #%u\n", bootCount);
+
+    bool safeMode = (crashCount >= SAFE_MODE_THRESHOLD);
+    int stabilizeDelay = safeMode ? SAFE_MODE_DELAY_SEC : 3;
+
+    Serial.printf("  Boot #%u, crash counter: %u/%u\n", bootCount, crashCount, SAFE_MODE_THRESHOLD);
+    if (safeMode) {
+        Serial.println("!!! SAFE MODE — too many consecutive crashes !!!");
+        Serial.println("!!! Extra stabilization delay, reduced WiFi TX power !!!");
+        Serial.println("!!! Will auto-clear after successful WiFi connect !!!");
+    }
+    Serial.printf("=== Waiting %ds for power to stabilize ===\n", stabilizeDelay);
+    delay(stabilizeDelay * 1000);
+    Serial.println("=== Stabilization complete, starting init ===");
+
+    Serial.println("\n🌱 Smart Garden Controller v2.2 (power-hardened)");
+    Serial.println("================================");
     bootTimeMillis = millis();
 
     // Load persisted valve counters
+    Serial.println("[INIT] Loading valve counters...");
     loadValveCounters();
-    logEvent("boot", "System started");
+    logEvent("boot", safeMode ? "Safe mode boot" : "System started");
 
     // Initialize valve pins
+    Serial.println("[INIT] Configuring GPIO pins...");
     for (int i = 0; i < NUM_VALVES; i++) {
         pinMode(valves[i].in1, OUTPUT);
         pinMode(valves[i].in2, OUTPUT);
@@ -666,18 +742,34 @@ void setup() {
         digitalWrite(valves[i].in2, LOW);
     }
 
-    // Close all valves on startup (safe state)
-    Serial.println("Closing all valves (safe startup)...");
-    closeAllValves();
+    // Close all valves on startup (safe state) — stagger to limit current spikes
+    Serial.println("[INIT] Closing all valves (safe startup)...");
+    for (int i = 0; i < NUM_VALVES; i++) {
+        closeValve(i);
+        delay(200);  // Stagger valve pulses to avoid simultaneous current draw
+    }
 
     // Initialize sensors
+    Serial.println("[INIT] Starting DHT22 + soil sensors...");
     dht.begin();
     for (int i = 0; i < NUM_SOIL_SENSORS; i++) {
         pinMode(soilPins[i], INPUT);
     }
 
-    // WiFi
+    // WiFi — biggest current draw, most likely to trigger power issues
+    Serial.println("[INIT] === Starting WiFi (high current draw) ===");
     setupWiFi();
+
+    // If WiFi connected successfully, reset crash counter and restore full CPU speed
+    if (WiFi.status() == WL_CONNECTED) {
+        nvs.begin(NVS_NAMESPACE, false);
+        nvs.putUInt("crashCnt", 0);  // Reset — we survived boot
+        nvs.end();
+        setCpuFrequencyMhz(RUN_CPU_MHZ);
+        Serial.printf("[INIT] Crash counter reset. CPU boosted to %u MHz\n", getCpuFrequencyMhz());
+    } else {
+        Serial.println("[INIT] WiFi failed — crash counter NOT reset, staying at low CPU freq");
+    }
 
     // Web server routes
     server.on("/", handleRoot);
@@ -700,11 +792,35 @@ void setup() {
     readSensors();
     lastSensorRead = millis();
 
-    Serial.println("Setup complete — system running");
+    Serial.println("[INIT] Setup complete — system running");
+    Serial.printf("[INIT] Free heap after init: %u bytes\n", ESP.getFreeHeap());
 }
 
 void loop() {
     server.handleClient();
+
+    // WiFi watchdog — reconnect if dropped, reboot if stuck
+    static unsigned long lastWifiCheck = 0;
+    static int wifiFailCount = 0;
+    if (millis() - lastWifiCheck >= 10000) {  // check every 10s
+        lastWifiCheck = millis();
+        if (WiFi.status() != WL_CONNECTED) {
+            wifiFailCount++;
+            Serial.printf("WiFi disconnected (attempt %d)... reconnecting\n", wifiFailCount);
+            WiFi.disconnect();
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            wifiReconnects++;
+            logEvent("wifi", "reconnect");
+            if (wifiFailCount >= 6) {  // 60s of failures — hard reboot
+                Serial.println("WiFi failed 6 times — rebooting");
+                logEvent("error", "wifi_reboot");
+                delay(500);
+                ESP.restart();
+            }
+        } else {
+            wifiFailCount = 0;
+        }
+    }
 
     // Read sensors periodically
     if (millis() - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
@@ -721,3 +837,5 @@ void loop() {
     mqtt.loop();
     #endif
 }
+
+#endif // POWER_TEST_ONLY

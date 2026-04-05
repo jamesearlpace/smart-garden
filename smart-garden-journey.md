@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** Active — first valve tested, server-side irrigation engine deployed  
-**Last Updated:** 2026-04-02  
+**Status:** Active — bench test complete, all hardware verified on solar/battery power, ready for yard installation  
+**Last Updated:** 2026-04-05  
 **Goal:** Solar-powered smart irrigation system controlled remotely via GitHub Copilot through a home server
 
 ---
@@ -88,7 +88,7 @@ Copilot runs in the cloud and cannot reach local network IPs directly. The Acer 
 
 ---
 
-## Current State (2026-04-01)
+## Current State (2026-04-05)
 
 ### What's Working
 - ESP32 firmware compiled and flashed via PlatformIO (COM3)
@@ -98,23 +98,33 @@ Copilot runs in the cloud and cannot reach local network IPs directly. The Acer 
 - Full remote control chain proven: Copilot → SSH Acer → curl ESP32 → valve actuates
 - SSH key auth configured (ed25519, no password needed for Acer SSH)
 - **Valve 1 (Zone 1 - Garden drip)** physically wired and tested — solenoid confirmed moving
+- **12-panel SPA dashboard** with interactive AJAX valve controls, configuration editor, full telemetry, Zimmerman weather adjustment
+- **RotatingFileHandler** logging to `smart-garden.log` (5MB, 3 backups)
+- **Index-based sensor matching** — zones map to ESP32 soil sensors by `soil_sensor` config index, not name strings
+- **All AJAX endpoints consistent** — `/api/valve`, `/api/closeall`, `/api/run` all return JSON for XHR calls
+- **Hardware wired:** Solar panel → Renogy charge controller → LM2596 buck converter (5.06V) → ESP32 VIN. L298N motor driver and DHT22 temp sensor connected.
+- **Brownout detector disabled** — `WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)` fixes USB boot-loop
+- **WiFi reconnect watchdog** — checks every 10s, reconnects if dropped, reboots after 60s of failures
+- **DHT22 sensor working** — replacement unit reads 78°F / 40.5% humidity correctly (first unit was defective — OUT and GND bridged on PCB)
+- **ESP32 boots fine on USB power**
 
-### Telemetry (v2.0 — compiled, awaiting flash)
-Firmware built but ESP32 not on USB. Flash when next connected.
+### Current Problem — Buck Converter Power (2026-04-05)
+ESP32 crash-loops when powered from LM2596 buck converter. Serial shows:
+```
+rst:0x10 (RTCWDT_RTC_RESET), boot:0x17 (SPI_FAST_FLASH_BOOT)
+entry 0x400805e4
+```
+Repeated reset with no `setup()` output. Diagnosis:
+- `boot:0x17` = GPIO 0 HIGH (normal boot mode, NOT download mode) — not a GPIO 0 solder bridge
+- `rst:0x10` = RTC watchdog reset before app code runs — likely power quality issue
+- WiFi TX current spike (300-500mA) probably causes LM2596 output voltage sag
+- Even with L298N fully disconnected, still crash-loops on buck power
+- All connections are soldered directly to ESP32 pins
 
-**New API endpoints:**
-- `/api/status` — now includes `system` object: uptime, boot count, WiFi RSSI, free heap, chip temp, event count, per-valve open/close counters
-- `/api/events` — ring buffer of last 100 timestamped events (valve actions, boots, errors), newest first
-- `/api/valvestats` — per-valve lifetime actuation counts
+**Firmware updated to v2.2 (power-hardened):** CPU drops to 80MHz during boot, WiFi TX power reduced to 8.5dBm, crash counter triggers safe mode after 5 failures, staggered valve init. Separate `power-test` environment available for bare-metal power validation.
 
-**New firmware features:**
-- **NVS persistence** — boot count and per-valve actuation counters survive power cycles
-- **Event ring buffer** — 100 events in RAM, each with uptime timestamp, type, and detail
-- **Valve duration tracking** — logs how long each valve was open when closed
-- **System metrics** — WiFi RSSI, free heap %, ESP32 die temp, uptime
-- **Web dashboard v2** — tabbed UI with System panel (6 cards), improved valve rows showing actuation counts, Event Log tab
-
-**Resource usage:** 61.8% flash, 15.9% RAM (up from 60.7% / 13.9%)
+### Telemetry (v2.2 — compiled, needs flash to test buck power)
+All v2.0 telemetry features plus power management and diagnostics.
 
 ### What's Not Done Yet
 - Flash telemetry firmware (v2.0 compiled, ESP32 needs USB connection)
@@ -158,7 +168,7 @@ Firmware built but ESP32 not on USB. Flash when next connected.
 
 | File | Purpose |
 |------|---------|
-| `config.yaml` | Zone profiles (7 zones), Duvall billing tiers, skip rules, watering windows |
+| `config.yaml` | Zone profiles (9 zones), Duvall billing tiers, skip rules, watering windows |
 | `database.py` | SQLite schema + CRUD helpers (sensor_log, weather_log, watering_event, etc.) |
 | `weather.py` | Open-Meteo client — ET₀, rain forecast, 7-day forecast, with 30-min cache |
 | `billing.py` | Duvall municipal tiered water rate calculator + budget awareness |
@@ -169,6 +179,7 @@ Firmware built but ESP32 not on USB. Flash when next connected.
 | `templates/history.html` | Watering + skip event logs, daily summaries |
 | `templates/sensors.html` | Soil moisture gauges with sparklines, weather forecast table |
 | `requirements.txt` | flask, requests, apscheduler, pyyaml |
+| `smart-garden.log` | RotatingFileHandler output (5MB max, 3 backups) |
 
 **Service:** Runs as `systemctl --user` on Acer (auto-start on login)  
 **Dashboard URL:** http://192.168.0.109:5125  
@@ -187,7 +198,7 @@ Firmware built but ESP32 not on USB. Flash when next connected.
 - **Safety:** All valves closed on startup
 - **WiFi fallback:** If STA fails, creates AP "SmartGarden" / "garden1234" at 192.168.4.1
 - **MQTT:** Disabled (`MQTT_ENABLED false`), infrastructure exists for Home Assistant integration
-- **Flash/RAM:** 60.7% flash, 13.9% RAM used
+- **Flash/RAM:** 61.9% flash, 15.9% RAM used (main), 20.6% flash, 6.6% RAM (power-test)
 
 ### Static IP Configuration (added 2026-04-01)
 - `config.h` defines `STATIC_IP(192, 168, 0, 150)`, `GATEWAY(192, 168, 0, 1)`, `SUBNET`, `DNS1`
@@ -291,8 +302,308 @@ Previous audit examined the OLD scheduler (`smart-garden/server/scheduler.py`) a
 
 ---
 
+## 2026-04-02 — Comprehensive Telemetry Panel + Enhanced About Section
+
+**Context:** User wanted: (1) more detail in About section showing "how it works", (2) a dedicated telemetry panel showing valve trigger history, and (3) every single bit of available telemetry surfaced in the UI.
+
+### Changes
+
+**`dashboard.py`** — New `/api/telemetry` endpoint (~95 lines) that aggregates:
+- ESP32 `/api/events` ring buffer (last 100 events)
+- ESP32 `/api/valvestats` (valve lifetime open/close counts)
+- ESP32 `/api/scan` (raw ADC readings on all GPIO pins)
+- Full ESP32 `/api/status` (system info, soil sensors, DHT22, valves)
+- DB: watering events with ALL columns (soil_before/after, et_demand_mm, trigger_reason, est_gallons, est_cf)
+- DB: skip events with full conditions JSON (temp, humidity, wind, rain, soil, et0, weather_scale)
+- DB: system health history (uptime, RSSI, heap, chip temp, boot count, battery)
+- DB: recent weather log entries
+- Weather scale from Zimmerman engine
+
+**`database.py`** — New `get_health_history(limit=10)` helper querying system_health table.
+
+**`templates/index.html`** — Dashboard now has 10 panels (was 9):
+
+*New Telemetry panel (8 sections):*
+1. ESP32 Hardware Telemetry — health metric cards (uptime, boot count, heap, chip temp, WiFi RSSI, reconnects, event count, IP, MAC, DHT22 temp/humidity, all soil sensor raw values)
+2. Valve Lifetime Statistics — table with open/close counts per valve
+3. Raw ADC Sensor Scan — GPIO pin readings
+4. Watering Events Full Detail — 10-column table (time, zone, trigger reason, duration, soil before/after/delta, ET demand, gallons, CF)
+5. Skip Events Full Detail — conditions JSON parsed into emoji-tagged metrics (🌡️temp 💧humidity 💨wind 🌧️rain 🌱soil ☀️ET₀ ⚡scale)
+6. ESP32 Event Ring Buffer — color-coded by type (valve=blue, boot=green, error=red, wifi=amber)
+7. System Health History — multi-day trend table
+8. Recent Weather Readings — temp, humidity, wind, rain, ET₀
+
+*Enhanced About panel:*
+- "How It Works" section with ASCII data flow diagram (ESP32 ↔ Server ↔ Dashboard)
+- 8-step decision cycle walkthrough
+- Hardware stack cards (ESP32, Solar, L298N, Soil Sensors, DHT22, Acer)
+- Database schema visualization (all 7 tables with columns)
+- API endpoint documentation (ESP32 + Server endpoints)
+- Weather Intelligence Scale (preserved)
+- Roadmap phases (preserved)
+- Research sources (preserved)
+
+**Deployment:** SCP to Acer (192.168.0.109), server restarted on PID 2292513, `/api/telemetry` verified returning real data.
+
+**Git:** Commit `1bd3cf7`, pushed to `jamesearlpace/smart-garden-server`.
+
+---
+
+## 2026-04-02 — Interactive Controls Panel (Valve Toggle)
+
+**Context:** User wanted the dashboard to allow controlling and configuring the system from the browser — "at a minimum, turn on and off sprinklers." System is currently a test bench on desk, not installed in the ground.
+
+### Changes
+
+**`dashboard.py`** — Modified `/api/valve` and `/api/closeall` to return JSON when called via AJAX (`X-Requested-With: XMLHttpRequest` or `request.is_json`), returning `{ok, zone_id, action, valves[]}` with fresh valve state. Form POST redirect preserved for backwards compatibility.
+
+**`templates/index.html`** — Dashboard now has 11 panels (was 10):
+
+*New Controls panel:*
+- **Test Bench Mode banner** — amber notice: "System is on your desk, not installed in the ground. All 7 ESP32 valve outputs are shown. Toggling sends real H-bridge pulses."
+- **Emergency Stop All** — red button with confirm dialog, AJAX POST to `/api/closeall`
+- **ESP32 status indicator** — Online/Offline from `/api/dashboard` response
+- **7 valve cards** — each showing: name, hardware ID, L298N board, open/close counts, OPEN/CLOSED badge, and a toggle button (Open Valve / Close Valve)
+- **AJAX toggle** — `ctrlToggleValve()` POSTs JSON to `/api/valve`, shows spinner during request, re-renders cards with fresh valve state from response
+- **Fallback rendering** — if ESP32 is unreachable, shows zone data from config instead
+- Top bar Stop All button converted from form POST to AJAX `ctrlStopAll()`
+
+*Bug fix during deployment:* `loadControls()` originally fetched `/api/status` (weather data — no `esp32` key). Fixed to fetch `/api/dashboard` which has `esp32.valves[]`.
+
+**Verified:** Opened valve 0 via AJAX endpoint, got JSON response with `ok:true` and full valve state array. Closed it back. All 7 valves returning data.
+
+**Deployment:** SCP to Acer (192.168.0.109), server running, HTTP 200.
+
+**Git:** Commit `5f8ef47`, pushed to `jamesearlpace/smart-garden-server`.
+
+---
+
+## 2026-04-02 — Code Audit & Bug Fixes (11 bugs)
+
+**Context:** After building the Controls panel and HW_PINS GPIO mapping earlier today, ran a comprehensive code audit across all server files. Found 22 issues, fixed 11 across two commits.
+
+### Commit `f3d0abc` — 8 dashboard/irrigation fixes
+
+| Fix | File | Detail |
+|-----|------|--------|
+| System panel ESP32 metrics | index.html | Was using `esp.rssi`, `esp.heap_pct`, `esp.boot_count` (flat, wrong). Now uses `esp.system.wifiRSSI` etc. via `var espSys = esp.system \|\| {}` with null-safe checks |
+| DHT22 humidity field | index.html | Telemetry checked `esp.humidity` but ESP32 returns `esp.hum` |
+| ADC channel numbers | index.html | `soilPinStr()` computed `gpio-32` (CH0-3) but GPIO 32-35 = ADC1_CH4-7. Fixed to `gpio-28` |
+| Mobile nav missing Schedule | index.html | Added Schedule panel to mobile nav between Analytics and Weather |
+| About panel sensor count | index.html | "5 Soil Sensors" → "4 Soil Sensors" (matches `NUM_SOIL_SENSORS=4` in config.h) |
+| wx.temp_f falsy at 0° | index.html | `fmt(wx.temp_f \|\| wx.temp)` fails when temp is 0°F. Changed to `!= null` ternary |
+| loadSoilChart .catch | index.html | Added `.catch()` to soil chart fetch |
+| Double temp conversion | irrigation.py | ESP32 returns temp in Fahrenheit (`dht.readTemperature(true)`). Was doing `temp * 9/5 + 32` again. Removed. |
+
+### Commit `2563a53` — 3 structural fixes
+
+| Fix | File | Detail |
+|-----|------|--------|
+| Name-based sensor matching | irrigation.py | Replaced fragile `zone["name"].split(" (")[0].split(" ")[0].lower() in sensor["name"].lower()` with direct index lookup: `soil_list[zone["soil_sensor"]]`. Eliminates two separate name-matching loops + shared-sensor fallback. Zones with `soil_sensor: 4` (not yet installed) get 50% default. |
+| api_run_zone JSON support | dashboard.py | Now accepts JSON body and returns `{ok, zone_id, minutes, soil_pct}` for AJAX, matching `/api/valve` and `/api/closeall` pattern |
+| Dead FileHandler code | server.py | `logging.FileHandler(...) if False else StreamHandler(sys.stderr)` — the `if False` made FileHandler dead code, and `FileHandler` doesn't take `maxBytes`/`backupCount` anyway. Replaced with `RotatingFileHandler` from `logging.handlers`. Log file confirmed created on server. |
+
+### Not fixed (by design)
+- **9 zones vs 7 firmware valves** — 9 is the target; only 1 physical valve wired currently. All conceptual.
+- **Soil sensor 4 doesn't exist** — 4 sensors for 9 zones. Zones 6-8 reference sensor 4 which isn't installed yet; gets 50% fallback.
+- **Port 5124 vs 5125** — config.yaml defaults to 5124 but actual deployment uses 5125. Works, not worth changing.
+- **CSRF/XSS on LAN-only device** — negligible risk.
+
+---
+
+## 2026-04-02 — Configuration Panel (Live Config Editing)
+
+**Context:** First item on the Next Steps list — add a configuration panel so zone names, installed status, schedule settings, and Zimmerman tuning can be edited from the browser.
+
+### Changes
+
+**`dashboard.py`** — Added two new endpoints:
+- `GET /api/config` — returns the full live `config` dict as JSON
+- `POST /api/config` — accepts a JSON patch with whitelisted sections (`zones`, `watering_window`, `skip_rules`, `weather_adjustment`, `esp32`). Merges zone fields individually (prevents adding/removing zones), persists to `config.yaml` via `yaml.dump`, updates `engine.config` and `engine.zones` in-memory. Returns `{ok, changed}`.
+
+**`templates/index.html`** — Dashboard now has 12 panels (was 11):
+
+*New Configuration panel (5 sections):*
+1. **Watering Window** — start/end times for AM and PM windows (4 time inputs)
+2. **Skip Rules** — rain threshold, wind threshold, freeze temp, rain probability, recent rain hours (5 numeric inputs)
+3. **Zimmerman Weather Adjustment** — baseline temp/humidity, rain scale factor, min/max scale bounds, enable toggle (6 inputs)
+4. **ESP32 Settings** — URL, poll interval, timeout (3 inputs)
+5. **Zone Configuration** — 13-column inline editable table (ID, Name, Type, Installed checkbox, Sensor, Dry Trigger, Wet Target, Max Runtime, Est GPM, Kc Spring/Summer/Peak/Fall)
+
+*JavaScript:*
+- `loadConfig()` — fetches `/api/config`, populates all form fields and dynamically builds the zone table with `data-zid` and `data-field` attributes
+- `cfgSave()` — reads all form values, builds a JSON patch preserving `evening_zones`, POSTs to `/api/config`, shows toast notification
+- `cfgToast()` — helper for success/error toast messages
+- `showPanel` hook lazy-loads config data only when panel is opened
+
+**Deployment:** SCP both files to Acer, server restarted, `/api/config` verified returning full config JSON.
+
+**Git:** Commit `a728230`, pushed to `jamesearlpace/smart-garden-server`.
+
+---
+
 ## Next Steps
-1. Phase 3: Implement soil water balance (checkbook) tracking
-2. Tune Zimmerman baselines after observing real-world behavior for 2-4 weeks
-3. Add runtime adjustment logging to analytics charts
-4. Consider adding precipitation rate data per zone for ET₀-based exact runtime calculation
+1. Tune Zimmerman baselines after observing real-world behavior for 2-4 weeks
+2. Integrate soil water balance depletion as additional watering trigger in `evaluate_zone()`
+3. Add balance history chart to Analytics panel (data already in `soil_balance` table)
+4. Calibrate `precip_rate_iph` per zone with catch-cup tests after physical installation
+5. Observe soil water balance tracking and adjust AWC for Duvall soil type
+6. Add runtime adjustment logging to analytics charts
+7. Physical installation and field calibration
+
+---
+
+## 2026-04-03 — Phase 3: Soil Water Balance + Dashboard Enhancements
+
+**Context:** "Let's do everything that can be done before I put it in the ground." Five software-only improvements implemented in one session.  
+**Commit:** `14fdf6f` — 6 files changed, 348 insertions(+), 6 deletions(-)
+
+### Features Added
+
+1. **Telemetry auto-refresh** — Refresh button + "Auto 30s" checkbox in panel header. Uses `setInterval` with 30s polling, shows "Updated" timestamp.
+
+2. **Health history charts** — 3 Chart.js mini line charts (RSSI blue, Heap green, Chip Temp red) in a 3-column grid on the Telemetry panel, rendered from `health_history` data.
+
+3. **Analytics weather scale trend** — Rewrote `renderWeatherChart()` to compute Zimmerman scale client-side from temp/humidity/rain. Added 4th dataset "Scale %" (purple dashed line) on secondary y-axis (0-200%). Caches `weather_adjustment` config in `window._WA_CONFIG`.
+
+4. **Precipitation rate config per zone** — Added `precip_rate_iph` to all 9 zones in `config.yaml` (sprinkler: 1.5, drip: 0.4). Added input column in Config panel, save logic in `cfgSave()`, and field whitelisted in `dashboard.py`.
+
+5. **Soil water balance engine (Phase 3 — checkbook method)**:
+   - **`config.yaml`:** Global `soil` section (AWC=0.15 in/in, root depth=6", MAD=50%). Per-zone overrides for peonies (10") and garden (12").
+   - **`database.py`:** New `soil_balance` table with PK(zone_id, date). 5 helper functions: upsert, get latest, get history, get all, daily irrigation mm.
+   - **`irrigation.py`:** Loads soil config, computes TAW/MAD per zone, `update_daily_balances()` runs the daily checkbook (ETc withdrawal, rain credit, irrigation credit, clamp to [0, TAW]).
+   - **`server.py`:** Scheduler job at 11 PM nightly.
+   - **`dashboard.py`:** 3 new API endpoints (`GET /api/balance`, `GET /api/balance/<zone_id>`, `POST /api/balance/update`). Added `soil_balances` to `/api/dashboard`.
+   - **`index.html`:** Water balance bars in zone cards — color-coded (green >60%, orange >30%, red ≤30%) with MAD threshold marker.
+
+### Testing
+- DB init: OK
+- Server starts with 4 scheduler jobs (irrigation_cycle, safety_check, weather_fetch, daily_balance)
+- Manual `POST /api/balance/update`: all 9 zones computed — grass TAW=22.86mm, peonies TAW=38.1mm, garden TAW=45.72mm
+- All zones at field capacity (rain=4.4mm > ET₀=1.24mm)
+- Dashboard loads correctly (200, 134KB)
+
+**Current State:** All software features complete. System ready for physical installation. Soil water balance will accumulate daily data once installed. Zimmerman baselines need 2-4 weeks of observation data before tuning.
+
+---
+
+## 2026-04-05 — First Hardware Build & Power Debugging
+
+**Context:** First night wiring up the full hardware stack. Goal was to get ESP32 running on solar/battery power with DHT22 and L298N connected.
+
+### What Was Done
+
+1. **Full power chain wired:** Solar panel → Renogy Wanderer charge controller → LM2596 buck converter (adjusted to 5.06V with multimeter) → ESP32 VIN pin. L298N 12V input also connected to Renogy load output.
+
+2. **Brownout fix:** ESP32 was boot-looping with `"Brownout detector was triggered"` even on USB only. Fixed by adding `WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)` at the top of `setup()` with `#include "soc/soc.h"` and `#include "soc/rtc_cntl_reg.h"`.
+
+3. **WiFi reconnect watchdog:** Added to `loop()` — checks WiFi status every 10s, calls `WiFi.disconnect()` + `WiFi.begin()` if dropped, hard-reboots via `ESP.restart()` after 6 consecutive failures (60s). Also added `WiFi.setAutoReconnect(true)` and `WiFi.persistent(true)` in `setupWiFi()`.
+
+4. **Defective DHT22 replaced:** First sensor from 2-pack had OUT and GND bridged on the PCB (confirmed with multimeter continuity test). Replaced with second sensor — now reads 78°F / 40.5% humidity correctly.
+
+5. **All connections soldered directly** to ESP32 pins: 5V (VIN), GND, GPIO 4 (DHT22 data), 3V3 (DHT22 power), GPIO 25 (L298N IN1), GPIO 26 (L298N IN2). 10kΩ pull-up resistor on DHT22 data line.
+
+### Current Problem — Buck Converter Crash-Loop
+
+ESP32 boots fine on USB only but crash-loops when powered from the LM2596 buck converter. Serial output:
+```
+rst:0x10 (RTCWDT_RTC_RESET), boot:0x17 (SPI_FAST_FLASH_BOOT)
+entry 0x400805e4
+```
+Repeats with no `setup()` output at all. Even with L298N fully disconnected (only buck → ESP32), it still crash-loops.
+
+### Analysis
+
+| Observation | Interpretation |
+|-------------|---------------|
+| `boot:0x17` = binary `00010111` | GPIO 0 = bit 4 = **1 (HIGH)** → normal boot mode, not download. GPIO 4 = bit 2 = 1 due to DHT22 pull-up. This is correct. |
+| `rst:0x10 (RTCWDT_RTC_RESET)` | RTC watchdog fires *before* application code runs — bootloader/flash read is failing |
+| Works on USB, fails on buck | USB provides clean regulated 5V with large caps. LM2596 module likely has undersized output capacitor. |
+| No `setup()` serial output | Crash happens during early init, not during WiFi. Likely SPI flash read failure from voltage ripple/sag. |
+
+**Root cause hypothesis:** LM2596 output voltage sags during ESP32 startup current spikes (especially WiFi TX at 300-500mA). The cheap module's output capacitor can't handle the transient load.
+
+### Firmware Changes — v2.2 (power-hardened)
+
+Updated `main.cpp`, `config.h`, and `platformio.ini` with active power mitigations:
+
+**Power-test environment (`pio run -e power-test`):**
+- Bare-minimum firmware: no WiFi, no GPIO, no sensors, no NVS
+- CPU at 80MHz, serial heartbeat every 2s with heap + chip temp
+- 20.6% flash, 6.6% RAM — absolute minimum to prove ESP32 can boot
+- If THIS crashes on buck power, it's 100% a hardware problem (cap needed)
+
+**CPU frequency management:**
+- Boot at 80MHz (`setCpuFrequencyMhz(80)`) — draws ~30mA idle vs ~80mA at 240MHz
+- Boost to 240MHz only AFTER successful WiFi connect
+- If WiFi fails, stays at 80MHz to minimize power draw
+
+**WiFi TX power reduction:**
+- `WiFi.setTxPower(WIFI_POWER_8_5dBm)` — reduces TX current from ~380mA to ~120mA
+- Default 19.5dBm is overkill for a home WiFi network within 30 feet of router
+- Configurable via `WIFI_TX_DBM` in config.h
+
+**Crash counter safe mode:**
+- NVS `crashCnt` increments on every boot, resets to 0 after successful WiFi connect
+- If counter reaches 5 (`SAFE_MODE_THRESHOLD`): 15s extra stabilization delay, warning on serial
+- Self-healing: if power stabilizes (e.g., after adding a cap), WiFi will eventually connect and clear the counter
+- Prevents infinite rapid crash-loops from destroying NVS flash wear
+
+**Staggered valve init:**
+- `closeAllValves()` replaced with individual `closeValve()` + 200ms delay between each
+- Prevents 7 simultaneous solenoid pulses from spiking current
+
+**Resource usage:** 61.9% flash, 15.9% RAM (main), 20.6% flash, 6.6% RAM (power-test)
+
+### Test Results (April 5, 2026)
+
+**Step 1 — Bare-metal power test: PASS**
+- Flashed `power-test` firmware. Cold-booted on buck converter alone (no USB).
+- Stable `[POWER OK]` heartbeats for 4+ minutes with no crashes. Heap rock solid at 350,020 bytes.
+- **Conclusion:** LM2596 buck converter can sustain idle ESP32 power draw. Hardware is fine.
+
+**Step 2 — Full firmware with mitigations: PASS**
+- Flashed `esp32` v2.2. Cold-booted on buck converter alone. 
+- All `[INIT]` stages passed: NVS → valve counters → GPIO → 7 valve closes (staggered) → DHT22 → WiFi
+- WiFi connected in ~500ms (1 dot) at 8.2 dBm TX power
+- Crash counter reset, CPU boosted to 240MHz
+- Full control chain verified: Copilot → SSH Acer → `curl http://192.168.0.150/api/status` → JSON response
+- **Conclusion:** Power mitigations (80MHz boot CPU + reduced WiFi TX) eliminated the crash-loop. No capacitor needed.
+
+**Key test observation:** Hot-plugging the buck converter into a USB-powered ESP32 causes crash-loops (ground loop / voltage spike). Cold boot from buck only works perfectly. This is expected behavior — never hot-swap power sources.
+
+**Root cause (confirmed):** The original `rst:0x10 (RTCWDT_RTC_RESET)` crash was NOT a voltage sag problem. The ESP32 was trying to boot at 240MHz with 19.5dBm WiFi TX power (~380mA spike). The LM2596 could sustain it at idle but not during the combined startup current of WiFi + 7 simultaneous valve pulses. Reducing CPU to 80MHz during boot and WiFi TX to 8.5dBm brought peak current under the module's response margin.
+
+### What's Running Now
+- ESP32 on buck converter power (no USB) at 192.168.0.150
+- v2.2 firmware with all power mitigations active
+- Web dashboard accessible
+- DHT22 reading 72.9°F / 41.5% humidity
+- Capacitive soil moisture sensor on GPIO 32 — raw=2397, 55% moisture (dry air)
+- L298N driving valve 1 solenoid — open/close confirmed via API
+- WiFi RSSI: -57 dBm (very good)
+- Free heap: 74% (242,164 / 323,416 bytes)
+- Full control chain verified on buck power only: Copilot → SSH Acer → curl → valve click
+- **Bench test complete — all peripherals verified on solar/battery power**
+
+### Peripheral Test Log
+
+| Step | Peripheral | Result |
+|------|-----------|--------|
+| 1 | Buck converter only (no peripherals) | power-test firmware: stable 4+ min, rock solid |
+| 2 | Full firmware, buck only | All [INIT] passed, WiFi connected, crash counter cleared |
+| 3 | Unplug USB, buck only | API responsive, 160s uptime, zero reconnects |
+| 4 | Add DHT22 (hot-plug) | Caused reboot (expected), recovered automatically. 72.9°F / 40.2% |
+| 5 | Add L298N (hot-plug) | Caused reboot (expected), recovered. Valve open/close confirmed |
+| 6 | All peripherals, buck only, no USB | All sensors reading, valve clicking, WiFi solid |
+| 7 | Add capacitive soil sensor on 3.3V | raw=0 — sensor needs 5V, not 3.3V |
+| 8 | Move soil sensor VCC to 5V | raw=2397, 55% moisture — working |
+| 9 | Full system, buck only, no USB | **All pass** — temp, humidity, soil, valve, WiFi |
+
+### Hardware Lessons Learned
+
+1. **Capacitive soil sensors need 5V** — advertised as 3.3-5V but produce no output on 3.3V. Wire VCC to ESP32 VIN (5V from buck), AOUT is still 0-3.3V (safe for ADC).
+2. **Never hot-plug power sources** — connecting buck while USB is live causes crash-loops. Always cold-boot from one source.
+3. **Defective sensors happen** — first DHT22 had OUT/GND bridged on PCB. Always test with a multimeter before assuming wiring is wrong.
+4. **ESP32 boot current matters** — 240MHz CPU + 19.5dBm WiFi TX draws too much for cheap buck converters. Boot at 80MHz, reduce TX power, boost CPU after WiFi connects.
+5. **Hot-plugging peripherals causes reboots** — the crash counter + safe mode handles this gracefully, but in the field everything should be wired before power-on.

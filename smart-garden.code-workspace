@@ -1,0 +1,22 @@
+{
+	"folders": [
+		{
+			"path": ".",
+			"name": "ESP32 Firmware"
+		},
+		{
+			"path": "c:\\MyCode\\smart-garden-server",
+			"name": "Server"
+		},
+		{
+			"path": "c:\\Users\\jamespace\\OneDrive\\.H. Marriage and Fatherhood\\GitHubCopilotFamilyManagement\\1.CopilotEveryone\\SmartGarden",
+			"name": "SmartGarden Docs"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.pio": true,
+			"**/__pycache__": true
+		}
+	}
+}

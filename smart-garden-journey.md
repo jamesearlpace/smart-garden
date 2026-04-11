@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** Active — bench test complete, all hardware verified on solar/battery power, ready for yard installation  
-**Last Updated:** 2026-04-05  
+**Last Updated:** 2026-04-11  
 **Goal:** Solar-powered smart irrigation system controlled remotely via GitHub Copilot through a home server
 
 ---
@@ -108,7 +108,7 @@ Copilot runs in the cloud and cannot reach local network IPs directly. The Acer 
 - **DHT22 sensor working** — replacement unit reads 78°F / 40.5% humidity correctly (first unit was defective — OUT and GND bridged on PCB)
 - **ESP32 boots fine on USB power**
 
-### Current Problem — Buck Converter Power (2026-04-05)
+### Current Problem — Buck Converter Power (2026-04-05) *(RESOLVED — see April 5 session)*
 ESP32 crash-loops when powered from LM2596 buck converter. Serial shows:
 ```
 rst:0x10 (RTCWDT_RTC_RESET), boot:0x17 (SPI_FAST_FLASH_BOOT)
@@ -607,3 +607,145 @@ Updated `main.cpp`, `config.h`, and `platformio.ini` with active power mitigatio
 3. **Defective sensors happen** — first DHT22 had OUT/GND bridged on PCB. Always test with a multimeter before assuming wiring is wrong.
 4. **ESP32 boot current matters** — 240MHz CPU + 19.5dBm WiFi TX draws too much for cheap buck converters. Boot at 80MHz, reduce TX power, boost CPU after WiFi connects.
 5. **Hot-plugging peripherals causes reboots** — the crash counter + safe mode handles this gracefully, but in the field everything should be wired before power-on.
+
+---
+
+## 2026-04-11 — Battery Drain Post-Mortem & Crash-Loop Protection
+
+**Context:** System ran out of battery while James was on vacation. ESP32 was plugged back in via USB. Investigated root cause and implemented firmware fixes to prevent recurrence.
+
+### Root Cause Analysis
+
+The status API revealed the smoking gun — **boot count: 1,227** with valve close counts tracking identically:
+
+| Zone | Opens | Closes | Analysis |
+|------|-------|--------|----------|
+| 1 - Garden | 674 | 1,258 | Close count ≈ boot count |
+| 2 - Grapes | 3 | 1,238 | Close count ≈ boot count |
+| 4 - South Lawn | 1 | 1,231 | Close count ≈ boot count |
+| 6 - West/NW | 0 | 1,229 | Close count ≈ boot count |
+| 7 - NE Lawn | 31 | 1,226 | Close count ≈ boot count |
+
+The firmware's `closeAllValves()` safety routine fires on every boot, sending a 100ms 12V pulse through each L298N H-bridge to all 7 solenoid valves. Each crash-reboot cycle drew 1-2A × 7 valves from the battery. At 1,227 boot cycles, this drained the 7Ah SLA battery to zero — even though solar was presumably charging during the day, the drain rate during crash-loops far exceeded solar input.
+
+**The battery drain spiral:** crash → reboot → close-all pulse (heavy 12V draw × 7 valves) → WiFi TX spike → crash → repeat × 1,227 times.
+
+The underlying crash cause is the known LM2596 buck converter issue (documented April 5). The v2.2 power mitigations (80MHz boot, 8.5dBm WiFi TX) resolved it for clean boots, but something triggered crash-loops during vacation — possibly a power interruption, router restart, or WiFi dropout that cascaded.
+
+### Firmware Changes (v2.2 → v2.2+battery-protect)
+
+**1. Close-all only on clean boot** — [main.cpp](../smart-garden/src/main.cpp#L749)
+
+Before: `closeAllValves()` fired unconditionally on every boot.
+
+After: Checks `esp_reset_reason()` — only fires close-all on clean boots (`ESP_RST_POWERON`, `ESP_RST_SW`, `ESP_RST_DEEPSLEEP`). Crash reboots (`ESP_RST_INT_WDT`, `ESP_RST_TASK_WDT`, `ESP_RST_WDT`, `ESP_RST_PANIC`, etc.) skip the close-all entirely. This breaks the battery drain spiral — even if crash-looping, no 12V valve pulses fire.
+
+**2. Deep sleep battery protection** — [main.cpp](../smart-garden/src/main.cpp#L720)
+
+If crash counter hits `SAFE_MODE_THRESHOLD * 2` (10 consecutive crashes), the ESP32 enters deep sleep for 10 minutes (`esp_deep_sleep_start()` with timer wakeup). This:
+- Stops all power draw (~10µA in deep sleep vs ~80-380mA active)
+- Gives solar panel time to replenish battery
+- Wakes periodically to retry — if power is stable, boots successfully and resets crash counter
+- Prevents indefinite crash-looping from ever draining the battery again
+
+**3. Added `esp_sleep.h` include** for `esp_deep_sleep_start()` and `esp_sleep_enable_timer_wakeup()`.
+
+### Build & Flash
+
+- Compiled: 65.6% flash, 17.2% RAM (slight increase from deep sleep code)
+- Flashed via USB on COM3: `pio run -e esp32 --target upload --upload-port COM3`
+- ESP32 rebooted, connected to WiFi, status API confirmed online at 192.168.0.150
+
+### Verification
+
+Post-flash status check confirmed the fix is active:
+- Boot count: 1230 (1227 + 3 from flash/reboot cycles)
+- Zone 1 close count: 1261 (only +3, not +21 as the old code would have done for 3 reboots × 7 valves)
+- All sensors reading: 70°F, 50% humidity, Garden soil 59%
+- WiFi: -60 dBm, 0 reconnects
+- Free heap: 71%
+
+### Key Insight
+
+The root cause wasn't the sensors or the solar panel — it was the **close-all-on-boot safety routine interacting with crash-loops**. A safety feature designed to prevent stuck-open valves became the mechanism that killed the battery. The fix preserves the safety intent (close-all on clean power-on) while breaking the drain spiral (skip on crash reboots, deep sleep after 10 crashes).
+
+---
+
+## 2026-04-11 — Health Dashboard Panel & Deployment Pipeline Fix
+
+**Context:** After adding the battery protection firmware, user requested health insights on the server dashboard (`:5125`). During deployment, discovered that dashboard updates had been silently failing for an unknown period due to two stacked infrastructure problems.
+
+### Health Insights Panel
+
+Added a **Health** panel to the server dashboard (between System and Telemetry in sidebar). Data flows from ESP32 firmware → `/api/status` health section → server `/api/dashboard` → client-side rendering.
+
+**ESP32 firmware changes (`main.cpp`):**
+- Promoted `crashCount`, `safeMode`, `lastResetReason` from local variables to globals
+- Added `health` JSON object to `/api/status` response: crash counter, safe mode flag, reset reason (code + human name), deep sleep/safe mode thresholds, total valve open/close counts, close:open ratio, crash-loop evidence flag (ratio > 3x and boot count > 100)
+- Added `esp_sleep.h` include for deep sleep functions
+
+**Server dashboard (`templates/index.html`):**
+- New `🩺 Health` nav item (desktop + mobile)
+- `p-health` panel with 4 sections: Power & Stability, WiFi, Memory & Chip, Valve Health
+- Alert banners: crash-loop evidence (red), safe mode (amber), healthy (green), low memory, weak WiFi, ESP32 offline
+- Per-valve breakdown table with close:open ratio and status icons
+- `renderHealthPanel()` JavaScript function, `fmtUptime()` helper
+- `PANEL_TITLES` updated with `health: 'Health Insights'`
+
+### Deployment Pipeline Post-Mortem
+
+**Symptom:** User reported that dashboard changes "never show up" — I would make edits, SCP files, restart the service, confirm success, but the browser always showed the old version. This had been happening across multiple sessions.
+
+**Root Cause 1 — Zombie process holding port (PRIMARY)**
+
+A `server.py` process (PID 2826078) started on **April 10** was running outside of systemd — either started manually via `python server.py` or from a previous session. This process held port 5125 and was serving the **old** code.
+
+When `systemctl --user restart smart-garden` ran:
+1. Systemd started a NEW process with updated code
+2. New process tried to bind port 5125 → **FAILED** (`Address already in use`)
+3. New process exited with `status=1/FAILURE`
+4. Systemd entered 30-second restart loop, failing every time
+5. Browser kept hitting the OLD zombie process on port 5125 → old code
+
+The `systemctl status` output was misleading — it briefly showed `active (running)` before the failure, and during the retry cycle it showed `activating (auto-restart)`, but I wasn't checking carefully enough.
+
+**Root Cause 2 — Browser caching (SECONDARY)**
+
+Flask's `SEND_FILE_MAX_AGE_DEFAULT = 0` only affects static file serving, NOT `render_template()` responses. Chrome was free to cache the HTML response. Even if the server served new content, the browser might not fetch it.
+
+### Fixes Applied
+
+**1. Systemd `ExecStartPre` — kill zombie processes before starting**
+
+```ini
+[Service]
+ExecStartPre=/bin/bash -c 'fuser -k 5125/tcp 2>/dev/null || true; sleep 1'
+ExecStart=/home/jamesearlpace/smart-garden-server/.venv/bin/python server.py
+```
+
+Before every start (including restarts), systemd now kills anything on port 5125. The `|| true` ensures it doesn't fail if nothing is listening. The 1-second sleep gives the OS time to release the socket.
+
+**2. Flask `@after_request` no-cache headers**
+
+```python
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+```
+
+Every HTTP response now tells browsers to never cache. Also added `TEMPLATES_AUTO_RELOAD = True`.
+
+**3. Deployment verification checklist (for Copilot)**
+
+Future deployments must verify:
+1. `fuser -k 5125/tcp` before restart (or rely on ExecStartPre)
+2. `systemctl status` shows `active (running)` with a **new PID**
+3. `curl localhost:5125` returns content containing the new changes
+4. `curl -I` shows `Cache-Control: no-store` header
+
+### Lesson Learned
+
+Never trust `systemctl status` alone or `scp` success as proof of deployment. The only valid test is: **does `curl` to the live server return the expected content?** A 200 status code is not enough — the response body must contain the actual change.

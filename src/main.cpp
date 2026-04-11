@@ -13,6 +13,7 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_system.h"  // esp_reset_reason()
+#include "esp_sleep.h"   // esp_deep_sleep_start()
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DHT.h>
@@ -74,6 +75,9 @@ void loop() {
 
 Preferences nvs;
 uint32_t bootCount = 0;
+uint32_t crashCount = 0;
+bool safeMode = false;
+esp_reset_reason_t lastResetReason = ESP_RST_UNKNOWN;
 unsigned long bootTimeMillis = 0;  // millis() at boot for uptime calc
 
 // Ring buffer for timestamped events
@@ -244,217 +248,21 @@ void readSensors() {
 // ============================================================
 WebServer server(WEB_SERVER_PORT);
 
-// Serve the main control page
+// Redirect to the real dashboard on the Acer home server.
+// The ESP32 only serves the REST API — the UI lives at http://192.168.0.109:5125
 void handleRoot() {
     String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="0;url=http://192.168.0.109:5125">
     <title>Smart Garden</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
-        h1 { color: #4ecca3; margin-bottom: 16px; font-size: 24px; }
-        h2 { color: #4ecca3; margin: 20px 0 10px; font-size: 18px; }
-        .card { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
-        .sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-        .sensor { background: #0f3460; border-radius: 8px; padding: 12px; text-align: center; }
-        .sensor .value { font-size: 28px; font-weight: bold; color: #4ecca3; }
-        .sensor .label { font-size: 12px; color: #aaa; margin-top: 4px; }
-        .valve-row { display: flex; align-items: center; justify-content: space-between;
-                     padding: 12px 0; border-bottom: 1px solid #0f3460; }
-        .valve-row:last-child { border-bottom: none; }
-        .valve-name { font-size: 14px; flex: 1; }
-        .valve-meta { font-size: 11px; color: #888; margin: 0 8px; }
-        .valve-status { font-size: 13px; margin: 0 12px; min-width: 50px; text-align: center; }
-        .valve-status.open { color: #4ecca3; font-weight: bold; }
-        .valve-status.closed { color: #666; }
-        .btn { border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px;
-               cursor: pointer; font-weight: bold; min-width: 80px; }
-        .btn-open { background: #4ecca3; color: #1a1a2e; }
-        .btn-close { background: #e74c3c; color: #fff; }
-        .btn-close-all { background: #e74c3c; color: #fff; width: 100%; padding: 14px;
-                         font-size: 16px; margin-top: 12px; border-radius: 12px; }
-        .btn:active { transform: scale(0.95); }
-        .moisture-bar { height: 8px; background: #0f3460; border-radius: 4px; margin-top: 6px; }
-        .moisture-fill { height: 100%; border-radius: 4px; background: #4ecca3; transition: width 0.5s; }
-        .sys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
-        .sys-item { background: #0f3460; border-radius: 8px; padding: 10px; text-align: center; }
-        .sys-item .value { font-size: 22px; font-weight: bold; color: #e2b93d; }
-        .sys-item .label { font-size: 11px; color: #aaa; margin-top: 2px; }
-        .event-list { max-height: 300px; overflow-y: auto; font-size: 12px; font-family: monospace; }
-        .event-row { padding: 4px 0; border-bottom: 1px solid #0f3460; display: flex; gap: 10px; }
-        .event-time { color: #e2b93d; min-width: 70px; }
-        .event-type { color: #4ecca3; min-width: 50px; }
-        .event-detail { color: #ccc; }
-        .rssi-good { color: #4ecca3; }
-        .rssi-ok { color: #e2b93d; }
-        .rssi-bad { color: #e74c3c; }
-        #status { text-align: center; color: #666; font-size: 12px; margin-top: 12px; }
-        .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
-        .tab { padding: 8px 16px; border-radius: 8px; background: #0f3460; color: #aaa;
-               cursor: pointer; font-size: 13px; border: none; }
-        .tab.active { background: #4ecca3; color: #1a1a2e; font-weight: bold; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-    </style>
 </head>
-<body>
-    <h1>🌱 Smart Garden</h1>
-
-    <div class="tabs">
-        <button class="tab active" onclick="showTab('main')">Dashboard</button>
-        <button class="tab" onclick="showTab('events')">Event Log</button>
+<body style="font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+    <div style="text-align:center">
+        <p>Redirecting to <a href="http://192.168.0.109:5125" style="color:#4ecca3">Smart Garden Dashboard</a>...</p>
+        <p style="font-size:12px;color:#666;margin-top:20px">ESP32 API available at /api/status, /api/valve, /api/closeall, /api/events</p>
     </div>
-
-    <div id="tab-main" class="tab-content active">
-        <h2>System</h2>
-        <div class="card">
-            <div class="sys-grid" id="sysinfo">Loading...</div>
-        </div>
-
-        <h2>Sensors</h2>
-        <div class="card">
-            <div class="sensor-grid" id="sensors">Loading...</div>
-        </div>
-
-        <h2>Valves</h2>
-        <div class="card" id="valves">Loading...</div>
-        <button class="btn btn-close-all" onclick="closeAll()">🛑 Close All Valves</button>
-    </div>
-
-    <div id="tab-events" class="tab-content">
-        <h2>Recent Events</h2>
-        <div class="card">
-            <div class="event-list" id="eventlog">Loading...</div>
-        </div>
-    </div>
-
-    <div id="status"></div>
-
-    <script>
-        function showTab(name) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById('tab-' + name).classList.add('active');
-            event.target.classList.add('active');
-            if (name === 'events') loadEvents();
-        }
-
-        function fmtUptime(sec) {
-            const d = Math.floor(sec / 86400);
-            const h = Math.floor((sec % 86400) / 3600);
-            const m = Math.floor((sec % 3600) / 60);
-            if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
-            if (h > 0) return h + 'h ' + m + 'm';
-            return m + 'm ' + (sec % 60) + 's';
-        }
-
-        function rssiClass(rssi) {
-            if (rssi > -50) return 'rssi-good';
-            if (rssi > -70) return 'rssi-ok';
-            return 'rssi-bad';
-        }
-
-        function rssiLabel(rssi) {
-            if (rssi > -50) return 'Excellent';
-            if (rssi > -60) return 'Good';
-            if (rssi > -70) return 'Fair';
-            return 'Weak';
-        }
-
-        function refresh() {
-            fetch('/api/status')
-                .then(r => r.json())
-                .then(d => {
-                    const s = d.system || {};
-
-                    // System info
-                    let si = '';
-                    si += `<div class="sys-item"><div class="value">${fmtUptime(s.uptimeSec||0)}</div><div class="label">Uptime</div></div>`;
-                    si += `<div class="sys-item"><div class="value">${s.bootCount||0}</div><div class="label">Boot Count</div></div>`;
-                    si += `<div class="sys-item"><div class="value ${rssiClass(s.wifiRSSI||0)}">${s.wifiRSSI||0} dBm</div><div class="label">WiFi ${rssiLabel(s.wifiRSSI||0)}</div></div>`;
-                    si += `<div class="sys-item"><div class="value">${s.heapPct||0}%</div><div class="label">Free Memory</div></div>`;
-                    si += `<div class="sys-item"><div class="value">${(s.chipTempF||0).toFixed(0)}°F</div><div class="label">Chip Temp</div></div>`;
-                    si += `<div class="sys-item"><div class="value">${s.eventCount||0}</div><div class="label">Events Logged</div></div>`;
-                    document.getElementById('sysinfo').innerHTML = si;
-
-                    // Sensors
-                    let sh = `
-                        <div class="sensor">
-                            <div class="value">${d.temp.toFixed(1)}°F</div>
-                            <div class="label">Temperature</div>
-                        </div>
-                        <div class="sensor">
-                            <div class="value">${d.hum.toFixed(0)}%</div>
-                            <div class="label">Humidity</div>
-                        </div>`;
-                    d.soil.forEach(s => {
-                        sh += `<div class="sensor">
-                            <div class="value">${s.pct}%</div>
-                            <div class="label">${s.name}</div>
-                            <div class="moisture-bar"><div class="moisture-fill" style="width:${s.pct}%"></div></div>
-                        </div>`;
-                    });
-                    document.getElementById('sensors').innerHTML = sh;
-
-                    // Valves
-                    let vh = '';
-                    d.valves.forEach((v, i) => {
-                        const cls = v.open ? 'open' : 'closed';
-                        const txt = v.open ? 'OPEN' : 'CLOSED';
-                        const meta = v.open && v.openForSec
-                            ? `open ${fmtUptime(v.openForSec)}`
-                            : `${v.openCount||0} opens / ${v.closeCount||0} closes`;
-                        const btn = v.open
-                            ? `<button class="btn btn-close" onclick="valve(${i},'close')">Close</button>`
-                            : `<button class="btn btn-open" onclick="valve(${i},'open')">Open</button>`;
-                        vh += `<div class="valve-row">
-                            <span class="valve-name">${v.name}</span>
-                            <span class="valve-meta">${meta}</span>
-                            <span class="valve-status ${cls}">${txt}</span>
-                            ${btn}
-                        </div>`;
-                    });
-                    document.getElementById('valves').innerHTML = vh;
-                    document.getElementById('status').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
-                })
-                .catch(() => {
-                    document.getElementById('status').textContent = 'Connection lost — retrying...';
-                });
-        }
-
-        function loadEvents() {
-            fetch('/api/events')
-                .then(r => r.json())
-                .then(events => {
-                    let html = '';
-                    events.forEach(e => {
-                        html += `<div class="event-row">
-                            <span class="event-time">${fmtUptime(e.uptimeSec)}</span>
-                            <span class="event-type">${e.type}</span>
-                            <span class="event-detail">${e.detail}</span>
-                        </div>`;
-                    });
-                    document.getElementById('eventlog').innerHTML = html || '<div style="color:#666">No events yet</div>';
-                });
-        }
-
-        function valve(idx, action) {
-            fetch(`/api/valve?id=${idx}&action=${action}`, {method:'POST'})
-                .then(() => setTimeout(refresh, 300));
-        }
-
-        function closeAll() {
-            if (confirm('Close ALL valves?'))
-                fetch('/api/closeall', {method:'POST'})
-                    .then(() => setTimeout(refresh, 500));
-        }
-
-        refresh();
-        setInterval(refresh, 5000);
-    </script>
 </body>
 </html>
 )rawliteral";
@@ -503,6 +311,24 @@ void handleApiStatus() {
     sys["ip"] = WiFi.localIP().toString();
     sys["mac"] = WiFi.macAddress();
     sys["eventCount"] = eventCount;
+
+    // Health insights
+    JsonObject health = doc["health"].to<JsonObject>();
+    health["crashCount"] = crashCount;
+    health["safeMode"] = safeMode;
+    health["resetReason"] = (int)lastResetReason;
+    const char* resetNames[] = {"Unknown","PowerOn","EXT","SW","Panic","IntWDT","TaskWDT","WDT","DeepSleep","Brownout","SDIO"};
+    int ri = (int)lastResetReason;
+    health["resetReasonName"] = (ri >= 0 && ri <= 10) ? resetNames[ri] : "Other";
+    health["deepSleepThreshold"] = SAFE_MODE_THRESHOLD * 2;
+    health["safeModeThreshold"] = SAFE_MODE_THRESHOLD;
+    // Valve health: detect crash-loop evidence (close count >> open count)
+    int totalOpens = 0, totalCloses = 0;
+    for (int i = 0; i < NUM_VALVES; i++) { totalOpens += valveOpenCount[i]; totalCloses += valveCloseCount[i]; }
+    health["totalValveOpens"] = totalOpens;
+    health["totalValveCloses"] = totalCloses;
+    health["valveCloseOpenRatio"] = totalOpens > 0 ? (float)totalCloses / totalOpens : 0;
+    health["crashLoopEvidence"] = (totalCloses > totalOpens * 3 && bootCount > 100);
 
     String json;
     serializeJson(doc, json);
@@ -706,14 +532,26 @@ void setup() {
 
     // === Crash counter — detect repeated power failures ===
     nvs.begin(NVS_NAMESPACE, false);
-    uint32_t crashCount = nvs.getUInt("crashCnt", 0) + 1;
+    crashCount = nvs.getUInt("crashCnt", 0) + 1;
     nvs.putUInt("crashCnt", crashCount);
     bootCount = nvs.getUInt("bootCount", 0) + 1;
     nvs.putUInt("bootCount", bootCount);
     nvs.end();
 
-    bool safeMode = (crashCount >= SAFE_MODE_THRESHOLD);
+    lastResetReason = esp_reset_reason();
+    safeMode = (crashCount >= SAFE_MODE_THRESHOLD);
     int stabilizeDelay = safeMode ? SAFE_MODE_DELAY_SEC : 3;
+
+    // === Battery protection: if crash-looping too fast, deep sleep to preserve battery ===
+    // Store last boot timestamp in NVS. If we've hit SAFE_MODE_THRESHOLD crashes
+    // and the system is STILL crash-looping, go to deep sleep for 10 minutes.
+    if (crashCount >= SAFE_MODE_THRESHOLD * 2) {
+        Serial.printf("!!! BATTERY PROTECTION — %u consecutive crashes !!!\n", crashCount);
+        Serial.println("!!! Entering deep sleep for 10 minutes to preserve battery !!!");
+        Serial.flush();
+        esp_sleep_enable_timer_wakeup(10ULL * 60 * 1000000);  // 10 minutes in microseconds
+        esp_deep_sleep_start();
+    }
 
     Serial.printf("  Boot #%u, crash counter: %u/%u\n", bootCount, crashCount, SAFE_MODE_THRESHOLD);
     if (safeMode) {
@@ -743,11 +581,20 @@ void setup() {
         digitalWrite(valves[i].in2, LOW);
     }
 
-    // Close all valves on startup (safe state) — stagger to limit current spikes
-    Serial.println("[INIT] Closing all valves (safe startup)...");
-    for (int i = 0; i < NUM_VALVES; i++) {
-        closeValve(i);
-        delay(200);  // Stagger valve pulses to avoid simultaneous current draw
+    // Close all valves ONLY on clean boot (power-on or manual reset).
+    // Skip on crash reboots to avoid the battery-drain spiral:
+    //   crash → reboot → close-all pulse (heavy 12V draw) → crash → repeat × 1000+
+    esp_reset_reason_t reason = esp_reset_reason();
+    bool cleanBoot = (reason == ESP_RST_POWERON || reason == ESP_RST_SW || reason == ESP_RST_DEEPSLEEP);
+    if (cleanBoot && !safeMode) {
+        Serial.println("[INIT] Clean boot — closing all valves (safe startup)...");
+        for (int i = 0; i < NUM_VALVES; i++) {
+            closeValve(i);
+            delay(200);  // Stagger valve pulses to avoid simultaneous current draw
+        }
+    } else {
+        Serial.printf("[INIT] Skipping close-all (reset reason=%d, safeMode=%d) — preserving battery\n",
+                      (int)reason, safeMode);
     }
 
     // Initialize sensors

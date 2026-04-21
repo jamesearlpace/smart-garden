@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** Active — bench test complete, all hardware verified on solar/battery power, ready for yard installation  
-**Last Updated:** 2026-04-11  
+**Status:** Active — bench test complete, MOSFET power gate fix planned (waiting for parts)  
+**Last Updated:** 2026-04-17  
 **Goal:** Solar-powered smart irrigation system controlled remotely via GitHub Copilot through a home server
 
 ---
@@ -135,21 +135,35 @@ All v2.0 telemetry features plus power management and diagnostics.
 - Valves not connected to actual irrigation pipes
 - config.h only defines 7 valves — needs 3 more pin assignments for 10 total
 
-### GPIO Pin Layout (current 7 valves in config.h)
-| Valve | Zone | IN1 | IN2 | L298N Board |
-|-------|------|-----|-----|-------------|
-| 1 | Garden drip | GPIO 25 | GPIO 26 | Board 1, Ch A |
-| 2 | Grapes drip | GPIO 27 | GPIO 14 | Board 1, Ch B |
-| 3 | Fruit Trees | GPIO 16 | GPIO 17 | Board 2, Ch A |
-| 4 | South Lawn | GPIO 18 | GPIO 19 | Board 2, Ch B |
-| 5 | East Lawn | GPIO 21 | GPIO 22 | Board 3, Ch A |
-| 6 | North Beds | GPIO 23 | GPIO 13 | Board 3, Ch B |
-| 7 | West Strip | GPIO 5 | GPIO 15 | Board 4, Ch A |
+### GPIO Pin Layout (current 7 valves in config.h, 9 zones in server config)
+| Valve | Zone (server config) | IN1 | IN2 | L298N Board |
+|-------|----------------------|-----|-----|-------------|
+| 1 | Front Yard A | GPIO 25 | GPIO 26 | Board 1, Ch A |
+| 2 | Front Yard B | GPIO 27 | GPIO 14 | Board 1, Ch B |
+| 3 | Enclosed Backyard A | GPIO 16 | GPIO 17 | Board 2, Ch A |
+| 4 | Enclosed Backyard B | GPIO 18 | GPIO 19 | Board 2, Ch B |
+| 5 | Southeast | GPIO 21 | GPIO 22 | Board 3, Ch A |
+| 6 | South | GPIO 23 | GPIO 13 | Board 3, Ch B |
+| 7 | Southwest | GPIO 5 | GPIO 15 | Board 4, Ch A |
+| 8 | Peonies (drip) | TBD | TBD | Board 4, Ch B |
+| 9 | Garden (drip) | TBD | TBD | Board 5, Ch A |
 
-### Scaling to 10 Valves
-- ESP32 has enough GPIOs for 10 valves (20 pins) but requires using boot-sensitive pins (0, 2, 12)
-- 8 valves = comfortable, 9-10 = need boot-sensitive GPIOs or an MCP23017 I2C expander
-- 10 valves = 5 L298N boards
+> **ESP32 firmware still uses old names** ("Garden drip", "Grapes drip", etc.) — update when reflashing for valve 8-9 wiring.
+
+### Planned Sensor Layout
+| Sensor | GPIO | Planned Location | Zones Served |
+|--------|------|------------------|--------------|
+| 0 | 32 | Near VB1 | Front Yard A/B, Enclosed Backyard A/B |
+| 1 | 33 | Near VB2 | Southeast, South, Southwest |
+| 2 | 34 | Grapes area | Garden (drip) |
+| 3 | 35 | Peonies bed | Peonies (drip) |
+
+### Scaling to 9 Zones
+- 9 zones confirmed in server config (7 sprinkler + 2 drip)
+- ESP32 firmware currently defines 7 valves — needs 2 more GPIO pairs for valves 8-9
+- Also need `NUM_VALVES 9` in config.h and 2 more entries in the valves array
+- 9 valves = 5 L298N boards (4 boards wired, need 1 more)
+- All 4 soil sensor ADC pins allocated (GPIO 32-35)
 
 ---
 
@@ -443,13 +457,22 @@ Previous audit examined the OLD scheduler (`smart-garden/server/scheduler.py`) a
 ---
 
 ## Next Steps
-1. Tune Zimmerman baselines after observing real-world behavior for 2-4 weeks
-2. Integrate soil water balance depletion as additional watering trigger in `evaluate_zone()`
-3. Add balance history chart to Analytics panel (data already in `soil_balance` table)
-4. Calibrate `precip_rate_iph` per zone with catch-cup tests after physical installation
-5. Observe soil water balance tracking and adjust AWC for Duvall soil type
-6. Add runtime adjustment logging to analytics charts
-7. Physical installation and field calibration
+1. **Battery voltage monitoring** — Wire voltage divider to ESP32 GPIO 36, add to firmware + server + dashboard
+   - **Parts on hand:** 10K ohm resistors (10-pack), 120K ohm resistors (25-pack)
+   - **Divider:** 4× 10K in series (R1=40K) + 1× 10K (R2) → ratio 1:5 → 12.7V battery reads as 2.54V on ADC
+   - **Pin:** GPIO 36 (VP) — free ADC1 input-only pin
+   - **Wiring:** Battery +12V → [10K]→[10K]→[10K]→[10K]→ junction → [10K] → GND. Junction wire to GPIO 36.
+   - **Firmware:** Add `analogRead(36)`, convert to voltage (raw × 3.3/4095 × 5), include `batteryV` in `/api/status` response
+   - **Server:** Log to `health_history` table, add to `/api/health-history` response
+   - **Dashboard:** Battery card on Home panel with voltage, SOC estimate (12.7V=100%, 11.8V=0%), and 24h/7d/30d chart
+   - **Alerts:** Push notification if battery drops below 12.0V
+2. Tune Zimmerman baselines after observing real-world behavior for 2-4 weeks
+3. Integrate soil water balance depletion as additional watering trigger in `evaluate_zone()`
+4. Add balance history chart to Analytics panel (data already in `soil_balance` table)
+5. Calibrate `precip_rate_iph` per zone with catch-cup tests after physical installation
+6. Observe soil water balance tracking and adjust AWC for Duvall soil type
+7. Add runtime adjustment logging to analytics charts
+8. Physical installation and field calibration
 
 ---
 
@@ -743,9 +766,394 @@ Every HTTP response now tells browsers to never cache. Also added `TEMPLATES_AUT
 Future deployments must verify:
 1. `fuser -k 5125/tcp` before restart (or rely on ExecStartPre)
 2. `systemctl status` shows `active (running)` with a **new PID**
+
+---
+
+## 2026-04-17 — Fix stale dashboard data (issue #5)
+
+**Context:** Dashboard showed "Data stale — last reading 5568m ago" despite ESP32 showing Online. The smart-garden-server process gets SIGKILL'd ~25-28s after starting under systemd (6900+ restarts, cause unknown — not OOM, not cgroup, not watchdog). The `run_cycle` scheduler job (every 300s) never executed before the kill, so the dashboard DB never received fresh data. Meanwhile, the collector service (separate process) kept writing to its own DB every 60s — data was there but the dashboard didn't know to look for it.
+
+**Changes (commit a614302, repo: jamesearlpace/smart-garden-server):**
+
+1. **`server.py`** — Added `next_run_time=datetime.now()` to `run_cycle` and `safety_check` scheduler jobs, so they fire immediately on startup before the ~25s kill window
+2. **`database.py`** — Added collector DB fallback: `get_latest_soil()` and `get_latest_health()` check if dashboard DB data is >10 min stale, and if so, read from the collector's DB (`~/smart-garden/server/smart-garden.db`) which is always fresh
+3. **`smart-garden.service`** — RestartSec=30 (was 15), StartLimitBurst=10, restored fuser -k ExecStartPre
+
+**Decisions:**
+- Chose resilience over root-cause fix: the SIGKILL source is unknown and hard to debug (no bpftrace/auditctl on server). Instead, made the system work correctly despite frequent restarts.
+- Two separate SQLite databases remain (collector's `smart-garden.db` with `sensor_readings` table vs dashboard's `smart-garden.db` with `sensor_log` table). The fallback bridges them without merging.
+
+**Current State:** Service restarts every ~30s but dashboard always shows fresh data. GitHub issue #5 closed.
+
+**Open mystery:** The SIGKILL source. Suspects: a cron job, another systemd unit, or a kernel-level process. Would need `bpftrace` or `auditd` installed on the server to trace. Low priority since the system now self-heals.
 3. `curl localhost:5125` returns content containing the new changes
 4. `curl -I` shows `Cache-Control: no-store` header
 
 ### Lesson Learned
 
 Never trust `systemctl status` alone or `scp` success as proof of deployment. The only valid test is: **does `curl` to the live server return the expected content?** A 200 status code is not enough — the response body must contain the actual change.
+
+---
+
+## 2026-04-14 — Power Optimization: MOSFET Gate + Deep Sleep Plan
+
+**Context:** Battery keeps dying. Root cause analysis showed ~76-148 mA idle draw 24/7, while the 10W solar panel in Duvall WA only produces ~1.6 Ah/day. The system runs a daily deficit and dies in 2-3 days.
+
+**Decision:** Quick Fix — add P-channel MOSFET power gate on L298N 12V rail + ESP32 deep sleep. Estimated to cut idle from ~100 mA to ~11-18 mA, well within solar budget.
+
+### Root Cause Analysis
+
+| Component | Idle draw (24/7) | Needed? |
+|-----------|-----------------|---------|
+| 5× L298N motor driver boards (quiescent) | 25-50 mA | **No** — latching solenoids hold position with zero power |
+| ESP32 (always-on WiFi) | 40-80 mA | **No** — only needs to wake for watering windows |
+| Renogy Wanderer charge controller | 6-8 mA | Unavoidable (keep for now) |
+| LM2596 buck converter (12V→5V) | 5-10 mA | Unavoidable (powers ESP32) |
+| **Total idle** | **76-148 mA** | |
+| **Daily idle drain** | **~2.7 Ah** | |
+| **10W panel daily output (Duvall)** | **~1.6 Ah** | |
+| **Daily deficit** | **~1.1 Ah** | Battery dies in 2-3 days |
+
+### Solution: Two Changes
+
+**Change 1: MOSFET Power Gate (hardware)**
+- One IRF4905 P-channel MOSFET cuts 12V power to ALL L298N boards simultaneously
+- Controlled by one ESP32 GPIO pin (GPIO 2)
+- Default state: OFF (L298N boards unpowered) via 10kΩ pull-up resistor
+- Turns ON only during valve actuation (~100ms pulse), then turns OFF again
+- Eliminates 25-50 mA of continuous idle draw
+
+**Change 2: ESP32 Deep Sleep (firmware)**
+- ESP32 enters deep sleep between watering windows
+- Wakes on RTC timer at scheduled times (controlled by Acer server schedule)
+- Deep sleep draw: ~10μA (vs 40-80 mA always-on)
+- **Trade-off:** ESP32 is unreachable via HTTP while asleep — no on-demand control from Copilot/browser during sleep periods
+- **Mitigation:** Configure wake windows aligned with server's irrigation check cycle (every 5 min during watering hours, sleep overnight)
+
+### Expected Results After Fix
+
+| Component | Before | After |
+|-----------|--------|-------|
+| 5× L298N boards | 25-50 mA | **0 mA** (MOSFET gate OFF) |
+| ESP32 | 40-80 mA | **~0.01 mA** (deep sleep) / 80 mA (wake window) |
+| Wanderer | 6-8 mA | 6-8 mA (unchanged) |
+| LM2596 buck | 5-10 mA | 5-10 mA (unchanged) |
+| **Total idle** | **76-148 mA** | **~11-18 mA** |
+| **Daily idle drain** | **~2.7 Ah** | **~0.35 Ah** |
+| **Battery life (no sun)** | 2-3 days | **~20 days** |
+
+### Parts Ordered
+
+| Part | Qty | Purpose | Status |
+|------|-----|---------|--------|
+| IRF4905 P-channel MOSFET (TO-220) | 1 needed (buy 10-pack) | Power gate — switches 12V to L298N boards | **TO ORDER** |
+| 2N3904 NPN transistor | 1 needed | Level shifter — ESP32 3.3V GPIO drives 12V P-FET gate | **TO ORDER** |
+| 10kΩ resistor (1/2W, 5%) | 1 needed | Pull-up on MOSFET gate (default OFF) | **ORDERED** ✅ |
+| 1kΩ resistor (1/2W, 1%) | 1 needed | Base resistor for NPN transistor | **ORDERED** ✅ |
+
+### MOSFET Gate Circuit Design
+
+```
+                        12V Battery Rail
+                             │
+                     ┌───────┤
+                     │       │
+                  [10kΩ]     │
+                  pull-up    │
+                     │       │
+                     ├───G   │
+                     │   IRF4905    
+                     │   (P-ch)     
+                     │   S───┘      
+                     │   │          
+                     │   D──────── 12V to ALL L298N boards (VCC input)
+                     │              
+             ┌───────┘
+             │
+             C
+        2N3904 (NPN)
+             E
+             │
+            GND
+             
+     ESP32 GPIO 2 ──[1kΩ]── B (base)
+```
+
+**How it works:**
+1. **ESP32 GPIO 2 LOW** (default, boot, deep sleep): NPN is OFF → MOSFET gate pulled to 12V via 10kΩ → P-FET is OFF → L298N boards have no power → **0 mA idle draw**
+2. **ESP32 GPIO 2 HIGH**: NPN conducts → pulls MOSFET gate to GND → P-FET turns ON → 12V flows to L298N boards → valves can be actuated
+3. Gate turns ON ~1ms before valve pulse, stays on during pulse, turns OFF after pulse completes
+
+**Why GPIO 2:**
+- Only remaining free GPIO suitable for output (all others used for valves, sensors, DHT22)
+- GPIO 2 is also the onboard blue LED — provides visual confirmation when gate is active (LED ON = L298N boards powered)
+- During deep sleep, GPIO 2 defaults LOW = gate OFF = safe
+- Strapping pin (must be LOW on boot for normal flash mode) — this is fine because LOW = gate OFF = desired boot state
+
+### Wiring Steps (when parts arrive)
+
+**Step 1: Identify the 12V feed wire to L298N boards**
+- Currently: Wanderer LOAD+ → wire → L298N VCC inputs (all 5 boards daisy-chained)
+- Cut this wire at a convenient point between the Wanderer and the first L298N board
+
+**Step 2: Wire the MOSFET circuit**
+1. **IRF4905 Source (S)** → connect to 12V battery rail (Wanderer LOAD+)
+2. **IRF4905 Drain (D)** → connect to L298N VCC input (the cut wire going to L298N boards)
+3. **IRF4905 Gate (G)** → connect to:
+   - 10kΩ resistor → other end to 12V battery rail (same as Source) — this is the pull-up
+   - Collector (C) of 2N3904 — this is the gate driver
+4. **2N3904 Collector (C)** → MOSFET Gate (from step 3)
+5. **2N3904 Emitter (E)** → GND (common ground with ESP32 and battery)
+6. **2N3904 Base (B)** → 1kΩ resistor → ESP32 GPIO 2
+
+**Step 3: Verify**
+- Before connecting ESP32: measure voltage at L298N VCC — should be 0V (gate OFF by default)
+- Touch 2N3904 base wire to 3.3V briefly — L298N VCC should jump to ~12V
+- Remove 3.3V — VCC drops back to 0V
+
+**IRF4905 TO-220 pinout (facing flat side, pins down, left to right):**
+- Pin 1 (left): **Gate (G)**
+- Pin 2 (center): **Drain (D)** — also connected to the metal tab
+- Pin 3 (right): **Source (S)**
+
+**2N3904 TO-92 pinout (facing flat side, pins down, left to right):**
+- Pin 1 (left): **Emitter (E)**
+- Pin 2 (center): **Base (B)**
+- Pin 3 (right): **Collector (C)**
+
+### Firmware Changes Required
+
+**1. config.h — Add gate pin definition**
+```cpp
+// Power gate — controls MOSFET that switches 12V to L298N boards
+#define POWER_GATE_PIN     2    // GPIO 2 (also onboard LED — visual indicator)
+#define GATE_SETTLE_MS     5    // Wait after turning gate ON before pulsing valve
+```
+
+**2. main.cpp — Gate control functions**
+```cpp
+void enableDriverPower() {
+    digitalWrite(POWER_GATE_PIN, HIGH);  // NPN on → MOSFET on → 12V to L298Ns
+    delay(GATE_SETTLE_MS);               // Let voltage stabilize
+}
+
+void disableDriverPower() {
+    digitalWrite(POWER_GATE_PIN, LOW);   // NPN off → MOSFET off → 0V to L298Ns
+}
+```
+
+**3. main.cpp — Modify openValve() and closeValve()**
+```cpp
+void openValve(int idx) {
+    if (idx < 0 || idx >= NUM_VALVES) return;
+    enableDriverPower();          // ← NEW: power on L298N boards
+    Valve& v = valves[idx];
+    digitalWrite(v.in1, HIGH);
+    digitalWrite(v.in2, LOW);
+    delay(VALVE_PULSE_MS);
+    digitalWrite(v.in1, LOW);
+    digitalWrite(v.in2, LOW);
+    disableDriverPower();         // ← NEW: power off L298N boards
+    v.isOpen = true;
+    // ... rest unchanged
+}
+
+void closeValve(int idx) {
+    if (idx < 0 || idx >= NUM_VALVES) return;
+    enableDriverPower();          // ← NEW
+    Valve& v = valves[idx];
+    // ... duration calc unchanged ...
+    digitalWrite(v.in1, LOW);
+    digitalWrite(v.in2, HIGH);
+    delay(VALVE_PULSE_MS);
+    digitalWrite(v.in1, LOW);
+    digitalWrite(v.in2, LOW);
+    disableDriverPower();         // ← NEW
+    v.isOpen = false;
+    // ... rest unchanged
+}
+```
+
+**4. main.cpp — setup() — Initialize gate pin**
+```cpp
+// In setup(), before valve init:
+pinMode(POWER_GATE_PIN, OUTPUT);
+digitalWrite(POWER_GATE_PIN, LOW);  // Gate OFF by default — safe state
+```
+
+**5. Deep sleep (Phase 2 — implement after gate is verified working)**
+```cpp
+// After watering cycle completes:
+#define SLEEP_DURATION_US  (5ULL * 60 * 1000000)  // 5 minutes
+
+void enterDeepSleep() {
+    disableDriverPower();                          // Ensure gate is OFF
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US);
+    esp_deep_sleep_start();
+}
+```
+
+**Deep sleep considerations:**
+- ESP32 loses all RAM on deep sleep — WiFi reconnect takes ~2-3 seconds on wake
+- RTC memory survives — can store wake count and next scheduled valve action
+- Server-side scheduler (`irrigation.py`) already polls ESP32 every 5 min — if ESP32 is asleep, the poll fails silently and retries next cycle
+- **Implement deep sleep AFTER verifying the MOSFET gate works correctly** — do one change at a time
+
+### Implementation Order
+
+1. **Wire MOSFET gate circuit** (when parts arrive)
+2. **Flash firmware with gate support** (config.h + main.cpp changes above)
+3. **Test:** open/close each valve via web UI — verify L298N boards power on and off around each pulse
+4. **Monitor battery** for 1-2 weeks — confirm positive power budget
+5. **If battery still struggles:** implement deep sleep (Phase 2) or swap Wanderer for CN3791 (Medium Redesign)
+
+### Upgrade Path (if needed later)
+
+| Trigger | Action |
+|---------|--------|
+| Battery holds fine for 2+ weeks | Done — no further changes |
+| Battery slowly drains over weeks | Add deep sleep (firmware only, no new hardware) |
+| Battery drains even with deep sleep | Replace Wanderer with CN3791 MPPT module (~$5) |
+| Want to consolidate boards | Full redesign: single DRV8833 + multiplexer (probably never needed) |
+
+### What NOT Changed
+
+- Wanderer charge controller stays (6-8 mA idle is acceptable if L298N + ESP32 drain is eliminated)
+- LM2596 buck converter stays (needed for ESP32 5V)
+- All 5 L298N boards stay (just power-gated)
+- All existing valve wiring stays (no changes to solenoid connections)
+- Server-side code unchanged (irrigation.py, dashboard.py, etc.)
+
+
+---
+
+## 2026-04-20 — Production reliability sweep + ESP32 antenna research
+
+**Context:** ESP32 showed offline on dashboard. What started as a single-bug investigation expanded into a full home-server reliability hardening pass after we found multiple landmines.
+
+### What was wrong (Issue #6 — root cause)
+
+Two systemd units were both running `server.py` with `ExecStartPre=fuser -k 5125/tcp`:
+- `/etc/systemd/system/smart-garden-server.service` (system unit)
+- `~/.config/systemd/user/smart-garden.service` (rogue user unit)
+
+They were SIGKILL-ing each other every ~30 seconds in an infinite restart loop. NRestarts: **3937 (system) + 10861 (user)**. ESP32 connection-refused errors were a downstream symptom of constant TCP socket thrashing — every poll landed during a restart window.
+
+**Fix applied:**
+- Disabled and archived the user unit
+- Replaced `ExecStartPre=fuser -k 5125/tcp` with a port-collision *check* (refuses to start instead of killing siblings)
+- `smart-garden.service` commit: `f9943c5`
+
+### Audit found the same landmine in thermostat-server
+
+Same pattern — rogue user unit + `fuser -k 5126/tcp`. Disabled, archived, replaced with port check.
+
+**Lesson learned:** NEVER use `ExecStartPre=fuser -k <port>/tcp` in a systemd unit. It will happily kill any other process on that port, including legitimate sibling services. Always use a port-collision check that fails fast instead.
+
+### Issue #7 — ESP32 poll resilience
+
+Even after the SIGKILL loop was gone, ESP32 still occasionally returned `Connection refused` (it's a small MCU under load).
+
+**Fixed in `irrigation.py` (commit `fff0481`):**
+- Switched from one-shot `requests.get()` calls to a long-lived `requests.Session()` with `HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[502,503,504]))`
+- Bumped `ESP32_TIMEOUT` 10s → 15s
+- Added `_consecutive_failures` counter with `_FAILURE_ESCALATE_AT = 3`
+  - Attempts 1–2: WARNING (transient blip — don't page)
+  - Attempts 3+: ERROR (real outage)
+  - Recovery after failures: INFO message
+- Suppressed `urllib3` retry chatter in `server.py`
+- Applied to all HTTP methods: `get_esp32_status`, `open_valve`, `close_valve`, `close_all`
+
+Validated in production logs — escalation logic working as designed.
+
+### Home-server-wide monitoring deployed
+
+Built two new tools in `home-dashboard/`:
+
+**`audit-services.py`** (commit `ffe0234`) — landmine scanner across all 13 services:
+- Checks NRestarts (flag if >100)
+- Greps unit files for `fuser -k` patterns
+- Detects rogue `~/.config/systemd/user/` units that shadow system units
+- Detects port collisions
+
+**`service-monitor.py`** — runs every 1 min via cron, sends ntfy alerts to topic `home-server-james`:
+- Service down detection
+- Restart loop detection (NRestarts delta ≥5 between checks)
+- HTTP 5xx / timeout (4xx ignored — those are normal)
+- New rogue user units appearing
+- Disk >85% full
+- Memory <5% free
+- 30-min cooldown per issue key (no spam)
+- State at `/tmp/home-server-monitor.state.json`
+- Cron: `* * * * * /usr/bin/python3 /home/jamesearlpace/home-dashboard/service-monitor.py`
+
+Test alert sent and received successfully.
+
+### ESP32 antenna research (Issue #9 — not yet ordered)
+
+Current ESP32 measures **-75 dBm at point-blank range** (likely PCB-trace antenna on WROOM-32, not -32U). Final deployment will be **50–70 ft away in a plastic junction box, behind 1–2 exterior walls** (router is in a corner of the house).
+
+Real-world data found (citations):
+
+| Source | Setup | Result |
+|--------|-------|--------|
+| [alonsoruibal.com](https://www.alonsoruibal.com/improving-wifi-reception-with-an-esp32-wroom-32u/) | WROOM-32 → WROOM-32U + 2.5 dBi external | **-95 → -75 dBm (+20 dB)**, disconnects gone |
+| [OpenMQTTGateway thread](https://community.openmqttgateway.com/t/shocking-discovery-about-antenna-quality-of-esp32-modules/2228) | WROOM PCB vs WROOM-32U + Airgain external | **+11 to +21 dB improvement** |
+| Same thread | Generic WROOM PCB vs **Seeed XIAO ESP32-C3** w/ included antenna | **+44 dB improvement** (!) |
+
+**Honest revised recommendation (~ total):**
+1. **ESP32-WROOM-32U dev board** (~) — drop-in, firmware just works, gives +15-20 dB
+2. **2.4 GHz 5 dBi external antenna w/ U.FL→SMA pigtail** (~)
+3. **TP-Link RE220 or RE315 WiFi extender** (~) — plug into garden-facing outlet
+
+Math: -75 dBm point-blank today → with WROOM-32U, ~-55 dBm point-blank. Lose 25-35 dB over 70 ft + 1-2 walls → land at **-80 to -95 dBm** in the box. That's marginal-to-bad without the extender. The extender is the actual fix; the antenna upgrade buys headroom.
+
+**Alternative considered:** Seeed XIAO ESP32-C3 (~) showed +44 dB in tests vs PCB antenna — better than WROOM-32U. But it's a different chip (RISC-V single-core, different pinout) → 2-4 hours of firmware port work. Skipped for now; WROOM-32U is the pragmatic choice.
+
+**Decision:** Order Plan A from Amazon, test in-place at the garden box BEFORE permanent install. All items returnable.
+
+### Open issues after this session
+
+- **#8** — Decommission old `~/smart-garden/` install (paranoia cleanup, not urgent)
+- **#9** — Order WROOM-32U + antenna + RE220 extender (above)
+- **home-dashboard #11** — Migrate Flask from dev server to `waitress` WSGI (production hardening)
+
+### Memory updates
+
+- Created `/memories/repo/` notes (via session)
+- User memory: existing `accountability-tracker-issues.md` already documents the NSSM lesson (analogous to today's "always restart the unit after editing" lesson for systemd)
+
+
+---
+
+## 2026-04-20 (continued) - Server reliability hardening
+
+User asked for `super reliable` after seeing dashboard go offline. After auditing the actual bug history, identified that **every outage in memory was a server/dashboard problem, not an ESP32 problem**. ESP32 dropping signal is graceful (cached data, recovers); server going offline is catastrophic. Decided to skip hardware spend and harden the server side instead.
+
+### What got deployed
+
+1. **Smart-garden Flask -> waitress** (commit `a891010`). Production WSGI, threaded, tolerant of malformed input. `server.py` uses `waitress.serve(threads=8)` instead of `app.run()`.
+2. **Bulletproof systemd settings on all 12 services** via `home-dashboard/harden-units.sh` (idempotent). Each unit now has Restart=always + RestartSec=10 + StartLimitIntervalSec=600 + StartLimitBurst=10 + TimeoutStopSec=30 + port-collision check (NEVER fuser -k).
+3. **Content-validation in service-monitor.py** (commit `412d789`). Each dashboard has an `expect_substring` (e.g. `Smart Garden`, `Heritage Vault`, `Academic Tracker`). Catches blank-200 / handler-broken failures, which is the actual outage class from the bug history.
+4. **Decommissioned orphan units** (closes #8). `smart-garden-api`, `smart-garden-collector`, `smart-garden-scheduler` were pointing to the old `~/smart-garden/` install. Stopped, disabled, archived as `.decommissioned-2026-04-20`. Code dir moved to `smart-garden.OLD-DECOMMISSIONED-2026-04-20`. Script preserved at `scripts/decommission-orphans.sh`.
+
+### Failure modes now blocked
+
+| Past failure | Now prevented by |
+|---|---|
+| `fuser -k` SIGKILL war | Port-collision check refuses to start |
+| Rogue user units shadowing system | service-monitor alerts on this |
+| Infinite restart loop | StartLimitBurst=10 (systemd gives up) |
+| Flask dying on bad input | Waitress is threaded + tolerant |
+| Blank dashboard returning 200 | Content validation |
+| Hanging on shutdown | TimeoutStopSec=30 |
+
+### Validation
+
+All 12 services active after restart. `service-monitor.py` runs clean (no false alerts). `smart-garden-server` returning HTTP 200 in 0.14s under waitress.
+
+### Hardware decision
+
+**Antenna upgrade (#9) deferred indefinitely.** ESP32 isn't the problem; the server discipline was. Will revisit only if signal-related outages start mattering after the server changes settle in.

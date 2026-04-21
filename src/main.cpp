@@ -14,6 +14,7 @@
 #include "soc/rtc_cntl_reg.h"
 #include "esp_system.h"  // esp_reset_reason()
 #include "esp_sleep.h"   // esp_deep_sleep_start()
+#include "esp_ota_ops.h" // esp_ota_mark_app_valid_cancel_rollback()
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DHT.h>
@@ -366,6 +367,25 @@ void handleApiCloseAll() {
     server.send(200, "text/plain", "All valves closed");
 }
 
+// API: Remote reboot. POST /api/reboot              -> soft reboot
+//                    POST /api/reboot?clear=1       -> reset crash counter, then reboot
+// Lets us recover from safe-mode without USB access.
+void handleApiReboot() {
+    bool clearCrash = (server.arg("clear") == "1");
+    if (clearCrash) {
+        nvs.begin(NVS_NAMESPACE, false);
+        nvs.putUInt("crashCnt", 0);
+        nvs.end();
+        Serial.println("[REBOOT] Crash counter cleared via API");
+    }
+    closeAllValves();  // safe state before restart
+    logEvent("reboot", clearCrash ? "api (cleared)" : "api");
+    String msg = clearCrash ? "Rebooting (crash counter cleared)" : "Rebooting";
+    server.send(200, "text/plain", msg);
+    delay(500);  // let the response flush
+    ESP.restart();
+}
+
 // API: Get event log as JSON array (newest first)
 void handleApiEvents() {
     JsonDocument doc;
@@ -624,6 +644,7 @@ void setup() {
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/valve", HTTP_POST, handleApiValve);
     server.on("/api/closeall", HTTP_POST, handleApiCloseAll);
+    server.on("/api/reboot", HTTP_POST, handleApiReboot);
     server.on("/api/events", HTTP_GET, handleApiEvents);
     server.on("/api/valvestats", HTTP_GET, handleApiValveStats);
     server.on("/api/scan", HTTP_GET, handleApiScan);
@@ -664,6 +685,22 @@ void setup() {
 void loop() {
     ArduinoOTA.handle();
     server.handleClient();
+
+    // OTA rollback validation: once we've been up and stable for 60 seconds with WiFi,
+    // mark this firmware image as "valid". If a future OTA push boots into an image that
+    // crashes before reaching this point, the bootloader rolls back to the last good image.
+    // No-op unless CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is set in sdkconfig — but harmless
+    // either way, and gives us the safety net for free if rollback is later enabled.
+    static bool otaMarkedValid = false;
+    if (!otaMarkedValid && WiFi.status() == WL_CONNECTED && millis() - bootTimeMillis > 60000) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+            Serial.println("[OTA] Image marked valid — rollback cancelled");
+        } else if (err != ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+            Serial.printf("[OTA] mark_valid err: 0x%x (rollback likely disabled in sdkconfig)\n", err);
+        }
+        otaMarkedValid = true;
+    }
 
     // WiFi watchdog — reconnect if dropped, reboot if stuck
     static unsigned long lastWifiCheck = 0;

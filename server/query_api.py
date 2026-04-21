@@ -340,9 +340,9 @@ def main():
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port (default: {DEFAULT_PORT})")
     args = parser.parse_args()
 
-    print(f"Smart Garden Query API starting on http://0.0.0.0:{args.port}")
+    print(f"Smart Garden Query API starting on http://127.0.0.1:{args.port}")
     print(f"Database: {DB_PATH}")
-    server = HTTPServer(("0.0.0.0", args.port), Handler)
+    server = HTTPServer(("127.0.0.1", args.port), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

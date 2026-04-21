@@ -83,8 +83,30 @@ const char* MQTT_PASS     = "";
 // ============================================================
 #define BOOT_CPU_MHZ          80    // CPU freq during boot (lower = less current draw)
 #define RUN_CPU_MHZ           240   // CPU freq after WiFi connects (full speed)
-#define SAFE_MODE_THRESHOLD   5     // Consecutive crashes before entering safe mode
+#define SAFE_MODE_THRESHOLD   20    // Consecutive crashes before entering safe mode (bumped from 5: TWDT now catches real hangs; safe mode shouldn't trip on transient brownouts)
 #define SAFE_MODE_DELAY_SEC   15    // Extra stabilization delay in safe mode
 #define WIFI_TX_DBM           WIFI_POWER_8_5dBm  // Reduced TX power (default is 19.5dBm)
+
+// ============================================================
+// Reliability — task watchdog + scheduled reboot
+// ============================================================
+#define TWDT_TIMEOUT_S        60    // Task watchdog timeout (must exceed longest blocking op, incl. OTA chunk)
+#define WEEKLY_REBOOT_HOURS   168   // Scheduled "spring cleaning" reboot interval (0 = disabled)
+#define WEEKLY_REBOOT_HOUR    3     // Local hour-of-day to perform reboot (only fires when uptime >= WEEKLY_REBOOT_HOURS)
+
+// Independent firmware-side max valve runtime. Protects against server crash,
+// lost close-ACK, dead Mint server, network partition. If a valve is open
+// longer than this, ESP32 force-closes it regardless of who told it to open.
+// Must exceed longest legitimate watering duration (server hard cap is 90 min).
+#define VALVE_HARD_MAX_MS     (95UL * 60UL * 1000UL)   // 95 minutes
+
+// ============================================================
+// Fallback watering schedule — fires when Mint server has been silent
+// for FALLBACK_SERVER_SILENT_HOURS+ hours. Lets the yard survive total
+// loss of the scheduler service (server crash, network partition, vacation).
+// Each zone runs every intervalHours for durationMin, staggered by offsetHours
+// so they don't all run at once. Set intervalHours=0 to disable a zone.
+// ============================================================
+#define FALLBACK_SERVER_SILENT_HOURS  24
 
 #endif // CONFIG_H

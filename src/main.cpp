@@ -15,6 +15,7 @@
 #include "esp_system.h"  // esp_reset_reason()
 #include "esp_sleep.h"   // esp_deep_sleep_start()
 #include "esp_ota_ops.h" // esp_ota_mark_app_valid_cancel_rollback()
+#include "esp_task_wdt.h" // task watchdog timer
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DHT.h>
@@ -80,6 +81,37 @@ uint32_t crashCount = 0;
 bool safeMode = false;
 esp_reset_reason_t lastResetReason = ESP_RST_UNKNOWN;
 unsigned long bootTimeMillis = 0;  // millis() at boot for uptime calc
+
+// ============================================================
+// Fallback watering schedule \u2014 activates when server is silent
+// ============================================================
+// Updated by every authenticated API hit; "server is alive" signal.
+// Initialized to 0 so fallback won't fire until at least one server contact
+// (or until uptime exceeds FALLBACK_SERVER_SILENT_HOURS \u2014 see logic in loop).
+unsigned long lastServerContactMs = 0;
+
+struct FallbackZone {
+    uint16_t intervalHours;   // run every N hours; 0 = disabled
+    uint16_t durationMin;     // for M minutes
+    uint16_t offsetHours;     // initial stagger from boot/activation
+};
+
+// Conservative defaults: every zone every 48h, staggered by 1h.
+// Survival watering, not optimal \u2014 enough to keep plants alive for weeks.
+const FallbackZone FALLBACK_SCHEDULE[NUM_VALVES] = {
+    {48, 15, 0},   // Zone 1 - Garden
+    {48, 20, 1},   // Zone 2 - Grapes
+    {48, 25, 2},   // Zone 3 - Fruit Trees
+    {48, 12, 3},   // Zone 4 - South Lawn
+    {48, 15, 4},   // Zone 5 - NW Lawn
+    {48, 15, 5},   // Zone 6 - SW Lawn
+    {48, 15, 6},   // Zone 7 - NE Lawn
+};
+
+// Per-zone runtime tracking (not persisted; resets at boot)
+unsigned long fallbackLastRunMs[NUM_VALVES] = {0};
+unsigned long fallbackCloseAtMs[NUM_VALVES] = {0};  // 0 = no pending close
+bool fallbackActive = false;  // true when server has been silent long enough
 
 // Ring buffer for timestamped events
 struct Event {
@@ -272,6 +304,7 @@ void handleRoot() {
 
 // API: Get system status as JSON
 void handleApiStatus() {
+    lastServerContactMs = millis();  // server heartbeat
     JsonDocument doc;
     doc["temp"] = isnan(temperature) ? 0 : temperature;
     doc["hum"] = isnan(humidity) ? 0 : humidity;
@@ -331,6 +364,19 @@ void handleApiStatus() {
     health["valveCloseOpenRatio"] = totalOpens > 0 ? (float)totalCloses / totalOpens : 0;
     health["crashLoopEvidence"] = (totalCloses > totalOpens * 3 && bootCount > 100);
 
+    // Fallback schedule status
+    JsonObject fb = doc["fallback"].to<JsonObject>();
+    fb["active"] = fallbackActive;
+    fb["serverSilentSec"] = lastServerContactMs > 0 ? (millis() - lastServerContactMs) / 1000 : -1;
+    fb["silenceThresholdSec"] = FALLBACK_SERVER_SILENT_HOURS * 3600;
+    JsonArray fbZones = fb["zones"].to<JsonArray>();
+    for (int i = 0; i < NUM_VALVES; i++) {
+        JsonObject z = fbZones.add<JsonObject>();
+        z["intervalHours"] = FALLBACK_SCHEDULE[i].intervalHours;
+        z["durationMin"] = FALLBACK_SCHEDULE[i].durationMin;
+        z["lastRunSec"] = fallbackLastRunMs[i] > 0 ? (millis() - fallbackLastRunMs[i]) / 1000 : -1;
+    }
+
     String json;
     serializeJson(doc, json);
     server.send(200, "application/json", json);
@@ -338,6 +384,7 @@ void handleApiStatus() {
 
 // API: Open or close a single valve
 void handleApiValve() {
+    lastServerContactMs = millis();  // server heartbeat
     if (!server.hasArg("id") || !server.hasArg("action")) {
         server.send(400, "text/plain", "Missing id or action");
         return;
@@ -363,6 +410,7 @@ void handleApiValve() {
 
 // API: Close all valves
 void handleApiCloseAll() {
+    lastServerContactMs = millis();  // server heartbeat
     closeAllValves();
     server.send(200, "text/plain", "All valves closed");
 }
@@ -371,6 +419,7 @@ void handleApiCloseAll() {
 //                    POST /api/reboot?clear=1       -> reset crash counter, then reboot
 // Lets us recover from safe-mode without USB access.
 void handleApiReboot() {
+    lastServerContactMs = millis();  // server heartbeat
     bool clearCrash = (server.arg("clear") == "1");
     if (clearCrash) {
         nvs.begin(NVS_NAMESPACE, false);
@@ -670,6 +719,7 @@ void setup() {
     ArduinoOTA.onError([](ota_error_t err) { Serial.printf("[OTA] Error %u\n", err); });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         Serial.printf("[OTA] %u%%\r", progress * 100 / total);
+        esp_task_wdt_reset();  // OTA upload can take >30s; feed WDT each chunk
     });
     ArduinoOTA.begin();
     Serial.println("[INIT] OTA updates enabled (hostname: smart-garden)");
@@ -678,13 +728,108 @@ void setup() {
     readSensors();
     lastSensorRead = millis();
 
+    // Task watchdog — hangs in loop() (blocked WiFi reconnect, stuck handler) trigger
+    // a panic + reboot after TWDT_TIMEOUT_S, instead of going safe-mode-forever.
+    // Subscribed AFTER setupWiFi() because that has 20s of blocking delay() loops.
+    esp_task_wdt_init(TWDT_TIMEOUT_S, true);  // panic on timeout
+    esp_task_wdt_add(NULL);                    // watch the main loop task
+    Serial.printf("[INIT] Task watchdog enabled (%ds timeout)\n", TWDT_TIMEOUT_S);
+
     Serial.println("[INIT] Setup complete — system running");
     Serial.printf("[INIT] Free heap after init: %u bytes\n", ESP.getFreeHeap());
 }
 
 void loop() {
+    esp_task_wdt_reset();  // feed task watchdog every iteration
     ArduinoOTA.handle();
     server.handleClient();
+
+    // Valve safety net — independent firmware-side max runtime cap.
+    // Protects against server crash, lost close-ACK, dead Mint server, network drop.
+    // Runs every loop iteration; force-closes any valve open beyond VALVE_HARD_MAX_MS.
+    for (int i = 0; i < NUM_VALVES; i++) {
+        if (valves[i].isOpen && valveLastOpenedMs[i] > 0 &&
+            (millis() - valveLastOpenedMs[i]) > VALVE_HARD_MAX_MS) {
+            Serial.printf("[SAFETY] Valve %d force-closed (open >%lu min)\n",
+                          i + 1, VALVE_HARD_MAX_MS / 60000UL);
+            logEvent("safety", "force_close_max_runtime");
+            closeValve(i);
+        }
+    }
+
+    // Fallback schedule — if Mint server has been silent for too long, we run
+    // a conservative built-in schedule so the yard survives a server outage.
+    // "Silent" = no API hit for FALLBACK_SERVER_SILENT_HOURS, OR no contact since boot
+    // and uptime now exceeds that threshold (covers "server was already dead at boot").
+    {
+        unsigned long silentMs = lastServerContactMs > 0
+            ? (millis() - lastServerContactMs)
+            : (millis() - bootTimeMillis);
+        bool wasActive = fallbackActive;
+        fallbackActive = (silentMs >= (unsigned long)FALLBACK_SERVER_SILENT_HOURS * 3600UL * 1000UL);
+
+        if (fallbackActive && !wasActive) {
+            Serial.printf("[FALLBACK] Activated — server silent %lus\n", silentMs / 1000);
+            logEvent("fallback", "activated");
+        } else if (!fallbackActive && wasActive) {
+            Serial.println("[FALLBACK] Deactivated — server contact restored");
+            logEvent("fallback", "deactivated");
+        }
+
+        if (fallbackActive) {
+            // Close any fallback-opened valves whose runtime expired
+            for (int i = 0; i < NUM_VALVES; i++) {
+                if (fallbackCloseAtMs[i] != 0 && millis() >= fallbackCloseAtMs[i]) {
+                    Serial.printf("[FALLBACK] Closing zone %d (runtime complete)\n", i + 1);
+                    logEvent("fallback", "close");
+                    closeValve(i);
+                    fallbackCloseAtMs[i] = 0;
+                }
+            }
+            // Open zones whose interval has elapsed (one at a time — don't pile up flow)
+            bool anyOpen = false;
+            for (int i = 0; i < NUM_VALVES; i++) if (valves[i].isOpen) { anyOpen = true; break; }
+            if (!anyOpen) {
+                for (int i = 0; i < NUM_VALVES; i++) {
+                    const FallbackZone& fz = FALLBACK_SCHEDULE[i];
+                    if (fz.intervalHours == 0) continue;  // disabled
+                    unsigned long intervalMs = (unsigned long)fz.intervalHours * 3600UL * 1000UL;
+                    unsigned long offsetMs   = (unsigned long)fz.offsetHours   * 3600UL * 1000UL;
+                    bool dueByInterval = (fallbackLastRunMs[i] != 0) &&
+                                         (millis() - fallbackLastRunMs[i] >= intervalMs);
+                    bool dueFirstRun   = (fallbackLastRunMs[i] == 0) &&
+                                         (millis() - bootTimeMillis >= offsetMs);
+                    if (dueByInterval || dueFirstRun) {
+                        Serial.printf("[FALLBACK] Opening zone %d for %u min\n",
+                                      i + 1, fz.durationMin);
+                        logEvent("fallback", "open");
+                        openValve(i);
+                        fallbackLastRunMs[i] = millis();
+                        fallbackCloseAtMs[i] = millis() + (unsigned long)fz.durationMin * 60UL * 1000UL;
+                        break;  // only start one zone per loop iteration
+                    }
+                }
+            }
+        } else {
+            // Server alive — abandon any pending fallback closes (server owns valves now)
+            // but DON'T force-close: server may have legitimately reopened a valve.
+            for (int i = 0; i < NUM_VALVES; i++) fallbackCloseAtMs[i] = 0;
+        }
+    }
+
+    // Scheduled "spring cleaning" reboot — OpenSprinkler pattern. A planned reboot
+    // beats slow heap leaks, socket descriptor exhaustion, or accumulated state bugs.
+    // Only fires after WEEKLY_REBOOT_HOURS of uptime to avoid boot loops.
+    #if WEEKLY_REBOOT_HOURS > 0
+    static unsigned long uptimeAtBoot = millis();
+    if ((millis() - uptimeAtBoot) >= (unsigned long)WEEKLY_REBOOT_HOURS * 3600UL * 1000UL) {
+        Serial.printf("[REBOOT] Scheduled weekly reboot after %u hours uptime\n", WEEKLY_REBOOT_HOURS);
+        logEvent("boot", "scheduled_reboot");
+        for (int i = 0; i < NUM_VALVES; i++) closeValve(i);  // safe state
+        delay(500);
+        ESP.restart();
+    }
+    #endif
 
     // OTA rollback validation: once we've been up and stable for 60 seconds with WiFi,
     // mark this firmware image as "valid". If a future OTA push boots into an image that

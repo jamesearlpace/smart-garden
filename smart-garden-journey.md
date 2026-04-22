@@ -157,7 +157,7 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 | smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | Re-enable OTA — needs decoupling cap + bench test |
 | smart-garden | [#4](https://github.com/jamesearlpace/smart-garden/issues/4) | Meta | Recurrent AI mistake: premature "ship it" claims |
 | smart-garden | [#1](https://github.com/jamesearlpace/smart-garden/issues/1) | Meta | (Earlier) contradictory OTA claims |
-| smart-garden-server | TBD | Low | **Chip-temp alert false positives** — single-sample threshold at 85°C in `_check_chip_temp` (notifications.py:212). Real die temp 77–78°C, sensor occasionally spikes to 105–110°C for one read. Fired 4 false alerts overnight 2026-04-21→22. Fix: require 3 consecutive samples >85°C before paging. NOT YET DEPLOYED — user paused for documentation. |
+| smart-garden-server | (closed) | — | Chip-temp false positives — fixed by 3-consecutive-sample hysteresis in `_check_chip_temp` (deployed 2026-04-22). |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji bug, #12 reboot wiring all closed in 2026-04-21 session |
 
 ---

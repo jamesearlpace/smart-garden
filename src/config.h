@@ -79,6 +79,16 @@ const char* MQTT_PASS     = "";
 #define NVS_NAMESPACE      "smartgarden"  // Non-volatile storage namespace
 
 // ============================================================
+// API Auth — shared secret for state-changing endpoints
+// ============================================================
+// Required as ?token=... on /api/reboot. Anyone on the LAN could otherwise
+// reboot the chip with a single curl. Not high-value security (LAN is
+// trusted-ish), but stops accidental reboots from scripts/scans.
+// To rotate: change here, OTA flash, update any callers (server doesn't
+// call /api/reboot; this is for manual curl from your laptop).
+#define API_REBOOT_TOKEN   "garden-reboot-9847"
+
+// ============================================================
 // Power Management
 // ============================================================
 #define BOOT_CPU_MHZ          80    // CPU freq during boot (lower = less current draw)

@@ -415,11 +415,16 @@ void handleApiCloseAll() {
     server.send(200, "text/plain", "All valves closed");
 }
 
-// API: Remote reboot. POST /api/reboot              -> soft reboot
-//                    POST /api/reboot?clear=1       -> reset crash counter, then reboot
+// API: Remote reboot. POST /api/reboot?token=...              -> soft reboot
+//                    POST /api/reboot?token=...&clear=1       -> reset crash counter, then reboot
 // Lets us recover from safe-mode without USB access.
+// Token check prevents accidental reboots from LAN scanners / mistyped curls.
 void handleApiReboot() {
     lastServerContactMs = millis();  // server heartbeat
+    if (server.arg("token") != API_REBOOT_TOKEN) {
+        server.send(401, "text/plain", "unauthorized");
+        return;
+    }
     bool clearCrash = (server.arg("clear") == "1");
     if (clearCrash) {
         nvs.begin(NVS_NAMESPACE, false);

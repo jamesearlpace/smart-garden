@@ -95,7 +95,7 @@ const char* MQTT_PASS     = "";
 #define RUN_CPU_MHZ           240   // CPU freq after WiFi connects (full speed)
 #define SAFE_MODE_THRESHOLD   20    // Consecutive crashes before entering safe mode (bumped from 5: TWDT now catches real hangs; safe mode shouldn't trip on transient brownouts)
 #define SAFE_MODE_DELAY_SEC   15    // Extra stabilization delay in safe mode
-#define WIFI_TX_DBM           WIFI_POWER_8_5dBm  // Reduced TX power (default is 19.5dBm)
+#define WIFI_TX_DBM           WIFI_POWER_19_5dBm  // Default TX power. Was 8.5dBm (battery-era saving), but at -80 dBm RSSI from 5 ft we were getting WiFi reconnects + OTA failures. Wall power = no reason to throttle.
 
 // ============================================================
 // Reliability — task watchdog + scheduled reboot

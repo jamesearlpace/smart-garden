@@ -726,8 +726,15 @@ void setup() {
         Serial.printf("[OTA] %u%%\r", progress * 100 / total);
         esp_task_wdt_reset();  // OTA upload can take >30s; feed WDT each chunk
     });
+#ifdef ENABLE_OTA
     ArduinoOTA.begin();
     Serial.println("[INIT] OTA updates enabled (hostname: smart-garden)");
+#else
+    // OTA disabled at runtime: wall-charger voltage sag during high-TX OTA bursts
+    // brownout-resets the chip mid-flash, corrupting partition state. USB flash only.
+    // To re-enable for bench testing on USB power, build with -DENABLE_OTA.
+    Serial.println("[INIT] OTA disabled (USB flash only — see config.h)");
+#endif
 
     // Initial sensor read
     readSensors();
@@ -746,7 +753,9 @@ void setup() {
 
 void loop() {
     esp_task_wdt_reset();  // feed task watchdog every iteration
+#ifdef ENABLE_OTA
     ArduinoOTA.handle();
+#endif
     server.handleClient();
 
     // Valve safety net — independent firmware-side max runtime cap.

@@ -44,6 +44,83 @@ Future firmware updates need physical USB access (COM3). Trade-off accepted in e
 
 ---
 
+## Pending Bugs (as of 2026-04-21 23:55)
+
+| Repo | Issue | Severity | Summary |
+|------|-------|----------|---------|
+| smart-garden-server | [#11](https://github.com/jamesearlpace/smart-garden-server/issues/11) | High | Pushover alerts fail with `'latin-1' codec can't encode '\u2705'` — emoji in templates breaks the alerting layer entirely |
+| smart-garden-server | [#12](https://github.com/jamesearlpace/smart-garden-server/issues/12) | Medium | `/api/reboot` token endpoint exists in firmware but server has no client wrapper — can't trigger remote reboots from dashboard |
+| smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | OTA disabled — re-enable plan documented (needs decoupling cap + bench test before trying again) |
+| smart-garden | [#3](https://github.com/jamesearlpace/smart-garden/issues/3) | Low | Journey doc 77KB — restructure into archive |
+| smart-garden | [#1](https://github.com/jamesearlpace/smart-garden/issues/1) | — | Meta: AI assistant gave contradictory OTA claims (this session's accountability log addresses) |
+
+**Closed this session:**
+- smart-garden-server [#10](https://github.com/jamesearlpace/smart-garden-server/issues/10) — TIME_WAIT pool exhaustion (cache + debounce + TX bump combo fixed it)
+
+---
+
+## Verification Playbook — How to confirm "still healthy" without falling back into old traps
+
+Run this on a fresh chat session or after any change. Each section maps to a known failure mode we've hit.
+
+### A. Quick health probe (30 seconds)
+```powershell
+ssh jamesearlpace@192.168.0.109 "curl -s --max-time 8 http://192.168.0.150/api/status" | python -c "import sys,json; d=json.load(sys.stdin); s=d['system']; h=d.get('health',{}); print(f'boot={s[\"bootCount\"]} uptime={s[\"uptimeSec\"]}s rssi={s[\"wifiRSSI\"]} reconnects={s[\"wifiReconnects\"]} crashCount={h.get(\"crashCount\")} safeMode={h.get(\"safeMode\")} temp={s.get(\"chipTempC\")}')"
+```
+
+**Expected (good):**
+- `rssi`: -29 to -50 dBm (was -78 with throttled TX — if you see -70+, signal regression)
+- `reconnects`: 0 since last boot, ideally
+- `safeMode`: False
+- `crashCount`: stable (NVS-persistent counter, doesn't reset)
+- `uptime`: > 600s (recent boot is fine, but flapping shows up as low uptime + rising boot count)
+- `chipTempC`: < 90 (panic only if > 90 sustained; 60–85 is normal)
+
+**Red flags:** RSSI worse than -65, reconnects climbing, safeMode True, chipTempC > 90, boot count incrementing without explanation
+
+### B. Dashboard cadence test (5 min)
+```powershell
+ssh jamesearlpace@192.168.0.109 'for i in $(seq 1 10); do printf "%s " "$(date +%H:%M:%S)"; curl -s http://localhost:5125/api/dashboard | python3 -c "import sys,json; d=json.load(sys.stdin); print(\"online_flag=\"+str(d.get(\"esp32_online\")))"; sleep 30; done'
+```
+**Expected:** `online_flag=True` 10/10. Anything less means TIME_WAIT or signal regression — check pcap (see C).
+
+### C. Network-layer probe (only if B fails)
+```bash
+# On the home server:
+sudo tcpdump -i any -n -w /tmp/sg.pcap host 192.168.0.150 and tcp port 80
+# Run for 60s while polling, then read with tshark or Wireshark
+```
+**Look for:** `client SYN → chip RST` (within ms) = TIME_WAIT exhaustion (issue #10 pattern). `client SYN → silence` = chip dead/disconnected. `SYN → ACK → handler hang` = firmware bug.
+
+### D. OTA regression check (before re-enabling OTA)
+**Pre-conditions before even thinking about re-enabling:**
+- A decoupling capacitor across 3.3V (per #2 plan)
+- Multimeter measurement of Wanderer load output rail under OTA load
+- Chip on USB power, NOT wall, for first test
+
+**Then validate per [issue #2](https://github.com/jamesearlpace/smart-garden/issues/2) §Verification.** Do NOT trust "OTA worked once" — must succeed 4 times back-to-back from the deployed location.
+
+### E. Anti-regression — the things that bit us, and the test that catches each
+
+| Old failure | What probably caused it | The test that catches it |
+|-------------|------------------------|--------------------------|
+| Frequent crashes / safe mode (Apr 20) | Battery undervoltage | A: `chipTempC` normal but `crashCount` rising → check power source, not firmware |
+| RSSI -78 / WiFi reconnect cycles | TX throttled to 8.5dBm | A: `rssi` worse than -65 at known-good location → check `WIFI_TX_DBM` in config.h |
+| Dashboard flapping Online/Offline | lwIP TIME_WAIT pool exhaustion | B: dashboard cadence test < 10/10 → C: pcap for SYN→RST |
+| OTA bricks chip on wall power | Wanderer voltage sag during high-TX burst | D: OTA validation gate — never re-enable without bench test |
+| "Last flash, then box it up" said 4x and wrong 3x | Conflating USB-tethered green metrics with deployed-environment readiness | The procedure: flash → unplug everything → wait → THEN claim victory |
+
+### F. The "before saying it's fixed" gate
+Before any future "you can box it up" / "this is the last flash" / "OTA will work this time" claim:
+1. USB physically disconnected
+2. Chip on its actual deployed power source
+3. At its actual deployed location
+4. Health probe (A) clean
+5. Dashboard cadence (B) 10/10 over 5 min
+6. **Then** make the claim. Not before.
+
+---
+
 ---
 
 ## Quick Reference — How to Control the Sprinklers

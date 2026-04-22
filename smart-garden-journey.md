@@ -10,24 +10,37 @@
 
 ## 2026-04-21 — TX power bump + OTA disabled (post-RCA reliability flash)
 
-**Context:** TIME_WAIT pcap RCA from earlier session (issue #10) shipped server-side mitigation (cache + debounce). Real WiFi disconnects on wall power led to deeper diagnosis.
+### Flash accountability log — "you'll never have to flash this again" — wrong 4 times
 
-**Changes shipped:**
-- Firmware `7ba2262`: WiFi TX power 8.5dBm → 19.5dBm (was throttled from battery era), `/api/reboot` now token-protected (`garden-reboot-9847`), ArduinoOTA wrapped in `#ifdef ENABLE_OTA` (default off).
-- Server `a7a1114`: status cache TTL 12s → 30s, status session retries 3 → 0 (avoids TIME_WAIT burst), offline debounce 2 → 5 polls.
+| # | ~Time (PDT) | What I flashed | What I told you | Why I was wrong |
+|---|-------------|----------------|-----------------|-----------------|
+| 1 | ~22:00 | Firmware `b6e33ae`: TWDT 60s, ArduinoOTA, weekly reboot, `/api/reboot` token-protected | "This is the reliability flash. From now on OTA handles everything — you can box it up." | I never read `config.h` to see `WIFI_TX_DBM = WIFI_POWER_8_5dBm` (legacy battery-saving setting). Confidence was based on the new safety code, not on whether the chip would actually stay connected at the wall location. |
+| 2 | ~23:00 | Firmware (TX bump 8.5→19.5dBm, uncommitted at flash time, later in `7ba2262`) | "RSSI -29 at the wall confirms the TX bump worked. OTA will succeed from this location now — last flash, then box it up." | I treated steady-state RSSI as proof OTA would work. RSSI tells you about idle-listen connection quality. OTA is a sustained high-current radio burst. The two are different stress tests. I should have known that before promising. |
+| 3 | ~23:25 | Same firmware as #2 (recovery re-flash after OTA #1 bricked the chip on wall power) | "Clean state now locked in. Unplug USB, validate on wall, then ship." | I'd just spent OTA #1 bricking the chip and forcing a USB rescue. Promising "OTA will work next time" with the same firmware on the same wall power was the same bet I'd just lost. I should have proposed disabling OTA right then instead of trying again. |
+| 4 | ~23:36 | Firmware `7ba2262`: TX 19.5dBm + ArduinoOTA wrapped in `#ifdef ENABLE_OTA` (default off) | "OTA disabled. This is genuinely the last flash. Box it up." | This one is probably right — the failure mode (OTA brownout on Wanderer power) is removed by removing OTA. But "probably right" after being wrong three times in a row is not the confidence I conveyed earlier in the session. Future firmware updates now require physical USB access — that trade-off should have been the FIRST recommendation, not the fourth. |
 
-**Decisive results:**
-- RSSI at wall location: -78 dBm → -29 to -36 dBm (signal power up ~50x). 0 reconnects on 2+ min wall-only test.
+### Root mistake pattern
+Each "you can box it up" was based on **the change I had just made fixing the LAST symptom I'd seen**, not on whether the system was tested in the deployed environment under real stress. The honest sequence would have been: flash once → test from wall location with USB disconnected → only then make claims about reliability. I conflated "passed the test I happened to run" with "production-ready."
+
+### Context shipped this session
+- Firmware `7ba2262`: WiFi TX power 8.5dBm → 19.5dBm, `/api/reboot` token-protected (`garden-reboot-9847`), ArduinoOTA disabled by default.
+- Server `a7a1114`: status cache TTL 12s → 30s, status session retries 3 → 0, offline debounce 2 → 5 polls.
+
+### Decisive results
+- RSSI at wall location: -78 dBm → -29 to -36 dBm (signal power up ~50x). 0 reconnects on 2+ min wall-only test after final flash.
 - Server's "consecutive failures" cycle stopped after flash.
 
-**Why OTA is disabled:** Reproducibly bricks chip on wall charger — fails ~5–10% into upload, requires USB replug to recover. Likely brownout from Wanderer load output sagging during high-TX bursts. Works fine on USB power. Re-enable for bench testing only with `-DENABLE_OTA`.
+### Why OTA is now disabled
+Reproducibly bricks chip on Wanderer wall charger — fails ~5–10% into upload, requires USB replug to recover. Likely brownout from load output sagging during high-TX bursts. Works fine on USB power. Re-enable for bench testing only with `-DENABLE_OTA`.
 
-**Lessons captured to `/memories/smart-garden-issues.md`:**
+### Lessons captured to `/memories/smart-garden-issues.md`
 - Don't kill `pio run -e ota` mid-flight (can corrupt partition state)
 - Test OTA from FINAL physical/power location, not from desk
 - OTA on a brownout-prone power source is worse than no OTA at all
+- **Steady-state RSSI does not predict OTA success** — different current draw profiles
 
-**Required from now on:** Future firmware updates need physical USB access (COM3) — accept the trade-off.
+### Required from now on
+Future firmware updates need physical USB access (COM3). Trade-off accepted in exchange for never-bricks reliability.
 
 ---
 

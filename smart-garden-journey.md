@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** Stable. Chip on wall charger at deployed location. RSSI -36, 0 reconnects, OTA disabled (USB-only flashes). Server has gated `/api/reboot` (default-disabled). Ntfy alerts working (no emoji bug).
+**Status:** Stable. Chip on wall charger indoors next to router. RSSI -42, 0 reconnects in 8h, 0 reboots in 8h, 0 crashes in 8h. OTA disabled (USB-only flashes). Server has gated `/api/reboot` (default-disabled). Ntfy alerts + active monitoring + daily digest all working. Overnight soak test 437/437 successful polls. **Known false-positive: chip-temp alert (see Open issues).**
 **Last Updated:** 2026-04-22
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -127,6 +127,8 @@ ssh jamesearlpace@192.168.0.109 "curl -s --max-time 8 http://192.168.0.150/api/s
 Good: rssi -29 to -50, reconnects 0, safeMode False, uptime > 600s, chipTempC < 90.
 Red flags: rssi worse than -65, reconnects climbing, safeMode True.
 
+**chipTempC interpretation** — the ESP32 internal temp sensor is famously uncalibrated and noisy. **Real die temp at this deployment is ~77–78°C steady** (verified 2026-04-22 with 10 rapid samples + 30 soak samples: min 77.2, max 86.7, avg 77.8). Single-sample readings of 100°C+ followed seconds later by 78°C are sensor glitches, not thermal events — physics says the die can't cool 30°C in 4 minutes. Trust a *sustained* high reading, not a spike. See open issue for alert hysteresis fix.
+
 **B. Dashboard cadence test (5 min)**
 ```powershell
 ssh jamesearlpace@192.168.0.109 'for i in $(seq 1 10); do printf "%s " "$(date +%H:%M:%S)"; curl -s http://localhost:5125/api/dashboard | python3 -c "import sys,json; d=json.load(sys.stdin); print(\"online_flag=\"+str(d.get(\"esp32_online\")))"; sleep 30; done'
@@ -155,6 +157,7 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 | smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | Re-enable OTA — needs decoupling cap + bench test |
 | smart-garden | [#4](https://github.com/jamesearlpace/smart-garden/issues/4) | Meta | Recurrent AI mistake: premature "ship it" claims |
 | smart-garden | [#1](https://github.com/jamesearlpace/smart-garden/issues/1) | Meta | (Earlier) contradictory OTA claims |
+| smart-garden-server | TBD | Low | **Chip-temp alert false positives** — single-sample threshold at 85°C in `_check_chip_temp` (notifications.py:212). Real die temp 77–78°C, sensor occasionally spikes to 105–110°C for one read. Fired 4 false alerts overnight 2026-04-21→22. Fix: require 3 consecutive samples >85°C before paging. NOT YET DEPLOYED — user paused for documentation. |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji bug, #12 reboot wiring all closed in 2026-04-21 session |
 
 ---
@@ -224,3 +227,35 @@ Parts ordered: 10kΩ + 1kΩ resistors. **TO ORDER:** IRF4905 P-FET, 2N3904 NPN. 
 | 2026-04-17 | Stale dashboard fix — collector DB fallback | `a614302` (server) |
 
 For older entries see [smart-garden-journey-archive.md](smart-garden-journey-archive.md).
+
+---
+
+## 2026-04-22 — Overnight soak test + chip-temp diagnosis
+
+**Context:** First night of unattended operation since the active-monitoring shipped (`e53417a`). Chip indoors in living room next to router (room temp ~22°C, RSSI -42 dBm). Soak test on Acer polled `/api/status` every 60s for 8 hours.
+
+**Results:**
+- **Connectivity: 437/437 polls successful (100%)**
+- bootCount = 1298 unchanged for 8h (zero unexpected reboots)
+- wifiReconnects = 4 unchanged (zero overnight reconnects)
+- crashCount = 19 unchanged (zero crashes)
+- safeMode False, freeHeap stable ~232 KB (no leak)
+- RSSI -42 dBm steady (occasional -67 spikes, likely beacon timing — no impact)
+- 8 AM daily digest fired on schedule
+- Startup ping fired 10s after restart as designed
+
+**Anomaly investigated:** 4 ntfy alerts overnight for `chipTempC > 85°C` — peaks 105.5°C, 110.6°C (×3), 87.2°C. Conclusion: **sensor noise, not real heat.** Evidence:
+- Rapid-poll test (10 reads, 3s apart): all 77.2–77.8°C, dead flat
+- 30 surrounding soak samples: min 77.2, max 86.7, avg 77.8 — only 1 outlier
+- Physics: ESP32 die can't drop 30°C in 4 minutes (78→105→78 sample sequence)
+- ESP32 internal temp sensor is documented as factory-uncalibrated and noisy on individual reads
+
+**Real die temp:** ~78°C steady. That's 56°C above 22°C ambient — normal for ESP32 with WiFi @ 19.5 dBm sustained. Well under 125°C absolute max. Chip is **not** being overworked.
+
+**Decision:** Document first, change nothing. Proposed fix (NOT YET DEPLOYED): require 3 consecutive `chipTempC > 85` samples before paging. Tracked in Open Issues table above.
+
+**State at end of session:**
+- Firmware: `7ba2262` (last flashed 2026-04-21)
+- Server: `e53417a` deployed on Acer, service active
+- Soak script: `/tmp/sg-soak.sh` on Acer (one-shot, finished). Status helper: `c:\Temp\sg-status.sh` and `/tmp/sg-status.sh`
+- Temp probe helper: `c:\Temp\sg-temp-probe.sh` (rapid 10-sample test)

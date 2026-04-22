@@ -1,8 +1,35 @@
 # Smart Garden — Journey Doc
 
-**Status:** Active — server hardened ✅, ESP32 in safe mode (crashCount 9/10), reliability code committed but **awaiting one USB flash** to enable OTA + TWDT + scheduled reboot  
-**Last Updated:** 2026-04-20  
+**Status:** Active — firmware + server reliability hardening DONE. Chip running on wall charger at deployed location, RSSI -36, 0 reconnects, OTA disabled (USB-only).
+**Last Updated:** 2026-04-21
 **Goal:** Solar-powered smart irrigation system controlled remotely via GitHub Copilot through a home server
+
+> **Doc-size warning:** This journey doc is ~77KB (target is ~10KB). Needs restructure — move chronological history to `smart-garden-journey-archive.md` and keep only Current State + Active Reference Data here. Flagged 2026-04-21.
+
+---
+
+## 2026-04-21 — TX power bump + OTA disabled (post-RCA reliability flash)
+
+**Context:** TIME_WAIT pcap RCA from earlier session (issue #10) shipped server-side mitigation (cache + debounce). Real WiFi disconnects on wall power led to deeper diagnosis.
+
+**Changes shipped:**
+- Firmware `7ba2262`: WiFi TX power 8.5dBm → 19.5dBm (was throttled from battery era), `/api/reboot` now token-protected (`garden-reboot-9847`), ArduinoOTA wrapped in `#ifdef ENABLE_OTA` (default off).
+- Server `a7a1114`: status cache TTL 12s → 30s, status session retries 3 → 0 (avoids TIME_WAIT burst), offline debounce 2 → 5 polls.
+
+**Decisive results:**
+- RSSI at wall location: -78 dBm → -29 to -36 dBm (signal power up ~50x). 0 reconnects on 2+ min wall-only test.
+- Server's "consecutive failures" cycle stopped after flash.
+
+**Why OTA is disabled:** Reproducibly bricks chip on wall charger — fails ~5–10% into upload, requires USB replug to recover. Likely brownout from Wanderer load output sagging during high-TX bursts. Works fine on USB power. Re-enable for bench testing only with `-DENABLE_OTA`.
+
+**Lessons captured to `/memories/smart-garden-issues.md`:**
+- Don't kill `pio run -e ota` mid-flight (can corrupt partition state)
+- Test OTA from FINAL physical/power location, not from desk
+- OTA on a brownout-prone power source is worse than no OTA at all
+
+**Required from now on:** Future firmware updates need physical USB access (COM3) — accept the trade-off.
+
+---
 
 ---
 
@@ -1234,3 +1261,86 @@ ssh jamesearlpace@192.168.0.109 "curl -s -X POST 'http://192.168.0.150/api/reboo
 ### Doc maintenance flag
 
 ⚠️ This journey doc is now ~70KB / 1200 lines — **well past the 10KB threshold per copilot-instructions.md**. Should be restructured: archive everything before the Production Reliability Sweep (`## 2026-04-20`) into `smart-garden-journey-archive.md`, keep current state + reference data in this file. Deferred to a separate session to avoid scope creep.
+
+---
+
+## 2026-04-20 (continued 3) — Power optimization plan + sensor expansion
+
+### Context
+
+Battery-dying root cause was confirmed today: undervoltage (sagging battery + outdoor location through walls) was causing the "weak WiFi" symptoms, not signal strength itself. Moving the device inside on wall power: RSSI -76 → -51 dBm, 29h stable uptime, no reconnects. See `/memories/smart-garden-issues.md` for the diagnostic lesson.
+
+Device staying inside on wall power for ~1 week of testing, then mounting outside permanently. Plan below is for the outdoor permanent install.
+
+### Sensor expansion
+
+Going from 4 resistive soil + 1 DHT22 → **5 capacitive soil + 2 DHT22** when mounted outside.
+
+- **Capacitive over resistive:** resistive sensors corrode (electrolysis on wet probes); capacitive last years.
+- **Two DHT22:** one inside enclosure, one outside, to detect overheating vs. ambient.
+
+### The wiring change (MOSFET power gate — Change 1 only, NOT deep sleep)
+
+**Decision: do MOSFET gate, skip deep sleep.** Telemetry continuity matters more than the extra battery savings — losing real-time sensor data while validating outdoor system would hurt debugging. Fallback schedule in firmware (commit `8b25dc2`) covers the "what if telemetry drops" case for watering anyway.
+
+| Component | Today (4 sensors, indoor wall power) | After MOSFET gate + GPIO-switched 5 sensors (outdoor solar) |
+|---|---|---|
+| 5× L298N motor drivers | 25-50 mA | **0 mA** (MOSFET gate cuts 12V) |
+| 5 capacitive soil (always-on) | — | 25 mA |
+| 5 capacitive soil (GPIO-gated) | — | **~0.05 mA avg** ✨ |
+| 2× DHT22 | 1.5 mA | 3 mA |
+| ESP32 (always-on, full WiFi) | 40-80 mA | 40-80 mA (UNCHANGED — no deep sleep) |
+| Wanderer + LM2596 | 11-18 mA | 11-18 mA |
+| **Total idle** | 76-148 mA | **~54-101 mA** |
+
+Net result: **2× more sensors, lower idle draw than today, full continuous telemetry preserved.**
+
+### Two MOSFET gates (different jobs)
+
+1. **IRF4905 (P-channel, TO-220)** — gates 12V to all L298N boards. ESP32 GPIO 2 → 2N3904 NPN level shifter → IRF4905 gate. Default OFF via 10kΩ pull-up. Pulse ON ~100ms during valve actuation only. (Already designed in this doc, 2026-04-14 entry.)
+
+2. **2N7000 (N-channel, TO-92)** — switches GND for the 5 capacitive soil sensors via one ESP32 GPIO. Power on → wait 100ms → ADC read → power off. Average draw: ~0.05 mA per sensor instead of 5 mA continuous. Cost: ~$3 for a 10-pack on Amazon.
+
+### Parts to order (consolidated)
+
+| Part | Qty | Purpose | Status |
+|---|---|---|---|
+| IRF4905 P-MOSFET (10-pack) | 1 pack | L298N power gate | Ordered? — verify |
+| 2N3904 NPN | 1 needed | Level shifter for IRF4905 | Ordered? — verify |
+| 10kΩ resistor | 1 | IRF4905 pull-up | ✅ on hand |
+| 1kΩ resistor | 1 | 2N3904 base | ✅ on hand |
+| **2N7000 N-MOSFET (10-pack)** | 1 pack | **NEW — soil sensor GND switch** | TO ORDER |
+| **Capacitive soil sensor (3.3V compatible, e.g. DFRobot v2.0)** | 5 | **NEW — replace resistive** | TO ORDER |
+| **DHT22** | 1 | **NEW — second sensor (inside vs outside enclosure)** | TO ORDER |
+
+### Firmware changes needed (when MOSFET gate is wired)
+
+In `openValve()` and `closeValve()`:
+1. `digitalWrite(GATE_PIN, HIGH)` — power on L298N
+2. `delay(20)` — let 12V rail stabilize
+3. existing pulse logic
+4. `delay(20)` — let pulse complete
+5. `digitalWrite(GATE_PIN, LOW)` — power off L298N
+
+In `readSoilSensors()`:
+1. `digitalWrite(SOIL_PWR_PIN, HIGH)` — power on sensors
+2. `delay(100)` — capacitive sensor stabilization
+3. `analogRead()` × 5
+4. `digitalWrite(SOIL_PWR_PIN, LOW)` — power off
+
+**Pin assignments TBD** — current `config.h` doesn't reserve these. Add `GATE_PIN` and `SOIL_PWR_PIN` to config when firmware is ready.
+
+### Skipped on purpose
+
+- **Deep sleep** — would cripple telemetry. Server-driven dashboard updates would gap by minutes. Not worth the savings now that wall-power test phase confirms the chip is healthy.
+- **Adding a second LiFePO4 cell** — solar budget should be sufficient with idle draw cut by 30-40%. Reassess only if outdoor field testing shows winter deficit.
+
+### Sequence
+
+1. Order parts (above table — about $15-25 total)
+2. USB-flash current `8b25dc2` firmware first (action item #248) — get OTA + reliability hardening live BEFORE adding hardware complexity
+3. Bench-build the two MOSFET gates on the breadboard
+4. Update firmware: add `GATE_PIN` + `SOIL_PWR_PIN`, gate logic in valve + sensor functions
+5. Test indoors with both gates wired
+6. Mount outdoors (final wall install)
+7. Monitor `chipTempC` + battery voltage daily for first week outside

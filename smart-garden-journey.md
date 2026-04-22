@@ -81,6 +81,22 @@ Ziply Fiber → Netgear GS305E → TP-Link ER605 (.1) → Eero 6
 ### Alerting
 **ntfy.sh/smart-garden-james** (NOT Pushover — ignore any old refs to Pushover). Title header is stripped to ASCII before send (emoji bug fix #11).
 
+**Active monitoring (since 2026-04-22, commit `e53417a`):**
+The server's `AlertMonitor` runs every poll cycle (5 min) on the Acer. It fires ntfy alerts on:
+- ESP32 unreachable >15 min (`_check_offline`)
+- Crash loop: >5 reboots in 1h (`_check_crash_loop`)
+- Safe mode active (`_check_safe_mode`)
+- Free heap <15% (`_check_memory`)
+- Sensor flatline/railed >48h (`_check_sensor_faults`)
+- **NVS counter delta** — `bootCount`, `wifiReconnects`, `crashCount` increase between polls (steady state on wall power = 0 delta, any change is news) (`_check_counter_deltas`)
+- Chip temp >85°C (`_check_chip_temp`)
+
+**Daily 8 AM digest** — single ntfy with 24h summary: uptime, RSSI, reconnect count, crash count, boot count delta, free heap, dashboard online %.
+
+**Startup ping** — one ntfy 10s after server start = "pipeline alive" confirmation.
+
+Alert cooldown: 30 min per alert key (won't spam the same alert).
+
 ---
 
 ## Critical reliability rules
@@ -200,6 +216,7 @@ Parts ordered: 10kΩ + 1kΩ resistors. **TO ORDER:** IRF4905 P-FET, 2N3904 NPN. 
 
 | Date | Change | Commit |
 |------|--------|--------|
+| 2026-04-22 | Active monitoring: counter-delta + chip-temp alerts + 8 AM digest + startup ping | `e53417a` (server) |
 | 2026-04-22 | Gated `/api/reboot` 503-by-default, irrigation.py reboot wrapper, config.yaml token | `a89dc35` (server) |
 | 2026-04-21 | ASCII-strip ntfy title (#11) | `51eb250` (server) |
 | 2026-04-21 | TX 19.5dBm + ArduinoOTA `#ifdef`-gated | `7ba2262` (firmware) |

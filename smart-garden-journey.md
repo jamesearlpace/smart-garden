@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** V4 firmware on chip (commit `fdd6300`). Web server wedge MITIGATED — firmware socket reset handles short gaps, server-side retry catches the rest. Server RUNNING with zero lost cycles in 10-min production test. Battery voltage pipeline wired end-to-end. Overnight soak in progress.
-**Last Updated:** 2026-04-26 23:45
+**Status:** ✅ **CHIP STABLE — ON DESK NEAR ROUTER, USB UNPLUGGED, COLLECTING TX-VARIANCE DATA** as of 2026-04-27 ~16:00. Boot 1393, RSSI -38 to -40, txPowerRaw=57 (14.3 dBm), 0 reconnects, 0 crashes since last boot. New `txPowerRaw` telemetry shipped end-to-end (firmware + server + dashboard column). Investigating [#6](https://github.com/jamesearlpace/smart-garden/issues/6) (TX power varies between boots, capped below configured target) — need ~1 week of data. **Next physical action:** redeploy chip to junction box when ready (telemetry will continue automatically).
+**Last Updated:** 2026-04-27 16:00
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -154,11 +154,15 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 | Repo | # | Sev | Summary |
 |------|---|-----|---------|
+| smart-garden | [#6](https://github.com/jamesearlpace/smart-garden/issues/6) | **Med-High** | **NEW 2026-04-27:** WiFi TX power reads 7.8 dBm (raw 31, not a valid `wifi_power_t` enum) despite `WIFI_POWER_19_5dBm` config. Source-level analysis ruled out "called before STA ready." Likely candidates: hardware/regulatory cap, or `setTxPower()` returning false silently. 2-line diagnostic experiment proposed; no fix yet. Possibly upstream cause of WiFi watchdog crash loops + wedge persistence. |
+| smart-garden | [#5](https://github.com/jamesearlpace/smart-garden/issues/5) | **HIGH** | **Web server wedge can persist 70+ min** — 2026-04-27 instance went 70+ min before self-recovering (NO power-cycle occurred; chip recovered on its own between 09:55 and 15:00). V4 socket reset is insufficient. Original framing "no natural recovery" was wrong; recovery just takes much longer than prior instances. See "Session Log: 2026-04-27" below. |
+| smart-garden | — | Med | ~~WiFi watchdog too aggressive~~ ✅ **SHIPPED** commit `53a91d9` (2026-04-27 07:34): threshold 60s→5min, close-all valves before `ESP.restart()`. On chip now. |
+| smart-garden | — | ~~Med~~ | ~~TWDT not subscribed for loopTask~~ ✅ **STALE ENTRY** — TWDT IS subscribed: `esp_task_wdt_add(NULL)` at `main.cpp:791`, `esp_task_wdt_reset()` in loop. Confirmed in serial 2026-04-27 ("Task watchdog enabled (60s timeout)"). Removing. |
 | smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | Re-enable OTA — needs decoupling cap + bench test |
 | smart-garden | [#4](https://github.com/jamesearlpace/smart-garden/issues/4) | Meta | Recurrent AI mistake: premature "ship it" claims |
 | smart-garden | [#1](https://github.com/jamesearlpace/smart-garden/issues/1) | Meta | (Earlier) contradictory OTA claims |
-| smart-garden | — | Low | Web server wedge at 120s+ idle gaps — firmware fix incomplete, **MITIGATED by server-side retry** (2026-04-26). Not blocking outdoor deployment. |
-| smart-garden | — | Low | Wire voltage divider (4×10kΩ + 1×10kΩ) from battery to GPIO 36 — currently floating, reads noise |
+| smart-garden | — | Low | Web server wedge at 120s+ idle gaps — firmware fix incomplete (V4 socket reset every 10s is partial; deeper lwIP state can still wedge). Server-side retry mitigated normal cases. |
+| smart-garden | — | ~~Low~~ | ~~Wire voltage divider from battery to GPIO 36~~ ✅ **SHIPPED** commit `a01b3f5` (2026-04-27 07:50): 6:1 ratio (added 10kΩ). Wired — needs multimeter+serial verification before closing. |
 | smart-garden-server | (closed) | — | Chip-temp false positives — fixed by 3-consecutive-sample hysteresis in `_check_chip_temp` (deployed 2026-04-22). |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji bug, #12 reboot wiring all closed in 2026-04-21 session |
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — **FIXED** `624b6d9` (2026-04-26). All 5 routes now use cached/pooled calls. |
@@ -262,7 +266,36 @@ Discovered `battery_v` was NULL in all DB rows despite firmware reporting `batte
 
 ---
 
-## Codebase map
+## Session Log: 2026-04-27 (Cascade — overnight crash loop, morning reboots, then 70+ min hung wedge)
+
+### Two-phase failure
+
+**Phase 1 (overnight): WiFi watchdog crash loop.** Documented separately in smart-garden-issues.md "OPEN 2026-04-27: WiFi watchdog crash loop." 38 reboots between 01:23\u201302:18 from the WiFi watchdog in `loop()` calling `ESP.restart()` after 60s of disconnection. Self-recovered at boot #1383 when WiFi came back. Wrote up RCA, identified fix candidates (raise threshold to 5min, close-all valves before reboot), did NOT yet ship.
+
+**Phase 2 (morning): hung wedge.** This session.
+
+### Phase 2 timeline
+
+| Time | Event |
+|------|-------|
+| 02:18 | Overnight crash loop ends. Stable on boot 1383, crashCount=38, safeMode=true. |
+| 02:18\u201307:13 | ~5h stable. Telemetry every 5 min, all 200s. |
+| 07:13 | Crash-loop alert fires (lookback caught the overnight cluster). |
+| 07:33 | New unexpected reboot \u2192 boot 1384, crashCount=39. |
+| 07:38 | Boot 1385. Per system_health row, crashCount jumped from 39 to 1 \u2014 **NVS crashCnt was cleared** (probably by user or some auto-clear path; need to verify). |
+| 07:48 | Boot 1386. WiFi reconnects 0\u21929. |
+| 08:03 | Three more reboots in burst (1386\u21921389). Crash counter increments 1\u21922. |
+| 08:13\u201308:39 | Brief stable window \u2014 only 3 successful HTTP polls in 26 min, all with abnormally high latency (2.8s, 6.0s, 11.4s vs normal <1s). |
+| **08:39:48** | **Last successful HTTP poll.** Boot 1389, uptime 2474s. |
+| 08:39 \u2192 09:51 | Total silence. 666 connectivity_log failures, 0 successes. ICMP still works perfectly. |
+| 09:51 | User pings dashboard, sees \"Offline.\" Investigation begins. |
+
+### Investigation steps (this session)
+
+1. **Server health probe** \u2014 confirmed `smart-garden-server` systemd service running, port 5125 healthy, API responding. Symptom is chip-side, not server-side.
+2. **ICMP probe** \u2014 ping 10/10, 5\u201310ms RTT. Chip is on the LAN, WiFi/lwIP responsive at kernel level.
+3. **Raw TCP probe** (15 attempts every 2s for 30s) \u2014 15/15 REFUSED. No natural recovery in observation window.
+4. **Pcap capture** during probes:\n   ```\n   client SYN \u2192 chip RST(win=0)  within 9 ms\n   ```\n   Gold-standard signature of the documented stale-listen-socket wedge bug.\n5. **DB timeline pull** \u2014 `system_health`, `connectivity_log` tables on Acer. Built the timeline above.\n6. **journalctl pull** \u2014 confirmed alert sequence (Crash-Loop, Unexpected reboot, Crash counter incremented, ESP32 Offline at 20/50/84-min thresholds).\n\n### Diagnosis (HONEST framing after pushback)\n\n**Initial draft (wrong-confidence):** Asserted \"loopTask is dead, RTOS is alive \u2014 NEW failure mode\" based on \"10s socket reset is NOT firing\" reasoning.\n\n**Corrected:** Most likely the **same** stale-listen-socket wedge documented in 2026-04-26 entry. Existing memory already documents:\n- V4 firmware's 10s reset is **incomplete** (`after_120s: 000 \u274c`, \"deeper lwIP state that accumulates over longer idle periods\")\n- ICMP works fine while port 80 RSTs (per 2026-04-26: \"serial monitor shows loop() healthy during wedge\")\n\n**The 30-sec REFUSED probe is consistent with EITHER:**\n- (a) loopTask dead, reset not firing\n- (b) loopTask alive, reset firing every 10s, wedge unbreakable by close()/begin()\n\nMemory already documents (b) is real. Cannot distinguish without serial console.\n\n**What's genuinely new today (and only this):**\n1. **Duration:** 70+ min vs. previously observed max ~3 min\n2. **Preceded by reboot cascade** (six reboots between 07:33\u201308:03)\n\nNot a new failure mode \u2014 likely the same wedge bug pushed deeper by morning's instability.\n\n### Mistake logged (M16 in mistake-ledger)\n\nAsserted dramatic hypothesis (\"loopTask hung, RTOS alive \u2014 NEW failure mode\") as a finding when evidence equally supported the documented bug in a worse instance. Wrote multi-section RCA labeled OPEN before noticing existing memory already documented the same SYN\u2192RST signature with an incomplete V4 fix. User had to push back (\"are you sure this is a new thing?\") before I checked. **Guard:** before labeling a bug NEW, grep `*-issues.md` for the gold-standard signature; enumerate which observations differ vs. match; default to \"this is the known bug\" when pcap matches.\n\n### Recovery action\n\n**User must physically power-cycle the junction box.** Software-side recovery is impossible \u2014 we have no out-of-band path to the chip. After power-cycle, run `/tmp/probe.sh` on Acer to verify the 10s reset is firing again (look for periodic OK responses).\n\n### High-priority follow-ups (added to Open Issues table)\n\n1. **Web server wedge can persist indefinitely** \u2014 V4 socket reset is insufficient for deep wedges. Need stronger recovery mechanism.\n2. **No out-of-band ESP32 recovery path** \u2014 highest-ROI fix is a $15 WiFi smart plug on the chip's power line so the server can hard-reset when wedge passes 5 min. Independent of any firmware fix.\n3. **WiFi watchdog too aggressive** \u2014 60s threshold + ESP.restart() triggers crash loops. Raise to 5 min and close-all valves before reboot.\n4. **TWDT not subscribed for loopTask** \u2014 chip can hang silently with no auto-reboot. Add `esp_task_wdt_add(NULL)` in setup, `esp_task_wdt_reset()` early in loop. If loop ever blocks >5s, chip reboots automatically.\n\n### Diagnostic commands that worked (save these)\n\n```powershell\n# Confirm SYN\u2192RST signature (gold standard)\nssh acer \"sudo timeout 8 tcpdump -i any -n -tttt 'host 192.168.0.150 and port 80' -c 20 2>/dev/null > /tmp/pcap.out & sleep 1; for i in 1 2 3 4; do timeout 2 bash -c 'exec 3<>/dev/tcp/192.168.0.150/80' 2>/dev/null; sleep 1; done; sleep 6; cat /tmp/pcap.out\"\n\n# Probe TCP availability every 2s for 30s (expect periodic OK if 10s reset working)\nssh acer 'bash /tmp/probe.sh | tee /tmp/probe.out'  # script saved on Acer\n\n# Pull boot/crash timeline from DB\nssh acer \"sqlite3 ~/smart-garden-server/smart-garden.db \\\"SELECT ts, uptime_sec, boot_count, crash_count, wifi_rssi FROM system_health ORDER BY id DESC LIMIT 15\\\"\"\n\n# Connectivity status counts last 12h\nssh acer \"sqlite3 ~/smart-garden-server/smart-garden.db \\\"SELECT success, COUNT(*) FROM connectivity_log WHERE ts >= datetime('now','localtime','-12 hours') GROUP BY success\\\"\"\n\n# Server's view of the outage\nssh acer \"sudo journalctl -u smart-garden-server --since '07:00' --no-pager | grep -E 'recovered|crashCount|Alert sent'\"\n```\n\n### Failure error mix (last 12h)\n- 168\u00d7 `Connection refused` (chip RSTs SYN \u2014 current dominant mode)\n- 28\u00d7 `ReadTimeoutError`\n- 9\u00d7 `Read timed out`\n- 6\u00d7 `ConnectionResetError(104)` (mid-stream RST)\n- 12\u00d7 `ConnectTimeoutError` (during reboots when chip momentarily off LAN)\n\nMix is consistent with chip cycling through reboots in the morning, then settling into the deep wedge that's held since 08:39.\n\n---\n\n## Codebase map
 
 ### Firmware (`C:\MyCode\smart-garden\`)
 | File | Purpose |
@@ -302,14 +335,17 @@ already wet → not dry enough → recent rain → rain forecast → freeze → 
 
 ---
 
-## Current device state (as of 2026-04-26 23:45)
+## Current device state (as of 2026-04-27 16:00)
 
-- Firmware: **V4** on chip (commit `fdd6300`) — V2 cached-battery + WiFi.setSleep(false) + periodic server.close()/begin() every 10s + OTA disabled + TWDT 60s + valve hard-max 95min + fallback schedule
-- Server: **RUNNING** (systemd `smart-garden-server`, PID 367672, port 5125)
-- Power: Victron charger → 12V SLA → LM2596 buck (**USB unplugged**)
-- **Wedge status: MITIGATED** — firmware socket reset handles short gaps, server retry catches longer ones. 10-min production test: 2/2 cycles, 0 skips.
-- Battery monitoring: pipeline complete (firmware → server → DB → chart), voltage divider not yet wired to GPIO 36
-- Overnight soak running — telemetry recording every 5 min
+- Firmware: **v2.2 banner** (string never bumped) — commits on chip: `fdd6300` (V4 socket reset) + `53a91d9` (WiFi watchdog 60s→5min) + `a01b3f5` (6:1 divider) + `e01f984` (#6 diag prints) + `a32ea8c` (txPowerRaw in /api/status). Confirmed via serial 2026-04-27 ~15:05.
+- Server: **RUNNING** (systemd `smart-garden-server`, port 5125, healthy, restarted 15:46 after dashboard deploy)
+- Power: Victron charger → 12V SLA → LM2596 buck → ESP32 VIN, **USB UNPLUGGED** (re-confirmed running on solar/battery only, RSSI unchanged at -38 to -40 indoor)
+- Location: **on desk near router** (NOT in junction box yet)
+- **Chip status: UP** — boot 1393, RSSI -38 to -40, txPowerRaw=57 (14.3 dBm), reconnects 0, crashCount 1, safeMode False, temp 68°C
+- TWDT: **subscribed and active** (60s timeout) — confirmed in serial output
+- **TX power telemetry pipeline complete:** firmware exposes `txPowerRaw`, server stores in `system_health.tx_power_raw`, dashboard renders dBm in Health History table. Need ~1 week of data before drawing conclusions.
+- Battery monitoring: 6:1 divider wired (commit `a01b3f5`), needs verification with multimeter
+- **Self-recovery observation:** chip recovered from the 70+ min wedge with no power-cycle (between 09:55 and 15:00). Original "requires power-cycle" framing was wrong.
 4. **No MQTT** — REST is enough
 5. **Static IP in firmware** — 192.168.0.150 hardcoded, no DHCP dependency
 6. **OTA disabled by default** — Wanderer brownouts make it unsafe; USB-only flashing accepted
@@ -332,6 +368,11 @@ Parts ordered: 10kΩ + 1kΩ resistors. **TO ORDER:** ~~IRF4905 P-FET, 2N3904 NPN
 
 | Date | Change | Commit |
 |------|--------|--------|
+| 2026-04-27 | **Dashboard:** added TX Power column to System Health History table (color-coded: green ≥17 dBm, gray 11–17, amber <11). Deployed + verified `<th>TX Power</th>` in live HTML. | (server, dashboard-only) |
+| 2026-04-27 | **Telemetry pipeline #6:** `txPowerRaw` in `/api/status` (firmware) + `tx_power_raw` INTEGER column in `system_health` (server) + passthrough in `irrigation.py`. Verified end-to-end: boot 1393 first row populated. | `a32ea8c` (firmware), `dc4d5be` (server) |
+| 2026-04-27 | **Diagnostic firmware for #6:** capture `setTxPower` return value + actual `getTxPower` reading both pre-connect and post-connect. Surfaced "boot lottery" hypothesis (TX caps vary 7.8–14.8 dBm between boots). | `e01f984` (firmware) |
+| 2026-04-27 | **Battery divider 5:1 → 6:1:** added 10kΩ resistor to fix ADC saturation (was reading 16.5V). Wired but needs multimeter verification. | `a01b3f5` (firmware) |
+| 2026-04-27 | **WiFi watchdog tuning:** threshold 60s→5min, close-all valves before `ESP.restart()`. Direct fix for the overnight 38-reboot cascade. | `53a91d9` (firmware) |
 | 2026-04-26 | **MOSFET power gate installed** (IRF4905 + 2N3904 on GPIO 2) — cuts 12V to all 5 L298Ns when idle. **Battery voltage divider on GPIO 36** (4×10k + 1×10k, ratio 1:5). Firmware: `enableDriverPower()`/`disableDriverPower()` around every valve pulse, `batteryV` in `/api/status`. Verified: 12.86V battery reading, all 7 valves cycle cleanly through gate on boot. | `fdd6300` (firmware) |
 | 2026-04-26 | **Server-side resilience:** retry with 10s sleep in `get_esp32_status()`, all 5 dashboard bypass routes fixed, `battery_v` passthrough to DB. 10-min production test: 2/2 cycles, 0 skips, 3 transient wedges recovered. | `624b6d9`, `d7d01f3` (server) |
 | 2026-04-22 | Active monitoring: counter-delta + chip-temp alerts + 8 AM digest + startup ping | `e53417a` (server) |

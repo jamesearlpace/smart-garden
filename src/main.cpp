@@ -176,6 +176,31 @@ struct Valve {
     const char* name;
 };
 
+// Power gate: NPN/P-FET cascade. GPIO HIGH -> NPN on -> P-FET on -> 12V to L298Ns.
+// Default LOW = L298Ns unpowered (saves 25-50 mA idle).
+static inline void enableDriverPower() {
+    digitalWrite(POWER_GATE_PIN, HIGH);
+    delay(GATE_SETTLE_MS);
+}
+static inline void disableDriverPower() {
+    digitalWrite(POWER_GATE_PIN, LOW);
+}
+
+// Read battery voltage via 1:5 divider on GPIO 36 (4x10k + 1x10k -> ratio 5).
+// Averages 8 samples to denoise. Returns volts.
+// IMPORTANT: only call from the main loop task. ADC1 is shared with soil pins;
+// concurrent reads from the web server task can wedge the WebServer handler.
+float readBatteryVoltage() {
+    uint32_t acc = 0;
+    for (int i = 0; i < 8; i++) acc += analogRead(BATTERY_ADC_PIN);
+    float raw = acc / 8.0f;
+    return raw * (3.3f / 4095.0f) * BATTERY_DIVIDER_RATIO;
+}
+
+// Cached battery voltage updated in readSensors(). HTTP handler reads this
+// instead of calling readBatteryVoltage() directly (avoids ADC contention).
+volatile float cachedBatteryV = 0.0f;
+
 Valve valves[NUM_VALVES] = {
     {VALVE1_IN1, VALVE1_IN2, false, "Zone 1 - Garden (drip)"},
     {VALVE2_IN1, VALVE2_IN2, false, "Zone 2 - Grapes (drip)"},
@@ -189,11 +214,13 @@ Valve valves[NUM_VALVES] = {
 void openValve(int idx) {
     if (idx < 0 || idx >= NUM_VALVES) return;
     Valve& v = valves[idx];
+    enableDriverPower();
     digitalWrite(v.in1, HIGH);
     digitalWrite(v.in2, LOW);
     delay(VALVE_PULSE_MS);
     digitalWrite(v.in1, LOW);
     digitalWrite(v.in2, LOW);
+    disableDriverPower();
     v.isOpen = true;
     valveOpenCount[idx]++;
     valveLastOpenedMs[idx] = millis();
@@ -211,11 +238,13 @@ void closeValve(int idx) {
     if (v.isOpen && valveLastOpenedMs[idx] > 0) {
         durationSec = (millis() - valveLastOpenedMs[idx]) / 1000;
     }
+    enableDriverPower();
     digitalWrite(v.in1, LOW);
     digitalWrite(v.in2, HIGH);
     delay(VALVE_PULSE_MS);
     digitalWrite(v.in1, LOW);
     digitalWrite(v.in2, LOW);
+    disableDriverPower();
     v.isOpen = false;
     valveCloseCount[idx]++;
     Serial.printf("Valve %d CLOSED (%s) [total: %u, was open %lus]\n", idx + 1, v.name, valveCloseCount[idx], durationSec);
@@ -268,6 +297,9 @@ void readSensors() {
         soilValues[i] = analogRead(soilPins[i]);
         soilPercent[i] = soilToPercent(soilValues[i]);
     }
+
+    // Sample battery voltage in the same task to avoid ADC1 contention with HTTP handler
+    cachedBatteryV = readBatteryVoltage();
 
     Serial.printf("Temp: %.1f°F  Humidity: %.1f%%\n", temperature, humidity);
     for (int i = 0; i < NUM_SOIL_SENSORS; i++) {
@@ -340,6 +372,7 @@ void handleApiStatus() {
     sys["heapPct"] = (int)(100.0 * ESP.getFreeHeap() / ESP.getHeapSize());
     sys["chipTempC"] = temperatureRead();
     sys["chipTempF"] = temperatureRead() * 9.0 / 5.0 + 32.0;
+    sys["batteryV"] = cachedBatteryV;
     sys["wifiRSSI"] = WiFi.RSSI();
     sys["wifiReconnects"] = wifiReconnects;
     sys["ip"] = WiFi.localIP().toString();
@@ -572,6 +605,8 @@ void setupWiFi() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
+        WiFi.setSleep(false);  // Disable modem sleep — keeps radio always on so incoming
+                               // TCP SYNs aren't missed. Costs ~20mA but prevents wedge.
         Serial.println();
         Serial.println("========================================");
         Serial.printf("  WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
@@ -645,6 +680,15 @@ void setup() {
     Serial.println("[INIT] Loading valve counters...");
     loadValveCounters();
     logEvent("boot", safeMode ? "Safe mode boot" : "System started");
+
+    // Initialize power gate (default LOW = L298Ns unpowered)
+    pinMode(POWER_GATE_PIN, OUTPUT);
+    digitalWrite(POWER_GATE_PIN, LOW);
+
+    // Initialize battery voltage ADC
+    pinMode(BATTERY_ADC_PIN, INPUT);
+    analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);  // 0-3.3V range
+    cachedBatteryV = readBatteryVoltage();  // Prime cache for first /api/status
 
     // Initialize valve pins
     Serial.println("[INIT] Configuring GPIO pins...");
@@ -757,6 +801,19 @@ void loop() {
     ArduinoOTA.handle();
 #endif
     server.handleClient();
+
+    // Workaround for ESP32 WebServer/lwIP socket stale-PCB bug:
+    // After serving a connection, the underlying TCP PCB lingers in TIME_WAIT
+    // and can block new accepts on the single-client listen socket. Periodically
+    // cycling close()/begin() forces a fresh listen socket if the server is idle.
+    {
+        static unsigned long lastServerReset = 0;
+        if (millis() - lastServerReset >= 10000) {  // every 10s
+            lastServerReset = millis();
+            server.close();
+            server.begin();
+        }
+    }
 
     // Valve safety net — independent firmware-side max runtime cap.
     // Protects against server crash, lost close-ACK, dead Mint server, network drop.

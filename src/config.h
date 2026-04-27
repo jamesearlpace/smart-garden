@@ -63,6 +63,17 @@ const char* MQTT_PASS     = "";
 #define VALVE7_IN1     5
 #define VALVE7_IN2     15
 
+// Power gate (P-FET via NPN level shifter): HIGH = L298Ns powered, LOW = idle.
+// GPIO 2 is also onboard LED -> visual indicator. Strapping pin defaults LOW
+// at boot, which is the safe state (gate OFF).
+#define POWER_GATE_PIN     2
+#define GATE_SETTLE_MS     5     // Settle time after enabling 12V before pulsing valve
+
+// Battery voltage divider: 4x10k (R1=40k) + 1x10k (R2) on GPIO 36 (VP).
+// Ratio 5 -> 12.7V battery reads 2.54V at the ADC pin.
+#define BATTERY_ADC_PIN          36
+#define BATTERY_DIVIDER_RATIO    5.0f
+
 // ============================================================
 // System Settings
 // ============================================================

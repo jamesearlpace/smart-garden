@@ -375,6 +375,7 @@ void handleApiStatus() {
     sys["batteryV"] = cachedBatteryV;
     sys["wifiRSSI"] = WiFi.RSSI();
     sys["wifiReconnects"] = wifiReconnects;
+    sys["txPowerRaw"] = (int)WiFi.getTxPower();  // [#6] runtime regulatory cap, varies between boots
     sys["ip"] = WiFi.localIP().toString();
     sys["mac"] = WiFi.macAddress();
     sys["eventCount"] = eventCount;

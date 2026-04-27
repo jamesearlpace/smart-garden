@@ -592,8 +592,10 @@ void setupWiFi() {
     #endif
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    WiFi.setTxPower(WIFI_TX_DBM);  // Reduce TX power: ~120mA vs ~380mA at default 19.5dBm
-    Serial.printf(" (TX power: %.1f dBm)\n", WiFi.getTxPower() / 4.0);
+    bool txOk = WiFi.setTxPower(WIFI_TX_DBM);  // Reduce TX power: ~120mA vs ~380mA at default 19.5dBm
+    int txRaw = (int)WiFi.getTxPower();
+    Serial.printf(" (TX power: %.1f dBm, raw=%d, setter=%s) [#6 diag]\n",
+                  txRaw / 4.0, txRaw, txOk ? "true" : "false");
     WiFi.setAutoReconnect(true);
     WiFi.persistent(true);
 
@@ -607,6 +609,11 @@ void setupWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
         WiFi.setSleep(false);  // Disable modem sleep — keeps radio always on so incoming
                                // TCP SYNs aren't missed. Costs ~20mA but prevents wedge.
+        // [#6 diag] Re-attempt setTxPower now that STA is fully associated, and verify
+        bool txOk2 = WiFi.setTxPower(WIFI_TX_DBM);
+        int txRaw2 = (int)WiFi.getTxPower();
+        Serial.printf("  [#6 diag] post-connect TX: %.1f dBm, raw=%d, setter=%s\n",
+                      txRaw2 / 4.0, txRaw2, txOk2 ? "true" : "false");
         Serial.println();
         Serial.println("========================================");
         Serial.printf("  WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());

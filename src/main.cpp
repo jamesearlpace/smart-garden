@@ -918,21 +918,27 @@ void loop() {
         otaMarkedValid = true;
     }
 
-    // WiFi watchdog — reconnect if dropped, reboot if stuck
+    // WiFi watchdog — reconnect if dropped, reboot as last resort.
+    // Old threshold was 6 (60s) — caused a 38-reboot crash loop on 2026-04-27
+    // when the router was briefly unavailable. Now 30 (5 min) to give the
+    // router time to recover from updates/reboots/channel switches.
     static unsigned long lastWifiCheck = 0;
     static int wifiFailCount = 0;
     if (millis() - lastWifiCheck >= 10000) {  // check every 10s
         lastWifiCheck = millis();
         if (WiFi.status() != WL_CONNECTED) {
             wifiFailCount++;
-            Serial.printf("WiFi disconnected (attempt %d)... reconnecting\n", wifiFailCount);
+            Serial.printf("WiFi disconnected (attempt %d/30)... reconnecting\n", wifiFailCount);
             WiFi.disconnect();
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             wifiReconnects++;
             logEvent("wifi", "reconnect");
-            if (wifiFailCount >= 6) {  // 60s of failures — hard reboot
-                Serial.println("WiFi failed 6 times — rebooting");
+            if (wifiFailCount >= 30) {  // 5 min of failures — close valves, then reboot
+                Serial.println("[SAFETY] WiFi failed 30 times — closing all valves before reboot");
                 logEvent("error", "wifi_reboot");
+                for (int i = 0; i < NUM_VALVES; i++) {
+                    if (valves[i].isOpen) closeValve(i);
+                }
                 delay(500);
                 ESP.restart();
             }

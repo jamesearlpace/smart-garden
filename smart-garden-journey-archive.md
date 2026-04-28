@@ -1434,3 +1434,46 @@ In `readSoilSensors()`:
 5. Test indoors with both gates wired
 6. Mount outdoors (final wall install)
 7. Monitor `chipTempC` + battery voltage daily for first week outside
+
+
+---
+
+## 2026-04-26 — MOSFET power gate + battery voltage monitoring shipped
+
+**Context:** Junction box pulled out for two long-planned mods: (1) battery voltage divider on GPIO 36 so we can see battery health in /api/status, (2) IRF4905 P-FET + 2N3904 NPN power gate on GPIO 2 to cut idle 12V draw to the five L298N H-bridges.
+
+### What was done
+
+1. **Battery voltage divider** \u2014 5\u00d710k\u03a9 resistors twisted into a chain. R1 = 4\u00d710k\u03a9 (40k\u03a9 total) in series, R2 = 1\u00d710k\u03a9 to GND. Junction wire to GPIO 36 (VP/SVP). Ratio 5:1 (12.7V battery reads ~2.54V at the ADC pin, well under 3.3V max).
+2. **MOSFET power gate** \u2014 IRF4905 (TO-220, G-D-S) inline on the 12V feed from battery+ to all 5 L298N VCC inputs. Gate held HIGH (off) by 10k\u03a9 pull-up to 12V. 2N3904 NPN (TO-92, E-B-C) Collector pulls Gate to GND when ESP32 GPIO 2 drives the Base via 1k\u03a9 resistor. Emitter to GND.
+3. **Firmware** \u2014 added POWER_GATE_PIN, GATE_SETTLE_MS, BATTERY_ADC_PIN, BATTERY_DIVIDER_RATIO to config.h. Added nableDriverPower()/disableDriverPower() helpers; wrapped every valve pulse in openValve() and closeValve(). Added eadBatteryVoltage() (8-sample average) and sys["batteryV"] to /api/status. Initialized GPIO 2 LOW and GPIO 36 with ADC_11db attenuation in setup().
+
+### Verification
+
+- USB flash via COM3 succeeded (held BOOT, tapped EN). Boot count 1310, clean boot, all 7 valves closed cleanly through the gate on startup pulse \u2014 confirms MOSFET switches under load.
+- /api/status reported atteryV: 12.86 first read, 12.21 after several valve cycles. Both within healthy range.
+
+### Known issue \u2014 intermittent web server wedge on battery-only
+
+**Symptom:** After unplugging USB, ESP32 stays alive on LM2596 (ping responds, ~150ms RTT) but :80/api/status returns Connection refused or hangs. Pressing EN/RESET temporarily recovers it; wedges again after USB removed.
+
+**Suspects (none verified):**
+- Brownout-class voltage sag specifically when USB power is removed. The LM2596 alone may not handle the spike when WiFi associates after a clean boot. Could explain why the web server task dies but ICMP keeps working.
+- New nalogRead(36) in status handler contending with WiFi. Unlikely \u2014 GPIO 36 is ADC1, only ADC2 conflicts with WiFi.
+- Gate circuit leakage pulling something. Bench test wasn't done; the circuit is unverified at the wiring level.
+
+**User left for dinner mid-debug. State at session end:** USB unplugged, ESP32 on battery, WiFi associated, port 80 not responding. Per the "before saying it's fixed" gate (rule M2 in mistake-ledger), this is **not shipped**.
+
+### Mistakes made this session
+
+- Initially recommended a breadboard bench-test of the gate circuit, then folded when the user pushed back. Skipping the bench test means we now can't isolate "gate wiring issue" from "post-flash web wedge" \u2014 the very ambiguity the bench test exists to prevent. **Lesson: when a verification step gets cut, write down what you can no longer distinguish and call it out.**
+- Got a clean /api/status while USB was still plugged in (12.86V), called the work effectively done. User then unplugged USB and the wedge appeared. Same M2 violation as 2026-04-21: declared health on USB power, didn't verify on real deployed power source first.
+
+### Next session
+
+1. Plug USB back in, capture serial log when web server wedges (pull cable while watching pio device monitor).
+2. If wedge correlates with USB removal: brownout pattern \u2014 add the 1000\u00b5F + 100nF decoupling cap (already on the issue list as #2) and re-test.
+3. If wedge happens regardless: bench-test the gate circuit in isolation. Check for leakage between Drain and Source with multimeter (gate OFF should mean infinite-ish resistance Drain-to-Source).
+4. Server-side: log atteryV to health_history table, add chart to dashboard, alert if <12.0V.
+5. Phase 2 deferred: ESP32 deep sleep between watering windows.
+

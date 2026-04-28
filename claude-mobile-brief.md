@@ -60,16 +60,17 @@ Ziply Fiber → Netgear GS305E → TP-Link ER605 (.1) → Eero 6
 
 ---
 
-## Current status (as of 2026-04-27)
+## Current status (as of 2026-04-27 evening)
 
-**On desk near router, USB unplugged, collecting TX-variance data.**
+**On desk near router, master firmware reflashed, wedge bug remains open.**
 
-- Boot 1393, uptime climbing on solar/battery alone
-- RSSI -38 to -40 dBm indoor, txPowerRaw=57 (14.3 dBm), 0 reconnects since boot
-- New `txPowerRaw` telemetry shipped end-to-end (firmware + server DB column + dashboard column)
-- **Open investigation: [smart-garden#6](https://github.com/jamesearlpace/smart-garden/issues/6)** — ESP32 TX power varies between boots (7.8 → 14.8 dBm, never reaches the configured 19.5 dBm target). Likely runtime regulatory cap. New "boot lottery" hypothesis: unlucky low-TX boots may be the cause of WiFi watchdog crash cascades. Need ~1 week of telemetry to test.
-- **This morning's chip cascade:** 38 overnight WiFi watchdog reboots + 70+ min web server wedge. Wedge self-recovered (not a power-cycle situation as originally claimed).
-- Code shipped this morning: WiFi watchdog 60s→5min threshold + close-all-valves before reboot (`53a91d9`); battery divider 5:1→6:1 to fix ADC saturation (`a01b3f5`).
+- **Wedge bug ([#5](https://github.com/jamesearlpace/smart-garden/issues/5)) confirmed reproducible at production cadence** — 5/7 fail in 30-min soak today. Server retry pattern absorbs most instances. Self-recovery confirmed n=2.
+- **ESPAsyncWebServer migration TESTED and RULED OUT** today (2026-04-27 19:00). Identical SYN→RST(win=0) signature. Bug is below app layer (lwIP / WiFi driver). Branch `feature/async-webserver` (commit `f943a95`) preserved.
+- **TX power telemetry pipeline shipped** (firmware + server + dashboard column). 4 boots sampled today: TX 7.8 / 14.3 / 14.8 / 14.0 dBm — all below 19.5 dBm target. See [#6](https://github.com/jamesearlpace/smart-garden/issues/6).
+- **WiFi watchdog tuning shipped** (60s→5min threshold + close-all-valves before reboot) — commit `53a91d9`.
+- **Battery divider 5:1→6:1 wired** (commit `a01b3f5`), needs verification.
+- **User buying 1000µF + 100nF decoupling caps** (issue [#2](https://github.com/jamesearlpace/smart-garden/issues/2)). Fixes brownout class but NOT the wedge.
+- **Next candidates for the wedge** (in priority order): ESP-IDF v5.x upgrade via arduino-esp32 v3.x, `WiFi.setCountry()` experiment, sdkconfig `lwip_max_listening` bump, OR smart-plug out-of-band recovery.
 
 OTA flashing is **disabled by default** (USB-only) because of brownouts.
 

@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **CHIP STABLE — ON DESK NEAR ROUTER, USB UNPLUGGED, COLLECTING TX-VARIANCE DATA** as of 2026-04-27 ~16:00. Boot 1393, RSSI -38 to -40, txPowerRaw=57 (14.3 dBm), 0 reconnects, 0 crashes since last boot. New `txPowerRaw` telemetry shipped end-to-end (firmware + server + dashboard column). Investigating [#6](https://github.com/jamesearlpace/smart-garden/issues/6) (TX power varies between boots, capped below configured target) — need ~1 week of data. **Next physical action:** redeploy chip to junction box when ready (telemetry will continue automatically).
-**Last Updated:** 2026-04-27 16:00
+**Status:** 🟡 **CHIP STABLE on master firmware (boot 1400+, on desk near router, USB unplugged for normal operation but currently plugged for diagnostics).** Wedge bug [#5](https://github.com/jamesearlpace/smart-garden/issues/5) confirmed reproducible at production cadence (5/7 fail in 30-min soak today). **ESPAsyncWebServer migration TESTED AND RULED OUT** — same SYN→RST(win=0) signature on both libraries. Bug is below app layer (lwIP / WiFi driver). Branch `feature/async-webserver` (commit `f943a95`) preserved. New TX-power telemetry collecting boot-variance data for [#6](https://github.com/jamesearlpace/smart-garden/issues/6).
+**Last Updated:** 2026-04-27 19:30
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -154,18 +154,17 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 | Repo | # | Sev | Summary |
 |------|---|-----|---------|
-| smart-garden | [#6](https://github.com/jamesearlpace/smart-garden/issues/6) | **Med-High** | **NEW 2026-04-27:** WiFi TX power reads 7.8 dBm (raw 31, not a valid `wifi_power_t` enum) despite `WIFI_POWER_19_5dBm` config. Source-level analysis ruled out "called before STA ready." Likely candidates: hardware/regulatory cap, or `setTxPower()` returning false silently. 2-line diagnostic experiment proposed; no fix yet. Possibly upstream cause of WiFi watchdog crash loops + wedge persistence. |
-| smart-garden | [#5](https://github.com/jamesearlpace/smart-garden/issues/5) | **HIGH** | **Web server wedge can persist 70+ min** — 2026-04-27 instance went 70+ min before self-recovering (NO power-cycle occurred; chip recovered on its own between 09:55 and 15:00). V4 socket reset is insufficient. Original framing "no natural recovery" was wrong; recovery just takes much longer than prior instances. See "Session Log: 2026-04-27" below. |
-| smart-garden | — | Med | ~~WiFi watchdog too aggressive~~ ✅ **SHIPPED** commit `53a91d9` (2026-04-27 07:34): threshold 60s→5min, close-all valves before `ESP.restart()`. On chip now. |
-| smart-garden | — | ~~Med~~ | ~~TWDT not subscribed for loopTask~~ ✅ **STALE ENTRY** — TWDT IS subscribed: `esp_task_wdt_add(NULL)` at `main.cpp:791`, `esp_task_wdt_reset()` in loop. Confirmed in serial 2026-04-27 ("Task watchdog enabled (60s timeout)"). Removing. |
-| smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | Re-enable OTA — needs decoupling cap + bench test |
+| smart-garden | [#5](https://github.com/jamesearlpace/smart-garden/issues/5) | **HIGH** | **Web server wedge** — chip RSTs SYNs on port 80 in 3-5 min cycles. ESPAsyncWebServer ruled out 2026-04-27 (5/7 fail at production cadence, identical pcap signature). **Bug is in lwIP / WiFi driver layer, NOT the application web server.** Self-recovers eventually (n=2 confirmed today). Server retry pattern catches most instances. Next candidates: ESP-IDF v5.x upgrade, `WiFi.setCountry()`, sdkconfig `lwip_max_listening` bump, or smart-plug out-of-band recovery. |
+| smart-garden | [#6](https://github.com/jamesearlpace/smart-garden/issues/6) | **Med-High** | WiFi TX power varies between boots (7.8 / 14.3 / 14.8 / 14.0 dBm across 4 boots) despite `WIFI_POWER_19_5dBm` config. `setTxPower()` returns true; ESP-IDF runtime regulatory cap silently lowers actual TX. Telemetry pipeline shipped (`tx_power_raw` column + dashboard column). Hypothesis "low-TX boots cause WiFi watchdog cascades" weakened by today's wedges occurring at 14.3 dBm too. Need ~1 week of data. |
+| smart-garden | [#2](https://github.com/jamesearlpace/smart-garden/issues/2) | Low | **Decoupling cap on 3.3V rail** — user buying 1000µF + 100nF caps. Fixes brownout class (M3): OTA bricks, ESP.restart() bricks, multi-valve simultaneous brownout. **Does NOT fix wedge** — confirmed today (wedges happen on USB power too, no brownout reset reason). Unlocks re-enabling OTA. |
+| smart-garden | — | ~~Med~~ | ~~WiFi watchdog too aggressive~~ ✅ **SHIPPED** commit `53a91d9` (2026-04-27 07:34): threshold 60s→5min, close-all valves before `ESP.restart()`. |
+| smart-garden | — | ~~Med~~ | ~~TWDT not subscribed~~ ✅ **STALE** — TWDT IS subscribed (`esp_task_wdt_add(NULL)` at `main.cpp:791`). Confirmed in serial. |
 | smart-garden | [#4](https://github.com/jamesearlpace/smart-garden/issues/4) | Meta | Recurrent AI mistake: premature "ship it" claims |
 | smart-garden | [#1](https://github.com/jamesearlpace/smart-garden/issues/1) | Meta | (Earlier) contradictory OTA claims |
-| smart-garden | — | Low | Web server wedge at 120s+ idle gaps — firmware fix incomplete (V4 socket reset every 10s is partial; deeper lwIP state can still wedge). Server-side retry mitigated normal cases. |
-| smart-garden | — | ~~Low~~ | ~~Wire voltage divider from battery to GPIO 36~~ ✅ **SHIPPED** commit `a01b3f5` (2026-04-27 07:50): 6:1 ratio (added 10kΩ). Wired — needs multimeter+serial verification before closing. |
-| smart-garden-server | (closed) | — | Chip-temp false positives — fixed by 3-consecutive-sample hysteresis in `_check_chip_temp` (deployed 2026-04-22). |
-| smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji bug, #12 reboot wiring all closed in 2026-04-21 session |
-| smart-garden-server | ✅ closed | — | dashboard.py bypass routes — **FIXED** `624b6d9` (2026-04-26). All 5 routes now use cached/pooled calls. |
+| smart-garden | — | ~~Low~~ | ~~Wire voltage divider from battery to GPIO 36~~ ✅ **SHIPPED** commit `a01b3f5` (2026-04-27 07:50): 6:1 ratio. Wired — needs multimeter+serial verification before closing. |
+| smart-garden-server | (closed) | — | Chip-temp false positives — fixed 2026-04-22. |
+| smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji, #12 reboot wiring — closed 2026-04-21. |
+| smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
 
 ---
 
@@ -335,17 +334,16 @@ already wet → not dry enough → recent rain → rain forecast → freeze → 
 
 ---
 
-## Current device state (as of 2026-04-27 16:00)
+## Current device state (as of 2026-04-27 19:30)
 
-- Firmware: **v2.2 banner** (string never bumped) — commits on chip: `fdd6300` (V4 socket reset) + `53a91d9` (WiFi watchdog 60s→5min) + `a01b3f5` (6:1 divider) + `e01f984` (#6 diag prints) + `a32ea8c` (txPowerRaw in /api/status). Confirmed via serial 2026-04-27 ~15:05.
-- Server: **RUNNING** (systemd `smart-garden-server`, port 5125, healthy, restarted 15:46 after dashboard deploy)
-- Power: Victron charger → 12V SLA → LM2596 buck → ESP32 VIN, **USB UNPLUGGED** (re-confirmed running on solar/battery only, RSSI unchanged at -38 to -40 indoor)
+- Firmware: **MASTER** (reflashed 19:00 after AsyncWebServer test). Commits on chip: `fdd6300` + `53a91d9` + `a01b3f5` + `e01f984` (#6 diag) + `a32ea8c` (txPowerRaw API).
+- Server: **RUNNING** (systemd `smart-garden-server`, port 5125, healthy)
+- Power: Victron charger → 12V SLA → LM2596 buck → ESP32 VIN. **USB plugged in for diagnostics**.
 - Location: **on desk near router** (NOT in junction box yet)
-- **Chip status: UP** — boot 1393, RSSI -38 to -40, txPowerRaw=57 (14.3 dBm), reconnects 0, crashCount 1, safeMode False, temp 68°C
-- TWDT: **subscribed and active** (60s timeout) — confirmed in serial output
-- **TX power telemetry pipeline complete:** firmware exposes `txPowerRaw`, server stores in `system_health.tx_power_raw`, dashboard renders dBm in Health History table. Need ~1 week of data before drawing conclusions.
-- Battery monitoring: 6:1 divider wired (commit `a01b3f5`), needs verification with multimeter
-- **Self-recovery observation:** chip recovered from the 70+ min wedge with no power-cycle (between 09:55 and 15:00). Original "requires power-cycle" framing was wrong.
+- **Chip status: UP** — boot 1400, healthy when responsive, but **wedges every 3-5 min** (documented today)
+- TWDT: **subscribed and active** (60s timeout)
+- TX power telemetry: **collecting**. 4 boots sampled today: 31 / 59 / 57 / 56 (all below 78 target).
+- Branch state: `master` checked out. `feature/async-webserver` preserved (commit `f943a95`, NOT pushed) for possible future re-attempt with different config.
 4. **No MQTT** — REST is enough
 5. **Static IP in firmware** — 192.168.0.150 hardcoded, no DHCP dependency
 6. **OTA disabled by default** — Wanderer brownouts make it unsafe; USB-only flashing accepted
@@ -368,11 +366,12 @@ Parts ordered: 10kΩ + 1kΩ resistors. **TO ORDER:** ~~IRF4905 P-FET, 2N3904 NPN
 
 | Date | Change | Commit |
 |------|--------|--------|
-| 2026-04-27 | **Dashboard:** added TX Power column to System Health History table (color-coded: green ≥17 dBm, gray 11–17, amber <11). Deployed + verified `<th>TX Power</th>` in live HTML. | (server, dashboard-only) |
-| 2026-04-27 | **Telemetry pipeline #6:** `txPowerRaw` in `/api/status` (firmware) + `tx_power_raw` INTEGER column in `system_health` (server) + passthrough in `irrigation.py`. Verified end-to-end: boot 1393 first row populated. | `a32ea8c` (firmware), `dc4d5be` (server) |
-| 2026-04-27 | **Diagnostic firmware for #6:** capture `setTxPower` return value + actual `getTxPower` reading both pre-connect and post-connect. Surfaced "boot lottery" hypothesis (TX caps vary 7.8–14.8 dBm between boots). | `e01f984` (firmware) |
-| 2026-04-27 | **Battery divider 5:1 → 6:1:** added 10kΩ resistor to fix ADC saturation (was reading 16.5V). Wired but needs multimeter verification. | `a01b3f5` (firmware) |
-| 2026-04-27 | **WiFi watchdog tuning:** threshold 60s→5min, close-all valves before `ESP.restart()`. Direct fix for the overnight 38-reboot cascade. | `53a91d9` (firmware) |
+| 2026-04-27 19:00 | **ESPAsyncWebServer port TESTED — RULED OUT.** Branch `feature/async-webserver` (commit `f943a95`) ported all 8 handlers + deferred-action loop processor (build clean). Soak test at production 5-min cadence: 5/7 fail with identical SYN→RST(win=0) signature. Server connectivity log showed alternating 3-5 min wedge/clean cycles regardless of library. Bug is below app layer. Master reflashed. Branch retained. Full RCA in [#5 comment](https://github.com/jamesearlpace/smart-garden/issues/5#issuecomment-4331800723). M18 logged in mistake-ledger (first-attempt test design used wrong cadence). | (branch only, NOT merged) |
+| 2026-04-27 16:00 | **Dashboard:** TX Power column added to System Health History table (color-coded). | (server) |
+| 2026-04-27 15:50 | **Telemetry pipeline #6:** `txPowerRaw` in `/api/status` (firmware) + `tx_power_raw` INTEGER column in `system_health` (server) + passthrough in `irrigation.py`. Verified end-to-end. | `a32ea8c` (firmware), `dc4d5be` (server) |
+| 2026-04-27 15:30 | **Diagnostic firmware for #6:** capture `setTxPower` return value + actual `getTxPower` reading both pre-connect and post-connect. Surfaced "boot lottery" hypothesis (TX caps vary 7.8–14.8 dBm between boots). | `e01f984` (firmware) |
+| 2026-04-27 07:50 | **Battery divider 5:1 → 6:1:** added 10kΩ resistor to fix ADC saturation. | `a01b3f5` (firmware) |
+| 2026-04-27 07:34 | **WiFi watchdog tuning:** threshold 60s→5min, close-all valves before `ESP.restart()`. Direct fix for overnight 38-reboot cascade. | `53a91d9` (firmware) |
 | 2026-04-26 | **MOSFET power gate installed** (IRF4905 + 2N3904 on GPIO 2) — cuts 12V to all 5 L298Ns when idle. **Battery voltage divider on GPIO 36** (4×10k + 1×10k, ratio 1:5). Firmware: `enableDriverPower()`/`disableDriverPower()` around every valve pulse, `batteryV` in `/api/status`. Verified: 12.86V battery reading, all 7 valves cycle cleanly through gate on boot. | `fdd6300` (firmware) |
 | 2026-04-26 | **Server-side resilience:** retry with 10s sleep in `get_esp32_status()`, all 5 dashboard bypass routes fixed, `battery_v` passthrough to DB. 10-min production test: 2/2 cycles, 0 skips, 3 transient wedges recovered. | `624b6d9`, `d7d01f3` (server) |
 | 2026-04-22 | Active monitoring: counter-delta + chip-temp alerts + 8 AM digest + startup ping | `e53417a` (server) |

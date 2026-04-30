@@ -1,0 +1,746 @@
+"""Irrigation decision engine for Smart Garden Server.
+
+Determines whether to water, skip, or delay each zone based on:
+- Soil moisture sensor readings (reality)
+- ET₀ × Kc water demand (prediction)
+- Soil water balance / checkbook method (Phase 3)
+- Weather forecast (rain skip, wind skip, freeze protection)
+- Billing tier awareness (budget tightening)
+- Cycle-soak scheduling for sprinkler zones on clay soil
+"""
+
+import json
+import logging
+import os
+import time
+from datetime import datetime, timedelta, date
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+import database as db
+from weather import WeatherClient
+from billing import BillingCalculator
+
+log = logging.getLogger("smart-garden.irrigation")
+
+# 15s accommodates observed 7-8s ESP32 latencies on weak WiFi (RSSI -75 dBm).
+# Was 10s previously — too tight, caused spurious failures.
+ESP32_TIMEOUT = 15
+
+# After this many consecutive status failures, escalate WARNING → ERROR.
+# Single transient failures are noise; sustained failures are alerts.
+_FAILURE_ESCALATE_AT = 3
+
+# Cache /api/status responses to reduce TCP connection load on the ESP32.
+# Root cause: lwIP TIME_WAIT pool on the chip is only 5 sockets with 60s
+# timeout. Sustained polling fills it and the chip starts RST'ing new SYNs
+# (smart-garden-server#10, proven via pcap 2026-04-21).
+#
+# Math: TIME_WAIT holds a PCB for 60s. With 5 PCBs total, the chip can
+# safely accept up to 5 connections per 60s window = 1 every 12s.
+# A 30s TTL gives us 2 dashboard hits/min + 1 decision-cycle hit/min = 3/min
+# peak occupancy, well under the 5-PCB ceiling. Browsers poll the dashboard
+# every 30s anyway, so a 30s server cache adds zero perceived latency.
+_STATUS_CACHE_TTL_SEC = 30
+
+# Badge-state debounce: how many consecutive successes/failures before the
+# cached "online" flag flips. Avoids dashboard flapping when a single poll
+# happens to land in a TIME_WAIT window OR a WiFi reconnect cycle.
+# Asymmetric: instant flip back to ONLINE is fine (good news loud);
+# offline requires sustained failure (~5 polls = 2.5 min @ 30s cadence)
+# because the chip's RSSI at the wall mount (-80 dBm) produces brief WiFi
+# reconnect windows. Sprinklers still work during these windows because
+# the decision cycle uses force_fresh=True and the chip recovers within ~1
+# WiFi reconnect cycle (15-30s typical).
+_DEBOUNCE_OFFLINE_AFTER = 5  # require 5 fails in a row (~2.5 min) before badge goes red
+_DEBOUNCE_ONLINE_AFTER = 1   # 1 good poll is enough to flip back green
+
+
+def _make_esp32_session(retries: int = 3) -> requests.Session:
+    """requests.Session with connection pooling + tunable retry.
+
+    Reuses TCP connections (ESP32 WebServer is happier with keep-alive).
+    Status-only callers should use retries=0 because each retry burst opens
+    additional sockets on the chip, which accelerates lwIP TIME_WAIT pool
+    exhaustion (the very thing we're trying to avoid). Valve commands keep
+    the default 3-retry policy because they're idempotent-with-state-check
+    and we'd rather try harder than miss an open/close.
+    """
+    s = requests.Session()
+    retry = Retry(
+        total=retries,
+        backoff_factor=0.5,                   # 0.5s, 1s, 2s between retries
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=2, pool_maxsize=4)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
+
+
+class IrrigationEngine:
+
+    def __init__(self, config: dict, weather: WeatherClient,
+                 billing: BillingCalculator):
+        self.config = config
+        self.zones = {z["id"]: z for z in config["zones"]}
+        self.esp32_url = config["esp32"]["url"]
+        self.valve_timeout = config["esp32"]["valve_timeout_sec"]
+        # Shared secret for /api/reboot — must match firmware src/config.h
+        # API_REBOOT_TOKEN. Override via SMART_GARDEN_REBOOT_TOKEN env var.
+        self.reboot_token = os.environ.get(
+            "SMART_GARDEN_REBOOT_TOKEN",
+            config["esp32"].get("reboot_token", ""),
+        )
+        self.skip_rules = config["skip_rules"]
+        self.window = config["watering_window"]
+        self.weather = weather
+        self.billing = billing
+
+        # Active watering state: zone_id → {event_id, start_time}
+        self._active = {}
+
+        # Weather adjustment config (Zimmerman method)
+        wa = config.get("weather_adjustment", {})
+        self._wa_base_temp = wa.get("baseline_temp_f", 60.0)
+        self._wa_base_hum = wa.get("baseline_humidity_pct", 50.0)
+        self._wa_temp_factor = wa.get("temp_factor", 4.0)
+        self._wa_rain_factor = wa.get("rain_factor", -200.0)
+        self._wa_min_scale = wa.get("min_scale_pct", 0)
+        self._wa_max_scale = wa.get("max_scale_pct", 200)
+
+        # Soil water balance config (checkbook method)
+        soil_cfg = config.get("soil", {})
+        self._awc = soil_cfg.get("awc_in_per_in", 0.15)
+        self._default_root_depth = soil_cfg.get("default_root_depth_in", 6)
+        self._default_mad_pct = soil_cfg.get("default_mad_pct", 50)
+
+        # Two HTTP sessions:
+        #   _esp32_status: retries=0 — fail-fast on /api/status to avoid
+        #     bursts that exhaust the chip's lwIP TIME_WAIT pool (#10).
+        #     Resilience comes from the cache + debounce, not retry storms.
+        #   _esp32_cmd:    retries=3 — valve open/close are too important
+        #     to drop on a single transient error.
+        self._esp32_status = _make_esp32_session(retries=0)
+        self._esp32 = _make_esp32_session(retries=3)
+        self._consecutive_failures = 0
+
+        # Status cache + badge debounce state (see _STATUS_CACHE_TTL_SEC).
+        self._status_cache = None       # last successful response payload
+        self._status_cache_ts = 0.0     # epoch when cache was filled
+        self._badge_online = False      # debounced "is the chip reachable"
+        self._consecutive_successes = 0
+
+    # ── ESP32 communication ──
+
+    def get_esp32_status(self, force_fresh: bool = False) -> dict | None:
+        """Return latest ESP32 /api/status payload, with short-TTL caching.
+
+        The cache exists to limit how often we open new TCP connections to
+        the chip. See _STATUS_CACHE_TTL_SEC for the why. Pass force_fresh=True
+        from the irrigation cycle / safety check (which need a true reading)
+        to bypass the cache; dashboard polls and other read-only callers
+        should leave it False.
+        """
+        now = time.time()
+        if (not force_fresh and self._status_cache is not None
+                and (now - self._status_cache_ts) < _STATUS_CACHE_TTL_SEC):
+            return self._status_cache
+
+        t0 = now
+        try:
+            resp = self._esp32_status.get(f"{self.esp32_url}/api/status",
+                                          timeout=ESP32_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            latency = int((time.time() - t0) * 1000)
+            system = data.get("system", {})
+            db.log_connectivity(
+                success=True,
+                latency_ms=latency,
+                boot_count=system.get("bootCount"),
+                uptime_sec=system.get("uptimeSec"),
+            )
+            if self._consecutive_failures >= _FAILURE_ESCALATE_AT:
+                log.info("ESP32 recovered after %d consecutive failures",
+                         self._consecutive_failures)
+            self._consecutive_failures = 0
+            self._consecutive_successes += 1
+            if (not self._badge_online
+                    and self._consecutive_successes >= _DEBOUNCE_ONLINE_AFTER):
+                self._badge_online = True
+            # Refresh cache on success only; we never want to cache a None.
+            self._status_cache = data
+            self._status_cache_ts = time.time()
+            return data
+        except requests.RequestException as e:
+            latency = int((time.time() - t0) * 1000)
+            db.log_connectivity(
+                success=False,
+                latency_ms=latency,
+                error_message=str(e)[:200],
+            )
+            self._consecutive_failures += 1
+            self._consecutive_successes = 0
+            if (self._badge_online
+                    and self._consecutive_failures >= _DEBOUNCE_OFFLINE_AFTER):
+                self._badge_online = False
+            # Single/few failures = transient (WARNING). Sustained = real (ERROR).
+            if self._consecutive_failures >= _FAILURE_ESCALATE_AT:
+                log.error("ESP32 status failed (%d consecutive): %s",
+                          self._consecutive_failures, e)
+            else:
+                log.warning("ESP32 status failed (attempt %d/%d): %s",
+                            self._consecutive_failures, _FAILURE_ESCALATE_AT, e)
+            return None
+
+    def is_esp32_online(self) -> bool:
+        """Debounced reachability flag for the dashboard badge.
+
+        True only after a consecutive success; False only after
+        _DEBOUNCE_OFFLINE_AFTER consecutive failures. Prevents the badge
+        from flickering on single transient failures while still going red
+        promptly during a real outage.
+        """
+        return self._badge_online
+
+    def open_valve(self, zone_id: int) -> bool:
+        try:
+            resp = self._esp32.post(f"{self.esp32_url}/api/valve",
+                                    data={"id": zone_id, "action": "open"},
+                                    timeout=ESP32_TIMEOUT)
+            resp.raise_for_status()
+            log.info("Opened valve %d (%s)", zone_id,
+                     self.zones[zone_id]["name"])
+            return True
+        except requests.RequestException as e:
+            log.error("Failed to open valve %d: %s", zone_id, e)
+            return False
+
+    def close_valve(self, zone_id: int) -> bool:
+        try:
+            resp = self._esp32.post(f"{self.esp32_url}/api/valve",
+                                    data={"id": zone_id, "action": "close"},
+                                    timeout=ESP32_TIMEOUT)
+            resp.raise_for_status()
+            log.info("Closed valve %d (%s)", zone_id,
+                     self.zones[zone_id]["name"])
+            return True
+        except requests.RequestException as e:
+            log.error("Failed to close valve %d: %s", zone_id, e)
+            return False
+
+    def close_all(self) -> bool:
+        try:
+            resp = self._esp32.post(f"{self.esp32_url}/api/closeall",
+                                    timeout=ESP32_TIMEOUT)
+            resp.raise_for_status()
+            log.warning("Emergency close all valves")
+            return True
+        except requests.RequestException as e:
+            log.error("Failed to close all: %s", e)
+            return False
+
+    def reboot_esp32(self) -> tuple[bool, str]:
+        """Trigger a token-protected remote reboot of the ESP32.
+
+        Returns (success, message). Useful when the chip is in a sticky bad
+        state but still answering HTTP — avoids a physical USB trip.
+        """
+        if not self.reboot_token:
+            return False, "reboot_token not configured"
+        try:
+            resp = self._esp32.post(
+                f"{self.esp32_url}/api/reboot",
+                params={"token": self.reboot_token},
+                timeout=ESP32_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                return False, "401: token rejected by firmware"
+            resp.raise_for_status()
+            log.warning("Remote reboot triggered (HTTP %d)", resp.status_code)
+            return True, "reboot requested"
+        except requests.RequestException as e:
+            log.error("Remote reboot failed: %s", e)
+            return False, str(e)[:200]
+
+    # ── Decision logic ──
+
+    def calculate_weather_scale(self) -> dict:
+        """Calculate Zimmerman-style weather adjustment factor.
+
+        Returns dict with scale_pct (0-200) and component breakdowns.
+        100 = baseline (water for normal duration).
+        >100 = hotter/drier than normal, water longer.
+        <100 = cooler/wetter, water less. 0 = skip entirely.
+        """
+        current_wx = self.weather.get_current()
+        rain_last_24h = self.weather.get_rain_last_24h()
+
+        temp_f = current_wx.get("temp_f") or self._wa_base_temp
+        humidity = current_wx.get("humidity") or self._wa_base_hum
+
+        # Humidity delta: lower humidity → more evaporation → water more
+        humidity_delta = self._wa_base_hum - humidity
+
+        # Temperature delta: higher temp → more evaporation → water more
+        temp_delta = (temp_f - self._wa_base_temp) * self._wa_temp_factor
+
+        # Rain delta: recent rain → less watering needed
+        rain_delta = rain_last_24h * self._wa_rain_factor
+
+        raw_scale = 100 + humidity_delta + temp_delta + rain_delta
+        scale_pct = max(self._wa_min_scale,
+                        min(self._wa_max_scale, int(round(raw_scale))))
+
+        return {
+            "scale_pct": scale_pct,
+            "temp_f": temp_f,
+            "humidity": humidity,
+            "rain_last_24h_mm": rain_last_24h,
+            "humidity_delta": round(humidity_delta, 1),
+            "temp_delta": round(temp_delta, 1),
+            "rain_delta": round(rain_delta, 1),
+            "raw_scale": round(raw_scale, 1),
+        }
+
+    def is_in_watering_window(self, zone_id: int) -> bool:
+        """Check if current time is within the allowed watering window."""
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+
+        # Morning window — all zones
+        if self.window["start"] <= current_time <= self.window["end"]:
+            return True
+
+        # Evening window — drip zones only
+        if zone_id in self.window.get("evening_zones", []):
+            evening_start = self.window.get("evening_start", "20:00")
+            evening_end = self.window.get("evening_end", "22:00")
+            if evening_start <= current_time <= evening_end:
+                return True
+
+        return False
+
+    def evaluate_zone(self, zone_id: int, soil_pct: float,
+                      esp32_status: dict) -> dict:
+        """Evaluate whether a zone should water, skip, or wait.
+
+        Returns dict with:
+            action: 'water', 'skip', 'wait', 'close'
+            reason: human-readable explanation
+            details: dict of conditions at decision time
+        """
+        zone = self.zones[zone_id]
+        season_idx = self.weather.get_season_index()
+
+        # Dormant season — skip everything
+        if season_idx < 0:
+            return self._decision("skip", zone_id, "Dormant season — no irrigation",
+                                  {})
+
+        # Get weather conditions
+        current_wx = self.weather.get_current()
+        rain_forecast = self.weather.get_rain_forecast_24h()
+        rain_last_24h = self.weather.get_rain_last_24h()
+        et0 = self.weather.get_today_et0()
+        kc = zone["kc"][season_idx]
+        et_demand = et0 * kc
+
+        conditions = {
+            "soil_pct": soil_pct,
+            "dry_trigger": zone["dry_trigger"],
+            "wet_target": zone["wet_target"],
+            "et0_mm": et0,
+            "kc": kc,
+            "et_demand_mm": et_demand,
+            "temp_f": current_wx.get("temp_f"),
+            "wind_mph": current_wx.get("wind_mph"),
+            "humidity": current_wx.get("humidity"),
+            "rain_forecast_mm": rain_forecast["total_mm"],
+            "rain_forecast_prob": rain_forecast["max_probability"],
+            "rain_last_24h_mm": rain_last_24h,
+        }
+
+        # Check if this zone is already being watered
+        if zone_id in self._active:
+            return self._evaluate_active_zone(zone_id, soil_pct, conditions)
+
+        # ── SKIP CONDITIONS (ordered by impact) ──
+
+        # 1. Soil already wet enough
+        if soil_pct >= zone["wet_target"]:
+            return self._decision("skip", zone_id,
+                                  f"Soil at {soil_pct:.0f}% (target {zone['wet_target']}%) — already wet",
+                                  conditions)
+
+        # 2. Soil above dry trigger — no need yet
+        if soil_pct > zone["dry_trigger"]:
+            return self._decision("skip", zone_id,
+                                  f"Soil at {soil_pct:.0f}% > trigger {zone['dry_trigger']}% — not dry enough",
+                                  conditions)
+
+        # 3. Significant rain in last 24h
+        rules = self.skip_rules
+        if rain_last_24h >= rules["recent_rain_mm"]:
+            return self._decision("skip", zone_id,
+                                  f"Recent rain: {rain_last_24h:.1f}mm in last 24h",
+                                  conditions)
+
+        # 4. Rain forecast
+        if (rain_forecast["total_mm"] >= rules["rain_forecast_mm"]
+                and rain_forecast["max_probability"] >= rules["rain_probability_pct"]):
+            return self._decision("skip", zone_id,
+                                  f"Rain forecast: {rain_forecast['total_mm']:.1f}mm "
+                                  f"({rain_forecast['max_probability']}% prob) in next 24h",
+                                  conditions)
+
+        # 5. Freeze protection
+        temp_f = current_wx.get("temp_f", 50)
+        if temp_f is not None and temp_f < rules["freeze_temp_f"]:
+            return self._decision("skip", zone_id,
+                                  f"Freeze risk: {temp_f:.0f}°F < {rules['freeze_temp_f']}°F",
+                                  conditions)
+
+        # 6. Wind skip (sprinkler zones only)
+        wind_mph = current_wx.get("wind_mph", 0)
+        if (zone["type"] == "sprinkler" and wind_mph is not None
+                and wind_mph > rules["wind_speed_mph"]):
+            return self._decision("skip", zone_id,
+                                  f"Wind {wind_mph:.0f} mph > {rules['wind_speed_mph']} mph (sprinkler zone)",
+                                  conditions)
+
+        # 7. Budget tightening — late in billing cycle and in expensive tier
+        budget = self.billing.should_tighten_budget()
+        if budget["tighten"]:
+            # Still water if soil is critically dry (< 50% of trigger)
+            critical = zone["dry_trigger"] * 0.5
+            if soil_pct > critical:
+                return self._decision("skip", zone_id,
+                                      f"Budget conservation: {budget['reason']}",
+                                      conditions)
+
+        # 8. Not in watering window
+        if not self.is_in_watering_window(zone_id):
+            return self._decision("wait", zone_id,
+                                  "Outside watering window — will water at next window",
+                                  conditions)
+
+        # ── WATER ──
+        return self._decision("water", zone_id,
+                              f"Soil at {soil_pct:.0f}% < trigger {zone['dry_trigger']}% — watering",
+                              conditions)
+
+    def _evaluate_active_zone(self, zone_id: int, soil_pct: float,
+                              conditions: dict) -> dict:
+        """Check if an actively watering zone should stop."""
+        zone = self.zones[zone_id]
+        active = self._active[zone_id]
+        elapsed = time.time() - active["start_time"]
+
+        # Apply weather-adjusted runtime
+        scale = active.get("weather_scale_pct", 100)
+        adjusted_runtime_min = zone["max_runtime_min"] * scale / 100.0
+        max_sec = adjusted_runtime_min * 60
+
+        # Stop if soil target reached
+        if soil_pct >= zone["wet_target"]:
+            return self._decision("close", zone_id,
+                                  f"Target reached: soil at {soil_pct:.0f}% >= {zone['wet_target']}%",
+                                  conditions)
+
+        # Stop if adjusted runtime exceeded
+        if elapsed >= max_sec:
+            return self._decision("close", zone_id,
+                                  f"Adjusted runtime {adjusted_runtime_min:.0f}min reached "
+                                  f"(base {zone['max_runtime_min']}min × {scale}%)",
+                                  conditions)
+
+        # Stop if safety timeout
+        if elapsed >= self.valve_timeout:
+            return self._decision("close", zone_id,
+                                  f"Safety timeout {self.valve_timeout}s reached",
+                                  conditions)
+
+        # Continue watering
+        return {"action": "continue", "zone_id": zone_id,
+                "reason": f"Watering in progress ({elapsed:.0f}s)", "details": conditions}
+
+    def _decision(self, action: str, zone_id: int, reason: str,
+                  conditions: dict) -> dict:
+        return {"action": action, "zone_id": zone_id, "reason": reason,
+                "details": conditions}
+
+    # ── Execution ──
+
+    def start_zone_watering(self, zone_id: int, soil_before: float,
+                            et_demand: float, reason: str = "soil_dry"):
+        """Open valve and track the watering event."""
+        ws = self.calculate_weather_scale()
+        scale_pct = ws["scale_pct"]
+
+        # If weather scale is 0%, skip instead of opening the valve
+        if scale_pct == 0:
+            log.info("Zone %d: weather scale 0%% — skipping (rain: %.1fmm)",
+                     zone_id, ws["rain_last_24h_mm"])
+            return
+
+        zone = self.zones[zone_id]
+        adjusted_min = zone["max_runtime_min"] * scale_pct / 100.0
+        log.info("Zone %d: weather scale %d%% → runtime %.0fmin (base %dmin) "
+                 "[temp_Δ=%.1f hum_Δ=%.1f rain_Δ=%.1f]",
+                 zone_id, scale_pct, adjusted_min, zone["max_runtime_min"],
+                 ws["temp_delta"], ws["humidity_delta"], ws["rain_delta"])
+
+        if self.open_valve(zone_id):
+            event_id = db.start_watering(zone_id, soil_before, et_demand, reason)
+            self._active[zone_id] = {
+                "event_id": event_id,
+                "start_time": time.time(),
+                "soil_before": soil_before,
+                "weather_scale_pct": scale_pct,
+            }
+            log.info("Zone %d watering started (event %d)", zone_id, event_id)
+
+    def stop_zone_watering(self, zone_id: int, soil_after: float):
+        """Close valve and finalize the watering event."""
+        if zone_id not in self._active:
+            self.close_valve(zone_id)
+            return
+
+        active = self._active.pop(zone_id)
+        duration_sec = int(time.time() - active["start_time"])
+        zone = self.zones[zone_id]
+        est_gallons = (duration_sec / 60.0) * zone["est_gpm"]
+
+        self.close_valve(zone_id)
+        db.end_watering(active["event_id"], soil_after, duration_sec, est_gallons)
+        log.info("Zone %d watering stopped: %ds, ~%.1f gal",
+                 zone_id, duration_sec, est_gallons)
+
+    def log_skip_event(self, zone_id: int, reason: str, conditions: dict):
+        """Log that we skipped watering — estimates what WOULD have been used."""
+        zone = self.zones[zone_id]
+        # Estimate: a timer would run for the full max_runtime
+        timer_minutes = zone["max_runtime_min"]
+        if zone.get("cycle_soak"):
+            timer_minutes = zone.get("cycle_run_min", 8) * zone.get("cycle_count", 3)
+        est_gallons_saved = timer_minutes * zone["est_gpm"]
+
+        db.log_skip(zone_id, reason, est_gallons_saved,
+                    json.dumps(conditions, default=str))
+
+    # ── Main loop (called by scheduler) ──
+
+    def run_cycle(self):
+        """Main decision cycle — evaluate all zones and act."""
+        log.info("=== Starting irrigation decision cycle ===")
+
+        # Decision cycle needs current truth, not a 12s-old cache.
+        status = self.get_esp32_status(force_fresh=True)
+        if not status:
+            log.error("Cannot reach ESP32 — skipping cycle")
+            return
+
+        # Log system health
+        system = status.get("system", {})
+        health = status.get("health", {})
+        if system:
+            db.log_system_health(
+                uptime_sec=system.get("uptimeSec", 0),
+                wifi_rssi=system.get("wifiRSSI", 0),
+                heap_pct=system.get("heapPct", 0),
+                chip_temp_f=system.get("chipTempF", 0),
+                boot_count=system.get("bootCount", 0),
+                wifi_reconnects=system.get("wifiReconnects"),
+                crash_count=health.get("crashCount"),
+            )
+
+        # Log sensor data — based on sensors config section (independent of zones)
+        soil_list = status.get("soil", [])
+        sensors_cfg = self.config.get("sensors", {})
+        for idx, sensor in enumerate(soil_list):
+            if sensors_cfg.get(f"soil_{idx}", False):
+                db.log_sensor(idx, sensor["pct"], sensor["raw"])
+
+        # Log DHT22 data if present (ESP32 returns temp in Fahrenheit)
+        temp = status.get("temp", 0)
+        hum = status.get("hum", 0)
+        if temp or hum:
+            db.log_weather("dht22", temp_f=temp if temp else None,
+                           humidity=hum)
+
+        # Log weather API data
+        current_wx = self.weather.get_current()
+        if current_wx:
+            et0 = self.weather.get_today_et0()
+            db.log_weather("api",
+                           temp_f=current_wx.get("temp_f"),
+                           humidity=current_wx.get("humidity"),
+                           wind_mph=current_wx.get("wind_mph"),
+                           rain_mm=current_wx.get("precip_mm"),
+                           et0_mm=et0,
+                           solar_rad=current_wx.get("solar_rad"))
+
+        # Build soil reading map: zone_id → pct (installed zones only)
+        soil_readings = {}
+        for zone in self.config["zones"]:
+            if not zone.get("installed", False):
+                continue
+            sensor_idx = zone["soil_sensor"]
+            if sensor_idx < len(soil_list):
+                soil_readings[zone["id"]] = soil_list[sensor_idx]["pct"]
+
+        # Evaluate each zone (installed only)
+        actions = []
+        skip_reasons = {}
+        n_watered = 0
+        n_skipped = 0
+        n_outside = 0
+        for zone in self.config["zones"]:
+            if not zone.get("installed", False):
+                continue
+            zid = zone["id"]
+            soil = soil_readings.get(zid, 50)
+            decision = self.evaluate_zone(zid, soil, status)
+            actions.append(decision)
+
+            action = decision["action"]
+            log.info("Zone %d (%s): %s — %s",
+                     zid, zone["name"], action, decision["reason"])
+
+            if action == "water":
+                et_demand = decision["details"].get("et_demand_mm", 0)
+                self.start_zone_watering(zid, soil, et_demand)
+                n_watered += 1
+            elif action == "skip":
+                reason = decision["reason"]
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                n_skipped += 1
+                if "window" in reason.lower():
+                    n_outside += 1
+            elif action == "close":
+                self.stop_zone_watering(zid, soil)
+
+        # Log one summary row per cycle instead of per-zone skip events
+        if n_skipped > 0 or n_watered > 0:
+            dominant = max(skip_reasons, key=skip_reasons.get) if skip_reasons else "n/a"
+            db.log_cycle_summary(
+                zones_evaluated=len(actions),
+                zones_skipped=n_skipped,
+                zones_watered=n_watered,
+                zones_outside_window=n_outside,
+                dominant_reason=dominant,
+                details_json=json.dumps(skip_reasons) if skip_reasons else None,
+            )
+
+        log.info("=== Decision cycle complete ===")
+        return actions
+
+    def safety_check(self):
+        """Safety: close any valve that's been open too long."""
+        now = time.time()
+        for zone_id, active in list(self._active.items()):
+            elapsed = now - active["start_time"]
+            if elapsed > self.valve_timeout:
+                log.warning("Safety timeout: Zone %d open for %ds — forcing close",
+                            zone_id, int(elapsed))
+                self.stop_zone_watering(zone_id, soil_after=0)
+
+    def get_zone_taw_mm(self, zone_id: int) -> float:
+        """Total Available Water in mm for a zone."""
+        zone = self.zones[zone_id]
+        root_depth = zone.get("root_depth_in", self._default_root_depth)
+        taw_in = root_depth * self._awc  # inches
+        return taw_in * 25.4  # convert to mm
+
+    def get_zone_mad_mm(self, zone_id: int) -> float:
+        """Management Allowed Depletion threshold in mm."""
+        zone = self.zones[zone_id]
+        mad_pct = zone.get("mad_pct", self._default_mad_pct) / 100.0
+        return self.get_zone_taw_mm(zone_id) * mad_pct
+
+    def update_daily_balances(self):
+        """Update soil water balance for all zones (called daily by scheduler).
+
+        Checkbook method: balance starts at TAW (field capacity).
+        Each day: balance -= ET₀ × Kc  (demand)
+                  balance += rain_mm    (credit)
+                  balance += irrigation_mm (credit, from watering events × precip rate)
+        Balance is clamped to [0, TAW_mm].
+        """
+        today = date.today().isoformat()
+        et0 = self.weather.get_today_et0()
+        rain_last_24h = self.weather.get_rain_last_24h()
+        season_idx = self.weather.get_season_index()
+
+        log.info("Updating soil water balances for %s (ET₀=%.2fmm, rain=%.1fmm)",
+                 today, et0, rain_last_24h)
+
+        for zone in self.config["zones"]:
+            zid = zone["id"]
+            taw_mm = self.get_zone_taw_mm(zid)
+            mad_mm = self.get_zone_mad_mm(zid)
+
+            # Get yesterday's closing balance (or start at field capacity)
+            prev = db.get_soil_balance(zid)
+            if prev and prev["date"] != today:
+                balance = prev["balance_mm"]
+            elif prev and prev["date"] == today:
+                # Already updated today — use yesterday's balance to recompute
+                yesterday = (date.today() - timedelta(days=1)).isoformat()
+                yprev = None
+                hist = db.get_soil_balance_history(zid, days=2)
+                for h in hist:
+                    if h["date"] == yesterday:
+                        yprev = h
+                        break
+                balance = yprev["balance_mm"] if yprev else taw_mm
+            else:
+                balance = taw_mm  # first entry — assume field capacity
+
+            # Crop coefficient for current season
+            kc = zone["kc"][season_idx] if season_idx >= 0 else 0
+            etc_mm = et0 * kc
+
+            # Irrigation applied today (from watering events × precip rate)
+            precip_rate = zone.get("precip_rate_iph", 1.0)
+            irrig_mm = db.get_daily_irrigation_mm(zid, today, precip_rate)
+
+            # Update balance
+            balance = balance - etc_mm + rain_last_24h + irrig_mm
+            balance = max(0, min(balance, taw_mm))  # clamp to [0, TAW]
+
+            db.upsert_soil_balance(
+                zone_id=zid, day=today, et0_mm=et0, kc=kc,
+                etc_mm=etc_mm, rain_mm=rain_last_24h,
+                irrigation_mm=irrig_mm, balance_mm=balance,
+                taw_mm=taw_mm, mad_mm=mad_mm,
+            )
+
+            deficit_pct = (1 - balance / taw_mm) * 100 if taw_mm > 0 else 0
+            log.info("Zone %d balance: %.1fmm / %.1fmm TAW (%.0f%% depleted, MAD=%.1fmm)",
+                     zid, balance, taw_mm, deficit_pct, mad_mm)
+
+    def get_status_summary(self) -> dict:
+        """Get a summary of current system state for the dashboard."""
+        budget = self.billing.should_tighten_budget()
+        season = self.weather.get_season()
+        current_wx = self.weather.get_current()
+
+        return {
+            "season": season,
+            "weather": current_wx,
+            "et0_today": self.weather.get_today_et0(),
+            "rain_forecast": self.weather.get_rain_forecast_24h(),
+            "rain_last_24h": self.weather.get_rain_last_24h(),
+            "budget": budget,
+            "active_zones": list(self._active.keys()),
+            "forecast_7day": self.weather.get_7day_forecast(),
+            "weather_scale": self.calculate_weather_scale(),
+            "soil_balances": db.get_all_balances(),
+        }

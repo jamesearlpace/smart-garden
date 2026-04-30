@@ -1,0 +1,52 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x17 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:1184
+load:0x40078000,len:13232
+load:0x40080400,len:3028
+entry 0x400805e4
+
+=== POWER DIAG: serial OK ===
+  CPU freq: 80 MHz (reduced for boot)
+  Reset reason: 1
+  Free heap: 296428 bytes
+  Chip temp: 74.4Β°C
+  Boot #1397, crash counter: 1/20
+=== Waiting 3s for power to stabilize ===
+=== Stabilization complete, starting init ===
+
+π± Smart Garden Controller v2.2 (power-hardened)
+================================
+[INIT] Loading valve counters...
+[INIT] Configuring GPIO pins...
+[INIT] Clean boot β€” closing all valves (safe startup)...
+Valve 1 CLOSED (Zone 1 - Garden (drip)) [total: 1394, was open 0s]
+Valve 2 CLOSED (Zone 2 - Grapes (drip)) [total: 1370, was open 0s]
+Valve 3 CLOSED (Zone 3 - Fruit Trees) [total: 135, was open 0s]
+Valve 4 CLOSED (Zone 4 - South Lawn) [total: 1359, was open 0s]
+Valve 5 CLOSED (Zone 5 - East Lawn) [total: 165, was open 0s]
+Valve 6 CLOSED (Zone 6 - West/NW Lawn) [total: 1357, was open 0s]
+Valve 7 CLOSED (Zone 7 - NE Lawn) [total: 1353, was open 0s]
+[INIT] Starting DHT22 + soil sensors...
+[INIT] === Starting WiFi (high current draw) ===
+Connecting to WiFi: TellMyWifiLoveHer (static IP: 192.168.0.150) (TX power: 14.2 dBm, raw=57, setter=true) [#6 diag]
+.  [#6 diag] post-connect TX: 14.2 dBm, raw=57, setter=true
+
+========================================
+  WiFi connected! IP: 192.168.0.150
+  Open http://192.168.0.150 in your browser
+=========ζώ¨κκκκκκκκκκκκκκκκκκκκκκκκκκκκj
+[INIT] Crash counter reset. CPU boosted to 240 MHz
+Web server started
+[INIT] OTA disabled (USB flash only β€” see config.h)
+Temp: 70.9Β°F  Humidity: 43.5%
+Soil 1 (Garden): raw=2303  moisture=59%
+Soil 2 (Grapes): raw=128  moisture=100%
+Soil 3 (Fruit Trees): raw=0  moisture=100%
+Soil 4 (South Lawn): raw=0  moisture=100%
+[INIT] Task watchdog enabled (60s timeout)
+[INIT] Setup complete β€” system running
+[INIT] Free heap after init: 226932 bytes

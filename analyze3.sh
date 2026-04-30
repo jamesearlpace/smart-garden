@@ -1,0 +1,8 @@
+echo '=== connection 1 (port 54768) — all packets ==='
+sudo tcpdump -nn -tttt -r /tmp/wedge.pcap 2>/dev/null | grep -v ' P ' | grep '54768'
+echo ''
+echo '=== connection 2 (port 59450) — all packets ==='
+sudo tcpdump -nn -tttt -r /tmp/wedge.pcap 2>/dev/null | grep -v ' P ' | grep '59450'
+echo ''
+echo '=== ALL RSTs — all packets ==='
+sudo tcpdump -nn -tttt -r /tmp/wedge.pcap 2>/dev/null | grep -v ' P ' | grep 'R\.'

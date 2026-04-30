@@ -1,0 +1,310 @@
+--- Terminal on COM3 | 115200 8-N-1
+--- Available filters and text transformations: debug, default, direct, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+22:04:41.372 > ets Jul 29 2019 12:21:46
+22:04:41.374 > 
+22:04:41.374 > rst:0x1 (POWERON_RESET),boot:0x17 (SPI_FAST_FLASH_BOOT)
+22:04:41.380 > configsip: 0, SPIWP:0xee
+22:04:41.381 > clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+22:04:41.388 > mode:DIO, clock div:2
+22:04:41.389 > load:0x3fff0030,len:1184
+22:04:41.392 > load:0x40078000,len:13232
+22:04:41.394 > load:0x40080400,len:3028
+22:04:41.397 > entry 0x400805e4
+22:04:41.872 > 
+22:04:41.872 > === POWER DIAG: serial OK ===
+22:04:41.874 >   CPU freq: 80 MHz (reduced for boot)
+22:04:41.878 >   Reset reason: 1
+22:04:41.880 >   Free heap: 296720 bytes
+22:04:41.881 >   Chip temp: 68.9┬░C
+22:04:41.883 >   Boot #1339, crash counter: 1/20
+22:04:41.887 > === Waiting 3s for power to stabilize ===
+22:04:44.882 > === Stabilization complete, starting init ===
+22:04:44.888 > 
+22:04:44.888 > ≡ƒî▒ Smart Garden Controller v2.2 (power-hardened)
+22:04:44.892 > ================================
+22:04:44.895 > [INIT] Loading valve counters...
+22:04:44.907 > [INIT] Configuring GPIO pins...
+22:04:44.909 > [INIT] Clean boot ΓÇö closing all valves (safe startup)...
+22:04:45.013 > Valve 1 CLOSED (Zone 1 - Garden (drip)) [total: 1354, was open 0s]
+22:04:45.330 > Valve 2 CLOSED (Zone 2 - Grapes (drip)) [total: 1330, was open 0s]
+22:04:45.651 > Valve 3 CLOSED (Zone 3 - Fruit Trees) [total: 95, was open 0s]
+22:04:45.969 > Valve 4 CLOSED (Zone 4 - South Lawn) [total: 1319, was open 0s]
+22:04:46.289 > Valve 5 CLOSED (Zone 5 - East Lawn) [total: 125, was open 0s]
+22:04:46.607 > Valve 6 CLOSED (Zone 6 - West/NW Lawn) [total: 1317, was open 0s]
+22:04:46.926 > Valve 7 CLOSED (Zone 7 - NE Lawn) [total: 1313, was open 0s]
+22:04:47.139 > [INIT] Starting DHT22 + soil sensors...
+22:04:47.143 > [INIT] === Starting WiFi (high current draw) ===
+22:04:47.147 > Connecting to WiFi: TellMyWifiLoveHer (static IP: 192.168.0.150) (TX power: 14.5 dBm)
+22:04:47.839 > .
+22:04:47.839 > ========================================
+22:04:47.842 >   WiFi connected! IP: 192.168.0.150
+22:04:47.847 >   Open http://192.168.0.150 in your browser
+22:04:47.850 > ========================================
+22:04:47.856 > [INIT] Crash counter reset. CPU boosted to 240 MHz
+22:04:47.861 > Web server started
+22:04:47.863 > [INIT] OTA disabled (USB flash only ΓÇö see config.h)
+22:04:47.868 > Temp: 73.6┬░F  Humidity: 37.1%
+22:04:47.870 > Soil 1 (Garden): raw=2349  moisture=57%
+22:04:47.874 > Soil 2 (Grapes): raw=186  moisture=100%
+22:04:47.878 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:04:47.881 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:04:47.884 > [INIT] Task watchdog enabled (60s timeout)
+22:04:47.889 > [INIT] Setup complete ΓÇö system running
+22:04:47.893 > [INIT] Free heap after init: 244216 bytes
+22:05:44.893 > [OTA] Image marked valid ΓÇö rollback cancelled
+22:05:47.885 > Temp: 73.6┬░F  Humidity: 36.2%
+22:05:47.887 > Soil 1 (Garden): raw=2368  moisture=56%
+22:05:47.890 > Soil 2 (Grapes): raw=311  moisture=100%
+22:05:47.894 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:05:47.897 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:06:47.900 > Temp: 73.6┬░F  Humidity: 36.2%
+22:06:47.902 > Soil 1 (Garden): raw=2367  moisture=56%
+22:06:47.906 > Soil 2 (Grapes): raw=329  moisture=100%
+22:06:47.910 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:06:47.914 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:07:47.916 > Temp: 73.6┬░F  Humidity: 36.3%
+22:07:47.919 > Soil 1 (Garden): raw=2338  moisture=58%
+22:07:47.923 > Soil 2 (Grapes): raw=147  moisture=100%
+22:07:47.926 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:07:47.930 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:07:54.395 > Valve 1 CLOSED (Zone 1 - Garden (drip)) [total: 1355, was open 0s]
+22:07:54.507 > Valve 2 CLOSED (Zone 2 - Grapes (drip)) [total: 1331, was open 0s]
+22:07:54.618 > Valve 3 CLOSED (Zone 3 - Fruit Trees) [total: 96, was open 0s]
+22:07:54.728 > Valve 4 CLOSED (Zone 4 - South Lawn) [total: 1320, was open 0s]
+22:07:54.839 > Valve 5 CLOSED (Zone 5 - East Lawn) [total: 126, was open 0s]
+22:07:54.949 > Valve 6 CLOSED (Zone 6 - West/NW Lawn) [total: 1318, was open 0s]
+22:07:55.061 > Valve 7 CLOSED (Zone 7 - NE Lawn) [total: 1314, was open 0s]
+22:08:47.933 > ∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜emp: 73.4┬░F  Humidity: 36.5%
+22:08:47.935 > Soil 1 (Garden): raw=2354  moisture=57%
+22:08:47.940 > Soil 2 (Grapes): raw=320  moisture=100%
+22:08:47.943 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:08:47.946 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:09:47.949 > Temp: 73.4┬░F  Humidity: 36.3%
+22:09:47.953 > Soil 1 (Garden): raw=2324  moisture=58%
+22:09:47.957 > Soil 2 (Grapes): raw=330  moisture=100%
+22:09:47.959 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:09:47.963 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:10:47.965 > Temp: 73.4┬░F  Humidity: 36.5%
+22:10:47.969 > Soil 1 (Garden): raw=2347  moisture=57%
+22:10:47.971 > Soil 2 (Grapes): raw=325  moisture=100%
+22:10:47.977 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:10:47.979 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:11:47.982 > Temp: 73.4┬░F  Humidity: 36.4%
+22:11:47.985 > Soil 1 (Garden): raw=2354  moisture=57%
+22:11:47.989 > Soil 2 (Grapes): raw=311  moisture=100%
+22:11:47.992 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:11:47.996 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:12:47.997 > Temp: 73.4┬░F  Humidity: 36.5%
+22:12:48.000 > Soil 1 (Garden): raw=2366  moisture=56%
+22:12:48.003 > Soil 2 (Grapes): raw=310  moisture=100%
+22:12:48.008 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:12:48.012 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:13:48.013 > Temp: 73.2┬░F  Humidity: 36.6%
+22:13:48.017 > Soil 1 (Garden): raw=2378  moisture=56%
+22:13:48.019 > Soil 2 (Grapes): raw=315  moisture=100%
+22:13:48.023 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:13:48.026 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:14:48.029 > Temp: 73.2┬░F  Humidity: 36.7%
+22:14:48.033 > Soil 1 (Garden): raw=2359  moisture=57%
+22:14:48.036 > Soil 2 (Grapes): raw=317  moisture=100%
+22:14:48.039 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:14:48.043 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:15:48.046 > Temp: 73.0┬░F  Humidity: 36.8%
+22:15:48.049 > Soil 1 (Garden): raw=2331  moisture=58%
+22:15:48.052 > Soil 2 (Grapes): raw=331  moisture=100%
+22:15:48.056 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:15:48.059 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:16:48.062 > Temp: 72.9┬░F  Humidity: 36.9%
+22:16:48.065 > Soil 1 (Garden): raw=2363  moisture=56%
+22:16:48.068 > Soil 2 (Grapes): raw=313  moisture=100%
+22:16:48.072 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:16:48.075 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:17:48.077 > Temp: 72.7┬░F  Humidity: 37.1%
+22:17:48.080 > Soil 1 (Garden): raw=2358  moisture=57%
+22:17:48.083 > Soil 2 (Grapes): raw=323  moisture=100%
+22:17:48.087 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:17:48.091 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:18:17.144 > ets Jul 29 2019 12:21:46
+22:18:17.146 > 
+22:18:17.146 > rst:0x1 (POWERON_RESET),boot:0x17 (SPI_FAST_FLASH_BOOT)
+22:18:17.150 > configsip: 0, SPIWP:0xee
+22:18:17.153 > clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+22:18:17.160 > mode:DIO, clock div:2
+22:18:17.161 > load:0x3fff0030,len:1184
+22:18:17.164 > load:0x40078000,len:13232
+22:18:17.166 > load:0x40080400,len:3028
+22:18:17.168 > entry 0x400805e4
+22:18:17.643 > 
+22:18:17.643 > === POWER DIAG: serial OK ===
+22:18:17.646 >   CPU freq: 80 MHz (reduced for boot)
+22:18:17.649 >   Reset reason: 1
+22:18:17.651 >   Free heap: 296720 bytes
+22:18:17.653 >   Chip temp: 68.3┬░C
+22:18:17.654 >   Boot #1340, crash counter: 1/20
+22:18:17.657 > === Waiting 3s for power to stabilize ===
+22:18:20.655 > === Stabilization complete, starting init ===
+22:18:20.659 > 
+22:18:20.659 > ≡ƒî▒ Smart Garden Controller v2.2 (power-hardened)
+22:18:20.663 > ================================
+22:18:20.666 > [INIT] Loading valve counters...
+22:18:20.678 > [INIT] Configuring GPIO pins...
+22:18:20.683 > [INIT] Clean boot ΓÇö closing all valves (safe startup)...
+22:18:20.783 > Valve 1 CLOSED (Zone 1 - Garden (drip)) [total: 1356, was open 0s]
+22:18:21.103 > Valve 2 CLOSED (Zone 2 - Grapes (drip)) [total: 1332, was open 0s]
+22:18:21.422 > Valve 3 CLOSED (Zone 3 - Fruit Trees) [total: 97, was open 0s]
+22:18:21.741 > Valve 4 CLOSED (Zone 4 - South Lawn) [total: 1321, was open 0s]
+22:18:22.058 > Valve 5 CLOSED (Zone 5 - East Lawn) [total: 127, was open 0s]
+22:18:22.379 > Valve 6 CLOSED (Zone 6 - West/NW Lawn) [total: 1319, was open 0s]
+22:18:22.696 > Valve 7 CLOSED (Zone 7 - NE Lawn) [total: 1315, was open 0s]
+22:18:22.911 > [INIT] Starting DHT22 + soil sensors...
+22:18:22.913 > [INIT] === Starting WiFi (high current draw) ===
+22:18:22.919 > Connecting to WiFi: TellMyWifiLoveHer (static IP: 192.168.0.150) (TX power: 14.8 dBm)
+22:18:23.613 > .
+22:18:23.613 > ========================================
+22:18:23.617 >   WiFi connected! IP: 192.168.0.150
+22:18:23.620 >   Open http://192.168.0.150 in your browser
+22:18:23.623 > ========================================
+22:18:23.630 > [INIT] Crash counter reset. CPU boosted to 240 MHz
+22:18:23.634 > Web server started
+22:18:23.636 > [INIT] OTA disabled (USB flash only ΓÇö see config.h)
+22:18:23.641 > Temp: 72.7┬░F  Humidity: 37.1%
+22:18:23.644 > Soil 1 (Garden): raw=2328  moisture=58%
+22:18:23.647 > Soil 2 (Grapes): raw=323  moisture=100%
+22:18:23.651 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:18:23.655 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:18:23.658 > [INIT] Task watchdog enabled (60s timeout)
+22:18:23.663 > [INIT] Setup complete ΓÇö system running
+22:18:23.666 > [INIT] Free heap after init: 243968 bytes
+22:19:20.666 > [OTA] Image marked valid ΓÇö rollback cancelled
+22:19:23.658 > Temp: 72.7┬░F  Humidity: 37.2%
+22:19:23.661 > Soil 1 (Garden): raw=2352  moisture=57%
+22:19:23.664 > Soil 2 (Grapes): raw=335  moisture=100%
+22:19:23.668 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:19:23.671 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:20:23.674 > Temp: 72.5┬░F  Humidity: 37.3%
+22:20:23.676 > Soil 1 (Garden): raw=2320  moisture=59%
+22:20:23.680 > Soil 2 (Grapes): raw=238  moisture=100%
+22:20:23.683 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:20:23.687 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:21:23.690 > Temp: 72.5┬░F  Humidity: 37.3%
+22:21:23.693 > Soil 1 (Garden): raw=2369  moisture=56%
+22:21:23.696 > Soil 2 (Grapes): raw=326  moisture=100%
+22:21:23.700 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:21:23.703 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:22:23.705 > Temp: 72.5┬░F  Humidity: 37.4%
+22:22:23.707 > Soil 1 (Garden): raw=2367  moisture=56%
+22:22:23.712 > Soil 2 (Grapes): raw=332  moisture=100%
+22:22:23.716 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:22:23.719 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:23:23.721 > Temp: 72.3┬░F  Humidity: 37.5%
+22:23:23.724 > Soil 1 (Garden): raw=2378  moisture=56%
+22:23:23.727 > Soil 2 (Grapes): raw=334  moisture=100%
+22:23:23.731 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:23:23.735 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:24:23.737 > Temp: 72.3┬░F  Humidity: 37.6%
+22:24:23.739 > Soil 1 (Garden): raw=2354  moisture=57%
+22:24:23.743 > Soil 2 (Grapes): raw=336  moisture=100%
+22:24:23.745 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:24:23.751 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:25:23.753 > Temp: 72.3┬░F  Humidity: 37.5%
+22:25:23.755 > Soil 1 (Garden): raw=2368  moisture=56%
+22:25:23.760 > Soil 2 (Grapes): raw=335  moisture=100%
+22:25:23.762 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:25:23.767 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:26:23.768 > Temp: 72.1┬░F  Humidity: 37.6%
+22:26:23.772 > Soil 1 (Garden): raw=2328  moisture=58%
+22:26:23.775 > Soil 2 (Grapes): raw=343  moisture=100%
+22:26:23.779 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:26:23.783 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:27:23.785 > Temp: 72.1┬░F  Humidity: 37.7%
+22:27:23.788 > Soil 1 (Garden): raw=2354  moisture=57%
+22:27:23.791 > Soil 2 (Grapes): raw=324  moisture=100%
+22:27:23.795 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:27:23.799 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:28:23.800 > Temp: 72.1┬░F  Humidity: 37.7%
+22:28:23.802 > Soil 1 (Garden): raw=2362  moisture=56%
+22:28:23.807 > Soil 2 (Grapes): raw=334  moisture=100%
+22:28:23.809 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:28:23.814 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:29:23.815 > Temp: 72.1┬░F  Humidity: 37.8%
+22:29:23.817 > Soil 1 (Garden): raw=2365  moisture=56%
+22:29:23.822 > Soil 2 (Grapes): raw=314  moisture=100%
+22:29:23.826 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:29:23.829 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:30:23.833 > Temp: 72.0┬░F  Humidity: 37.8%
+22:30:23.836 > Soil 1 (Garden): raw=2352  moisture=57%
+22:30:23.839 > Soil 2 (Grapes): raw=323  moisture=100%
+22:30:23.843 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:30:23.846 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:31:23.849 > Temp: 72.1┬░F  Humidity: 37.8%
+22:31:23.852 > Soil 1 (Garden): raw=2329  moisture=58%
+22:31:23.855 > Soil 2 (Grapes): raw=195  moisture=100%
+22:31:23.859 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:31:23.862 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:32:23.865 > Temp: 72.0┬░F  Humidity: 37.8%
+22:32:23.868 > Soil 1 (Garden): raw=2369  moisture=56%
+22:32:23.871 > Soil 2 (Grapes): raw=276  moisture=100%
+22:32:23.875 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:32:23.879 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:33:23.881 > Temp: 72.0┬░F  Humidity: 37.8%
+22:33:23.884 > Soil 1 (Garden): raw=2326  moisture=58%
+22:33:23.888 > Soil 2 (Grapes): raw=320  moisture=100%
+22:33:23.891 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:33:23.895 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:34:23.898 > Temp: 72.0┬░F  Humidity: 37.9%
+22:34:23.900 > Soil 1 (Garden): raw=2367  moisture=56%
+22:34:23.903 > Soil 2 (Grapes): raw=336  moisture=100%
+22:34:23.907 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:34:23.911 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:35:23.914 > ∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜mp: 72.0┬░F  Humidity: 37.8%
+22:35:23.916 > Soil 1 (Garden): raw=2355  moisture=57%
+22:35:23.920 > Soil 2 (Grapes): raw=336  moisture=100%
+22:35:23.924 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:35:23.928 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:36:23.930 > Temp: 72.0┬░F  Humidity: 37.9%
+22:36:23.932 > Soil 1 (Garden): raw=2361  moisture=56%
+22:36:23.934 > Soil 2 (Grapes): raw=331  moisture=100%
+22:36:23.938 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:36:23.943 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:37:23.946 > Temp: 72.0┬░F  Humidity: 37.9%
+22:37:23.948 > Soil 1 (Garden): raw=2303  moisture=59%
+22:37:23.952 > Soil 2 (Grapes): raw=336  moisture=100%
+22:37:23.955 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:37:23.959 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:38:23.962 > Temp: 72.0┬░F  Humidity: 38.0%
+22:38:23.964 > Soil 1 (Garden): raw=2340  moisture=58%
+22:38:23.968 > Soil 2 (Grapes): raw=320  moisture=100%
+22:38:23.972 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:38:23.975 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:39:23.977 > Temp: 71.8┬░F  Humidity: 38.0%
+22:39:23.979 > Soil 1 (Garden): raw=2329  moisture=58%
+22:39:23.984 > Soil 2 (Grapes): raw=336  moisture=100%
+22:39:23.988 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:39:23.991 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:40:23.994 > ∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜mp: 71.8┬░F  Humidity: 38.1%
+22:40:23.996 > Soil 1 (Garden): raw=2321  moisture=58%
+22:40:24.000 > Soil 2 (Grapes): raw=334  moisture=100%
+22:40:24.003 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:40:24.007 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:41:24.010 > Temp: 71.8┬░F  Humidity: 38.1%
+22:41:24.013 > Soil 1 (Garden): raw=2361  moisture=56%
+22:41:24.016 > Soil 2 (Grapes): raw=228  moisture=100%
+22:41:24.019 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:41:24.024 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:42:24.028 > Temp: 71.8┬░F  Humidity: 38.1%
+22:42:24.030 > Soil 1 (Garden): raw=2321  moisture=58%
+22:42:24.033 > Soil 2 (Grapes): raw=168  moisture=100%
+22:42:24.036 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:42:24.040 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:43:24.044 > ∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜∩┐╜emp: 71.6┬░F  Humidity: 38.1%
+22:43:24.047 > Soil 1 (Garden): raw=2360  moisture=57%
+22:43:24.050 > Soil 2 (Grapes): raw=320  moisture=100%
+22:43:24.054 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:43:24.057 > Soil 4 (South Lawn): raw=0  moisture=100%
+22:44:24.060 > Temp: 71.8┬░F  Humidity: 38.0%
+22:44:24.063 > Soil 1 (Garden): raw=2379  moisture=56%
+22:44:24.067 > Soil 2 (Grapes): raw=309  moisture=100%
+22:44:24.070 > Soil 3 (Fruit Trees): raw=0  moisture=100%
+22:44:24.074 > Soil 4 (South Lawn): raw=0  moisture=100%

@@ -22,6 +22,7 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
+#include <Adafruit_MCP23X17.h>
 #include "config.h"
 
 #if MQTT_ENABLED
@@ -76,6 +77,7 @@ void loop() {
 // ============================================================
 
 Preferences nvs;
+Adafruit_MCP23X17 mcp;
 uint32_t bootCount = 0;
 uint32_t crashCount = 0;
 bool safeMode = false;
@@ -99,13 +101,16 @@ struct FallbackZone {
 // Conservative defaults: every zone every 48h, staggered by 1h.
 // Survival watering, not optimal \u2014 enough to keep plants alive for weeks.
 const FallbackZone FALLBACK_SCHEDULE[NUM_VALVES] = {
-    {48, 15, 0},   // Zone 1 - Garden
-    {48, 20, 1},   // Zone 2 - Grapes
+    {48, 15, 0},   // Zone 1 - Garden (drip)
+    {48, 20, 1},   // Zone 2 - Grapes (drip)
     {48, 25, 2},   // Zone 3 - Fruit Trees
     {48, 12, 3},   // Zone 4 - South Lawn
-    {48, 15, 4},   // Zone 5 - NW Lawn
-    {48, 15, 5},   // Zone 6 - SW Lawn
+    {48, 15, 4},   // Zone 5 - East Lawn
+    {48, 15, 5},   // Zone 6 - West/NW Lawn
     {48, 15, 6},   // Zone 7 - NE Lawn
+    {48, 10, 7},   // Zone 8 - Peonies (drip)
+    {48, 15, 8},   // Zone 9 - Garden (drip)
+    { 0,  0, 0},   // Zone 10 - Spare (disabled)
 };
 
 // Per-zone runtime tracking (not persisted; resets at boot)
@@ -209,17 +214,28 @@ Valve valves[NUM_VALVES] = {
     {VALVE5_IN1, VALVE5_IN2, false, "Zone 5 - East Lawn"},
     {VALVE6_IN1, VALVE6_IN2, false, "Zone 6 - West/NW Lawn"},
     {VALVE7_IN1, VALVE7_IN2, false, "Zone 7 - NE Lawn"},
+    {VALVE8_IN1, VALVE8_IN2, false, "Zone 8 - Peonies (drip)"},
+    {VALVE9_IN1, VALVE9_IN2, false, "Zone 9 - Garden (drip)"},
+    {VALVE10_IN1, VALVE10_IN2, false, "Zone 10 - Spare"},
 };
 
 void openValve(int idx) {
     if (idx < 0 || idx >= NUM_VALVES) return;
     Valve& v = valves[idx];
     enableDriverPower();
-    digitalWrite(v.in1, HIGH);
-    digitalWrite(v.in2, LOW);
-    delay(VALVE_PULSE_MS);
-    digitalWrite(v.in1, LOW);
-    digitalWrite(v.in2, LOW);
+    if (idx < VALVES_ON_MCP) {
+        mcp.digitalWrite(v.in1, HIGH);
+        mcp.digitalWrite(v.in2, LOW);
+        delay(VALVE_PULSE_MS);
+        mcp.digitalWrite(v.in1, LOW);
+        mcp.digitalWrite(v.in2, LOW);
+    } else {
+        digitalWrite(v.in1, HIGH);
+        digitalWrite(v.in2, LOW);
+        delay(VALVE_PULSE_MS);
+        digitalWrite(v.in1, LOW);
+        digitalWrite(v.in2, LOW);
+    }
     disableDriverPower();
     v.isOpen = true;
     valveOpenCount[idx]++;
@@ -239,11 +255,19 @@ void closeValve(int idx) {
         durationSec = (millis() - valveLastOpenedMs[idx]) / 1000;
     }
     enableDriverPower();
-    digitalWrite(v.in1, LOW);
-    digitalWrite(v.in2, HIGH);
-    delay(VALVE_PULSE_MS);
-    digitalWrite(v.in1, LOW);
-    digitalWrite(v.in2, LOW);
+    if (idx < VALVES_ON_MCP) {
+        mcp.digitalWrite(v.in1, LOW);
+        mcp.digitalWrite(v.in2, HIGH);
+        delay(VALVE_PULSE_MS);
+        mcp.digitalWrite(v.in1, LOW);
+        mcp.digitalWrite(v.in2, LOW);
+    } else {
+        digitalWrite(v.in1, LOW);
+        digitalWrite(v.in2, HIGH);
+        delay(VALVE_PULSE_MS);
+        digitalWrite(v.in1, LOW);
+        digitalWrite(v.in2, LOW);
+    }
     disableDriverPower();
     v.isOpen = false;
     valveCloseCount[idx]++;
@@ -593,9 +617,9 @@ void setupWiFi() {
     #endif
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    bool txOk = WiFi.setTxPower(WIFI_TX_DBM);  // Reduce TX power: ~120mA vs ~380mA at default 19.5dBm
+    bool txOk = WiFi.setTxPower(WIFI_BOOT_TX_DBM);  // Boot at low TX to prevent brownout on buck converter
     int txRaw = (int)WiFi.getTxPower();
-    Serial.printf(" (TX power: %.1f dBm, raw=%d, setter=%s) [#6 diag]\n",
+    Serial.printf(" (boot TX: %.1f dBm, raw=%d, setter=%s) [low-boot strategy]\n",
                   txRaw / 4.0, txRaw, txOk ? "true" : "false");
     WiFi.setAutoReconnect(true);
     WiFi.persistent(true);
@@ -610,10 +634,10 @@ void setupWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
         WiFi.setSleep(false);  // Disable modem sleep — keeps radio always on so incoming
                                // TCP SYNs aren't missed. Costs ~20mA but prevents wedge.
-        // [#6 diag] Re-attempt setTxPower now that STA is fully associated, and verify
+        // Bump TX power to full now that WiFi is connected and power has stabilized
         bool txOk2 = WiFi.setTxPower(WIFI_TX_DBM);
         int txRaw2 = (int)WiFi.getTxPower();
-        Serial.printf("  [#6 diag] post-connect TX: %.1f dBm, raw=%d, setter=%s\n",
+        Serial.printf("  [TX bump] post-connect TX: %.1f dBm, raw=%d, setter=%s\n",
                       txRaw2 / 4.0, txRaw2, txOk2 ? "true" : "false");
         Serial.println();
         Serial.println("========================================");
@@ -698,9 +722,28 @@ void setup() {
     analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);  // 0-3.3V range
     cachedBatteryV = readBatteryVoltage();  // Prime cache for first /api/status
 
-    // Initialize valve pins
-    Serial.println("[INIT] Configuring GPIO pins...");
-    for (int i = 0; i < NUM_VALVES; i++) {
+    // Initialize MCP23017 I/O expander for valve control
+    Serial.println("[INIT] Initializing MCP23017 I/O expander...");
+    Wire.begin(MCP_SDA_PIN, MCP_SCL_PIN);
+    if (!mcp.begin_I2C(MCP23017_ADDR, &Wire)) {
+        Serial.println("[INIT] ERROR: MCP23017 not found! Valve control will fail.");
+        logEvent("error", "MCP23017 not found");
+    } else {
+        Serial.printf("[INIT] MCP23017 found at 0x%02X\n", MCP23017_ADDR);
+    }
+
+    // Configure all MCP23017 pins as outputs for valve control
+    Serial.println("[INIT] Configuring MCP23017 pins...");
+    for (int i = 0; i < VALVES_ON_MCP; i++) {
+        mcp.pinMode(valves[i].in1, OUTPUT);
+        mcp.pinMode(valves[i].in2, OUTPUT);
+        mcp.digitalWrite(valves[i].in1, LOW);
+        mcp.digitalWrite(valves[i].in2, LOW);
+    }
+
+    // Configure ESP32 GPIO pins for valves beyond the MCP23017
+    Serial.println("[INIT] Configuring ESP32 GPIO pins for valves 9-10...");
+    for (int i = VALVES_ON_MCP; i < NUM_VALVES; i++) {
         pinMode(valves[i].in1, OUTPUT);
         pinMode(valves[i].in2, OUTPUT);
         digitalWrite(valves[i].in1, LOW);

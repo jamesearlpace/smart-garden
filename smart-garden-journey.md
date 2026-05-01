@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** 🟡 **CHIP STABLE on master firmware (boot 1400+, on desk near router, USB unplugged for normal operation but currently plugged for diagnostics).** Wedge bug [#5](https://github.com/jamesearlpace/smart-garden/issues/5) confirmed reproducible at production cadence (5/7 fail in 30-min soak today). **ESPAsyncWebServer migration TESTED AND RULED OUT** — same SYN→RST(win=0) signature on both libraries. Bug is below app layer (lwIP / WiFi driver). Branch `feature/async-webserver` (commit `f943a95`) preserved. New TX-power telemetry collecting boot-variance data for [#6](https://github.com/jamesearlpace/smart-garden/issues/6).
-**Last Updated:** 2026-04-27 19:30
+**Status:** � **NEW ESP32U + MCP23017 expansion board deployed.** 10 valve zones (8 on MCP23017, 2 on ESP32 GPIO). External antenna (RSSI -36 to -42 dBm). Low-boot TX strategy (8.5 dBm boot, 19.5 dBm post-connect) fixes buck converter brownout on battery-only cold boot. Decoupling caps installed (1000µF + 100nF on 3.3V, 1000µF on buck output). Running on battery+charger through buck converter, USB unplugged.
+**Last Updated:** 2026-05-01
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -21,7 +21,7 @@ SSH: `jamesearlpace@192.168.0.109` password `KeepingP@ce8!` (key auth configured
 # Status
 ssh jamesearlpace@192.168.0.109 "curl -s http://192.168.0.150/api/status"
 
-# Open / close valve (id=0..6, zero-indexed)
+# Open / close valve (id=0..9, zero-indexed)
 ssh jamesearlpace@192.168.0.109 "curl -s -X POST 'http://192.168.0.150/api/valve?id=0&action=open'"
 ssh jamesearlpace@192.168.0.109 "curl -s -X POST 'http://192.168.0.150/api/valve?id=0&action=close'"
 
@@ -43,8 +43,8 @@ ssh jamesearlpace@192.168.0.109 "sudo systemctl restart smart-garden-server.serv
 ### Flash firmware (USB only — OTA disabled)
 ```powershell
 cd C:\MyCode\smart-garden
-pio run -e esp32 --target upload --upload-port COM3
-pio device monitor --baud 115200
+pio run -e esp32 --target upload --upload-port COM5
+pio device monitor --baud 115200 --port COM5
 ```
 
 ---
@@ -54,13 +54,17 @@ pio device monitor --baud 115200
 ### Hardware
 | Component | Model | Notes |
 |-----------|-------|-------|
-| MCU | HiLetgo ESP-WROOM-32 | MAC `f4:2d:c9:6b:f7:78`, static IP 192.168.0.150 |
+| MCU | ESP32-WROOM-32U | External antenna, MAC `68:FE:71:0C:BA:98`, static IP 192.168.0.150 |
+| I/O Expander | Waveshare MCP23017 | I2C addr 0x27, valves 1-8 on PA0-PB7 |
+| Antenna | 2.4 GHz 5dBi external | U.FL/IPEX connector on 32U |
 | Solar | ECO-WORTHY 10W 12V | ~1.6 Ah/day in Duvall WA |
 | Charge ctrl | Renogy Wanderer Li 10A | Battery + load output. **Brownout source.** |
 | Battery | ExpertPower 12V 7Ah SLA | |
-| Buck | LM2596 | 12V → 5V to ESP32 VIN |
-| H-bridge | L298N × 5 | 2 valves per board, 10 valves max |
+| Buck | LM2596 | 12V → 5V to ESP32 VIN. 1000µF cap on output. |
+| Power gate | IRF4905 P-FET + 2N3904 NPN | GPIO 2 controls 12V to L298N boards |
+| H-bridge | L298N × 5 | 2 valves per board, 10 valves total |
 | Valves | Orbit 57861 DC latching | Pulse open, reverse pulse close |
+| Caps | 1000µF + 100nF on 3.3V rail | Brownout protection for WiFi TX spikes |
 | Server | Acer Aspire A314-23P | Linux Mint 22.1, 192.168.0.109 |
 
 ### Network
@@ -107,16 +111,15 @@ The Wanderer load output sags voltage during high-current bursts. **Affects ever
 - `ESP.restart()` via `/api/reboot` → bricks chip
 - Suspected: simultaneous valve pulses, WiFi reconnect storms
 
-**Mitigation in firmware** (already deployed, `7ba2262`):
-- `WIFI_TX_DBM = WIFI_POWER_19_5dBm` (was throttled to 8.5)
+**Mitigation in firmware** (deployed 2026-05-01):
+- Low-boot TX: `WIFI_BOOT_TX_DBM = WIFI_POWER_8_5dBm` during connect, bumps to `WIFI_TX_DBM = WIFI_POWER_19_5dBm` after WiFi established
 - ArduinoOTA wrapped in `#ifdef ENABLE_OTA` (default OFF)
 - Close-all valves only on clean boot, not crash reboots
 - Deep sleep 10 min after 10 consecutive crashes (battery protection)
-
-**Mitigation in server** (deployed `a89dc35`):
-- `/api/reboot` returns HTTP 503 unless `SMART_GARDEN_REBOOT_ENABLED=1` env var is set
+- Decoupling caps: 1000µF + 100nF on 3.3V rail, 1000µF on buck output
 
 **Real fix (not yet done):** 1000µF + 100nF decoupling cap on 3.3V rail. See GitHub issue #2.
+**UPDATE 2026-05-01:** Caps installed ✅. Low-boot TX strategy also deployed — ESP32U boots clean on battery-only power now.
 
 ### Verification playbook — confirm "still healthy"
 

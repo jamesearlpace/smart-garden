@@ -40,28 +40,38 @@ const char* MQTT_PASS     = "";
 #define DHT_PIN        4
 #define DHT_TYPE       DHT22
 
-// L298N H-Bridge control pins (2 GPIOs per valve)
-// Board 1: Valves 1 & 2
-#define VALVE1_IN1     25
-#define VALVE1_IN2     26
-#define VALVE2_IN1     27
-#define VALVE2_IN2     14
+// L298N H-Bridge control pins — ALL on MCP23017 I/O expander
+// Pin numbers are MCP23017 pin numbers (0-15): PA0-PA7 = 0-7, PB0-PB7 = 8-15
+// Board 1: Valves 1 & 2 (PA0-PA3)
+#define VALVE1_IN1     0   // PA0
+#define VALVE1_IN2     1   // PA1
+#define VALVE2_IN1     2   // PA2
+#define VALVE2_IN2     3   // PA3
 
-// Board 2: Valves 3 & 4
-#define VALVE3_IN1     16
-#define VALVE3_IN2     17
-#define VALVE4_IN1     18
-#define VALVE4_IN2     19
+// Board 2: Valves 3 & 4 (PA4-PA7)
+#define VALVE3_IN1     4   // PA4
+#define VALVE3_IN2     5   // PA5
+#define VALVE4_IN1     6   // PA6
+#define VALVE4_IN2     7   // PA7
 
-// Board 3: Valves 5 & 6
-#define VALVE5_IN1     21
-#define VALVE5_IN2     22
-#define VALVE6_IN1     23
-#define VALVE6_IN2     13
+// Board 3: Valves 5 & 6 (PB0-PB3)
+#define VALVE5_IN1     8   // PB0
+#define VALVE5_IN2     9   // PB1
+#define VALVE6_IN1     10  // PB2
+#define VALVE6_IN2     11  // PB3
 
-// Board 4: Valve 7
-#define VALVE7_IN1     5
-#define VALVE7_IN2     15
+// Board 4: Valves 7 & 8 (PB4-PB7)
+#define VALVE7_IN1     12  // PB4
+#define VALVE7_IN2     13  // PB5
+#define VALVE8_IN1     14  // PB6
+#define VALVE8_IN2     15  // PB7
+
+// Board 5: Valves 9 & 10 — direct ESP32 GPIOs (MCP23017 full)
+#define VALVE9_IN1     25  // ESP32 GPIO 25
+#define VALVE9_IN2     26  // ESP32 GPIO 26
+#define VALVE10_IN1    27  // ESP32 GPIO 27
+#define VALVE10_IN2    14  // ESP32 GPIO 14
+#define VALVES_ON_MCP  8   // first 8 valves use MCP23017, rest use ESP32 GPIO
 
 // Power gate (P-FET via NPN level shifter): HIGH = L298Ns powered, LOW = idle.
 // GPIO 2 is also onboard LED -> visual indicator. Strapping pin defaults LOW
@@ -77,8 +87,13 @@ const char* MQTT_PASS     = "";
 // ============================================================
 // System Settings
 // ============================================================
-#define NUM_VALVES         7
+#define NUM_VALVES         10
 #define NUM_SOIL_SENSORS   4
+
+// MCP23017 I/O expander — valves 1-8 on expander, address 0x27
+#define MCP23017_ADDR      0x27
+#define MCP_SDA_PIN        21
+#define MCP_SCL_PIN        22
 #define VALVE_PULSE_MS     100   // How long to pulse the solenoid (ms)
 #define SENSOR_READ_INTERVAL_MS  60000  // Read sensors every 60 seconds
 #define WEB_SERVER_PORT    80
@@ -106,7 +121,8 @@ const char* MQTT_PASS     = "";
 #define RUN_CPU_MHZ           240   // CPU freq after WiFi connects (full speed)
 #define SAFE_MODE_THRESHOLD   20    // Consecutive crashes before entering safe mode (bumped from 5: TWDT now catches real hangs; safe mode shouldn't trip on transient brownouts)
 #define SAFE_MODE_DELAY_SEC   15    // Extra stabilization delay in safe mode
-#define WIFI_TX_DBM           WIFI_POWER_19_5dBm  // Default TX power. Was 8.5dBm (battery-era saving), but at -80 dBm RSSI from 5 ft we were getting WiFi reconnects + OTA failures. Wall power = no reason to throttle.
+#define WIFI_TX_DBM           WIFI_POWER_19_5dBm  // TX power after WiFi connects (full range for reliability)
+#define WIFI_BOOT_TX_DBM      WIFI_POWER_8_5dBm   // TX power during boot (low current to prevent brownout on buck converter)
 
 // ============================================================
 // Reliability — task watchdog + scheduled reboot

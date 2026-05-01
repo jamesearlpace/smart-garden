@@ -1,0 +1,464 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <!-- Component gradient -->
+    <linearGradient id="compGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="espGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0f2440"/>
+    </linearGradient>
+    <linearGradient id="mcpGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a3728"/>
+      <stop offset="100%" stop-color="#2e2218"/>
+    </linearGradient>
+    <linearGradient id="motorGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b2d4a"/>
+      <stop offset="100%" stop-color="#251c30"/>
+    </linearGradient>
+    <linearGradient id="valveGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a3a2a"/>
+      <stop offset="100%" stop-color="#0f2218"/>
+    </linearGradient>
+    <linearGradient id="powerGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a2828"/>
+      <stop offset="100%" stop-color="#301818"/>
+    </linearGradient>
+    <linearGradient id="sensorGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a3a3a"/>
+      <stop offset="100%" stop-color="#0f2222"/>
+    </linearGradient>
+    <linearGradient id="serverGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b2d5a"/>
+      <stop offset="100%" stop-color="#221a3a"/>
+    </linearGradient>
+    <!-- Arrowhead markers -->
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#10b981"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <style>
+    .label { fill: #e2e8f0; font-size: 10px; }
+    .label-sm { fill: #94a3b8; font-size: 8px; }
+    .label-title { fill: #f8fafc; font-size: 12px; font-weight: 600; }
+    .label-heading { fill: #f8fafc; font-size: 14px; font-weight: 700; }
+    .pin-label { fill: #cbd5e1; font-size: 7px; }
+    .wire-signal { stroke: #3b82f6; stroke-width: 1.5; fill: none; }
+    .wire-power { stroke: #ef4444; stroke-width: 2; fill: none; stroke-dasharray: 6,3; }
+    .wire-sensor { stroke: #10b981; stroke-width: 1.5; fill: none; }
+    .wire-wifi { stroke: #8b5cf6; stroke-width: 1.5; fill: none; stroke-dasharray: 4,4; }
+    .wire-i2c { stroke: #f59e0b; stroke-width: 2; fill: none; }
+    .wire-gate { stroke: #f97316; stroke-width: 1.5; fill: none; }
+    .comp-box { stroke: #475569; stroke-width: 1.5; rx: 6; ry: 6; }
+    .comp-box:hover { stroke: #94a3b8; stroke-width: 2; }
+  </style>
+
+  <!-- Background -->
+  <rect width="1100" height="900" fill="#0f172a"/>
+
+  <!-- ═══════════════════ LEGEND ═══════════════════ -->
+  <rect x="20" y="12" width="460" height="32" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  <text x="30" y="33" class="label-sm" font-weight="600" fill="#f8fafc">LEGEND:</text>
+  <!-- Signal -->
+  <line x1="90" y1="28" x2="120" y2="28" class="wire-signal"/>
+  <text x="124" y="32" class="label-sm">Signal</text>
+  <!-- Power -->
+  <line x1="168" y1="28" x2="198" y2="28" class="wire-power"/>
+  <text x="202" y="32" class="label-sm">12V Power</text>
+  <!-- I2C -->
+  <line x1="262" y1="28" x2="292" y2="28" class="wire-i2c"/>
+  <text x="296" y="32" class="label-sm">I2C Bus</text>
+  <!-- Sensor -->
+  <line x1="340" y1="28" x2="370" y2="28" class="wire-sensor"/>
+  <text x="374" y="32" class="label-sm">Sensor</text>
+  <!-- WiFi -->
+  <line x1="418" y1="28" x2="448" y2="28" class="wire-wifi"/>
+  <text x="452" y="32" class="label-sm">WiFi</text>
+
+  <!-- Title -->
+  <text x="750" y="33" class="label-heading" text-anchor="middle" fill="#94a3b8">Smart Garden — Wiring Diagram v2 (MCP23017)</text>
+
+  <!-- ═══════════════════ POWER CHAIN (top row) ═══════════════════ -->
+
+  <!-- Solar Panel -->
+  <g>
+    <title>Solar Panel — Feeds charge controller via MC4 connectors</title>
+    <rect x="30" y="65" width="110" height="50" class="comp-box" fill="url(#powerGrad)"/>
+    <text x="85" y="86" class="label-title" text-anchor="middle">☀ Solar Panel</text>
+    <text x="85" y="100" class="label-sm" text-anchor="middle">→ Charge Ctrl</text>
+  </g>
+
+  <!-- Charge Controller -->
+  <g>
+    <title>Wanderer 10A PWM Charge Controller — Manages battery charging from solar, provides 12V output</title>
+    <rect x="180" y="65" width="140" height="50" class="comp-box" fill="url(#powerGrad)"/>
+    <text x="250" y="84" class="label-title" text-anchor="middle">Charge Controller</text>
+    <text x="250" y="100" class="label-sm" text-anchor="middle">Wanderer 10A PWM</text>
+  </g>
+
+  <!-- Battery -->
+  <g>
+    <title>12V 7Ah SLA Battery — Main power source, charged by solar via controller</title>
+    <rect x="180" y="130" width="140" height="42" class="comp-box" fill="url(#powerGrad)"/>
+    <text x="250" y="148" class="label-title" text-anchor="middle">🔋 Battery</text>
+    <text x="250" y="162" class="label-sm" text-anchor="middle">12V 7Ah SLA</text>
+  </g>
+
+  <!-- Solar → Charge Controller -->
+  <line x1="140" y1="90" x2="180" y2="90" class="wire-power" marker-end="url(#arrowRed)"/>
+
+  <!-- Battery ↔ Charge Controller -->
+  <line x1="250" y1="130" x2="250" y2="115" class="wire-power"/>
+
+  <!-- Buck Converter -->
+  <g>
+    <title>LM2596 Buck Converter — Steps 12V down to 5V for ESP32. 1000µF cap on output.</title>
+    <rect x="360" y="65" width="130" height="50" class="comp-box" fill="url(#powerGrad)"/>
+    <text x="425" y="84" class="label-title" text-anchor="middle">Buck Converter</text>
+    <text x="425" y="100" class="label-sm" text-anchor="middle">LM2596 12V→5V</text>
+  </g>
+
+  <!-- 1000µF cap symbol on buck output -->
+  <g>
+    <title>1000µF electrolytic capacitor — Smooths 5V output from buck converter</title>
+    <rect x="495" y="72" width="38" height="20" rx="3" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+    <text x="514" y="86" class="pin-label" text-anchor="middle">1000µF</text>
+  </g>
+
+  <!-- Charge Controller → Buck -->
+  <line x1="320" y1="90" x2="360" y2="90" class="wire-power" marker-end="url(#arrowRed)"/>
+
+  <!-- ═══════════════════ ESP32 (center-left) ═══════════════════ -->
+  <g>
+    <title>ESP32-WROOM-32U — Main microcontroller. External antenna. Runs irrigation logic, sensor polling, WiFi server.</title>
+    <rect x="365" y="140" width="190" height="210" class="comp-box" fill="url(#espGrad)"/>
+    <text x="460" y="162" class="label-heading" text-anchor="middle">ESP32-WROOM-32U</text>
+    <text x="460" y="178" class="label-sm" text-anchor="middle">External Antenna</text>
+
+    <!-- Pin labels - left side -->
+    <text x="372" y="200" class="pin-label" text-anchor="start">GPIO 21 (SDA)</text>
+    <text x="372" y="214" class="pin-label" text-anchor="start">GPIO 22 (SCL)</text>
+    <text x="372" y="232" class="pin-label" text-anchor="start">GPIO 25</text>
+    <text x="372" y="246" class="pin-label" text-anchor="start">GPIO 26</text>
+    <text x="372" y="260" class="pin-label" text-anchor="start">GPIO 27</text>
+    <text x="372" y="274" class="pin-label" text-anchor="start">GPIO 14</text>
+
+    <!-- Pin labels - right side -->
+    <text x="548" y="200" class="pin-label" text-anchor="end">GPIO 2 (MOSFET)</text>
+    <text x="548" y="218" class="pin-label" text-anchor="end">GPIO 4 (DHT22)</text>
+    <text x="548" y="236" class="pin-label" text-anchor="end">GPIO 32-35 (Soil)</text>
+    <text x="548" y="254" class="pin-label" text-anchor="end">GPIO 36 (Batt V)</text>
+
+    <!-- 3.3V caps -->
+    <text x="460" y="336" class="pin-label" text-anchor="middle">3.3V rail: 1000µF + 100nF caps</text>
+  </g>
+
+  <!-- Buck → ESP32 5V -->
+  <path d="M425,115 L425,140" class="wire-power" marker-end="url(#arrowRed)"/>
+  <text x="432" y="132" class="pin-label">5V</text>
+
+  <!-- ═══════════════════ MCP23017 I/O EXPANDER ═══════════════════ -->
+  <g>
+    <title>Waveshare MCP23017 I/O Expander — I2C address 0x27. 16 GPIO pins drive L298N boards 1-4 for valves 1-8. Pull-ups on SDA/SCL.</title>
+    <rect x="100" y="220" width="200" height="200" class="comp-box" fill="url(#mcpGrad)"/>
+    <text x="200" y="244" class="label-heading" text-anchor="middle">MCP23017</text>
+    <text x="200" y="260" class="label-sm" text-anchor="middle">Waveshare I2C I/O Expander</text>
+    <text x="200" y="274" class="label-sm" text-anchor="middle">Addr: 0x27</text>
+
+    <!-- Port A pins -->
+    <text x="108" y="296" class="pin-label" text-anchor="start">PA0/PA1 → Bd1 ChA</text>
+    <text x="108" y="310" class="pin-label" text-anchor="start">PA2/PA3 → Bd1 ChB</text>
+    <text x="108" y="324" class="pin-label" text-anchor="start">PA4/PA5 → Bd2 ChA</text>
+    <text x="108" y="338" class="pin-label" text-anchor="start">PA6/PA7 → Bd2 ChB</text>
+
+    <!-- Port B pins -->
+    <text x="108" y="358" class="pin-label" text-anchor="start">PB0/PB1 → Bd3 ChA</text>
+    <text x="108" y="372" class="pin-label" text-anchor="start">PB2/PB3 → Bd3 ChB</text>
+    <text x="108" y="386" class="pin-label" text-anchor="start">PB4/PB5 → Bd4 ChA</text>
+    <text x="108" y="400" class="pin-label" text-anchor="start">PB6/PB7 → Bd4 ChB</text>
+
+    <!-- I2C labels -->
+    <text x="292" y="296" class="pin-label" text-anchor="end">SDA</text>
+    <text x="292" y="310" class="pin-label" text-anchor="end">SCL</text>
+  </g>
+
+  <!-- I2C wires: ESP32 → MCP23017 -->
+  <path d="M365,197 L310,197 L310,292 L300,292" class="wire-i2c" marker-end="url(#arrowAmber)"/>
+  <text x="330" y="193" class="pin-label" fill="#f59e0b">SDA</text>
+
+  <path d="M365,211 L320,211 L320,306 L300,306" class="wire-i2c" marker-end="url(#arrowAmber)"/>
+  <text x="330" y="208" class="pin-label" fill="#f59e0b">SCL</text>
+
+  <!-- ═══════════════════ POWER GATE (MOSFET) ═══════════════════ -->
+  <g>
+    <title>MOSFET Power Gate — IRF4905 P-channel FET switched by 2N3904 NPN transistor. GPIO 2 controls 12V power to all L298N motor drivers. 1kΩ base resistor, 10kΩ gate pull-up.</title>
+    <rect x="600" y="115" width="160" height="90" class="comp-box" fill="url(#compGrad)"/>
+    <text x="680" y="137" class="label-title" text-anchor="middle">Power Gate</text>
+    <text x="680" y="153" class="label-sm" text-anchor="middle">IRF4905 + 2N3904</text>
+    <text x="680" y="167" class="label-sm" text-anchor="middle">1kΩ base, 10kΩ pull-up</text>
+    <text x="680" y="181" class="label-sm" text-anchor="middle">GPIO 2 → 12V switched</text>
+    <text x="680" y="195" class="pin-label" text-anchor="middle">Source: 12V | Drain: L298N 12V</text>
+  </g>
+
+  <!-- ESP32 GPIO 2 → Power Gate -->
+  <path d="M555,197 L600,197 L600,170" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="568" y="193" class="pin-label" fill="#3b82f6">GPIO 2</text>
+
+  <!-- Battery → Power Gate Source (12V in) -->
+  <path d="M320,151 L340,151 L340,120 L600,120" class="wire-power" marker-end="url(#arrowRed)"/>
+  <text x="480" y="116" class="pin-label" fill="#ef4444">12V from battery</text>
+
+  <!-- ═══════════════════ L298N BOARDS 1-4 (valve control via MCP23017) ═══════════════════ -->
+
+  <!-- L298N Board 1 -->
+  <g>
+    <title>L298N Motor Driver Board 1 — Ch A: Valve 1 (Garden drip), Ch B: Valve 2 (Grapes drip). Controlled via MCP23017 PA0-PA3.</title>
+    <rect x="30" y="460" width="130" height="62" class="comp-box" fill="url(#motorGrad)"/>
+    <text x="95" y="480" class="label-title" text-anchor="middle">L298N Board 1</text>
+    <text x="95" y="494" class="label-sm" text-anchor="middle">ChA: V1 Garden drip</text>
+    <text x="95" y="506" class="label-sm" text-anchor="middle">ChB: V2 Grapes drip</text>
+  </g>
+
+  <!-- L298N Board 2 -->
+  <g>
+    <title>L298N Motor Driver Board 2 — Ch A: Valve 3 (Fruit Trees), Ch B: Valve 4 (South Lawn). Controlled via MCP23017 PA4-PA7.</title>
+    <rect x="180" y="460" width="130" height="62" class="comp-box" fill="url(#motorGrad)"/>
+    <text x="245" y="480" class="label-title" text-anchor="middle">L298N Board 2</text>
+    <text x="245" y="494" class="label-sm" text-anchor="middle">ChA: V3 Fruit Trees</text>
+    <text x="245" y="506" class="label-sm" text-anchor="middle">ChB: V4 South Lawn</text>
+  </g>
+
+  <!-- L298N Board 3 -->
+  <g>
+    <title>L298N Motor Driver Board 3 — Ch A: Valve 5 (East Lawn), Ch B: Valve 6 (West/NW Lawn). Controlled via MCP23017 PB0-PB3.</title>
+    <rect x="330" y="460" width="140" height="62" class="comp-box" fill="url(#motorGrad)"/>
+    <text x="400" y="480" class="label-title" text-anchor="middle">L298N Board 3</text>
+    <text x="400" y="494" class="label-sm" text-anchor="middle">ChA: V5 East Lawn</text>
+    <text x="400" y="506" class="label-sm" text-anchor="middle">ChB: V6 W/NW Lawn</text>
+  </g>
+
+  <!-- L298N Board 4 -->
+  <g>
+    <title>L298N Motor Driver Board 4 — Ch A: Valve 7 (NE Lawn), Ch B: Valve 8 (Peonies drip). Controlled via MCP23017 PB4-PB7.</title>
+    <rect x="490" y="460" width="130" height="62" class="comp-box" fill="url(#motorGrad)"/>
+    <text x="555" y="480" class="label-title" text-anchor="middle">L298N Board 4</text>
+    <text x="555" y="494" class="label-sm" text-anchor="middle">ChA: V7 NE Lawn</text>
+    <text x="555" y="506" class="label-sm" text-anchor="middle">ChB: V8 Peonies drip</text>
+  </g>
+
+  <!-- L298N Board 5 (direct GPIO) -->
+  <g>
+    <title>L298N Motor Driver Board 5 — Ch A: Valve 9, Ch B: Valve 10. Controlled DIRECTLY from ESP32 GPIO 25/26/27/14 (no MCP23017).</title>
+    <rect x="650" y="460" width="130" height="62" class="comp-box" fill="url(#motorGrad)"/>
+    <text x="715" y="480" class="label-title" text-anchor="middle">L298N Board 5</text>
+    <text x="715" y="494" class="label-sm" text-anchor="middle">ChA: V9 (GPIO 25,26)</text>
+    <text x="715" y="506" class="label-sm" text-anchor="middle">ChB: V10 (GPIO 27,14)</text>
+  </g>
+
+  <!-- MCP23017 → L298N Boards 1-4 (signal wires) -->
+  <!-- PA0/PA1 → Board 1 -->
+  <path d="M108,296 L70,296 L70,440 L70,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="54" y="380" class="pin-label" fill="#3b82f6" transform="rotate(-90,54,380)">PA0-3</text>
+
+  <!-- PA4/PA5 → Board 2 (already close) -->
+  <path d="M108,324 L80,324 L80,440 L220,440 L220,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="148" y="436" class="pin-label" fill="#3b82f6">PA4-7</text>
+
+  <!-- PB0/PB1 → Board 3 -->
+  <path d="M108,358 L90,358 L90,445 L370,445 L370,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="230" y="452" class="pin-label" fill="#3b82f6">PB0-3</text>
+
+  <!-- PB4/PB5 → Board 4 -->
+  <path d="M108,386 L95,386 L95,450 L525,450 L525,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="310" y="455" class="pin-label" fill="#3b82f6">PB4-7</text>
+
+  <!-- ESP32 GPIO 25,26 → Board 5 ChA -->
+  <path d="M365,229 L350,229 L350,430 L685,430 L685,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="520" y="426" class="pin-label" fill="#3b82f6">GPIO 25,26</text>
+
+  <!-- ESP32 GPIO 27,14 → Board 5 ChB -->
+  <path d="M365,257 L345,257 L345,435 L740,435 L740,460" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <text x="548" y="440" class="pin-label" fill="#3b82f6">GPIO 27,14</text>
+
+  <!-- Power Gate Drain → All L298N 12V -->
+  <path d="M680,205 L680,225 L400,225 L400,250 L95,250 L95,255" class="wire-power"/>
+  <!-- Horizontal bus bar at y=255 powering all L298N boards -->
+  <line x1="60" y1="255" x2="750" y2="255" stroke="#ef4444" stroke-width="2.5" stroke-dasharray="8,3" opacity="0.5"/>
+  <text x="405" y="250" class="pin-label" fill="#ef4444" text-anchor="middle">12V switched bus → all L298N boards</text>
+
+  <!-- Vertical drops from 12V bus to each L298N -->
+  <line x1="95" y1="255" x2="95" y2="460" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+  <line x1="245" y1="255" x2="245" y2="460" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+  <line x1="400" y1="255" x2="400" y2="460" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+  <line x1="555" y1="255" x2="555" y2="460" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+  <line x1="715" y1="255" x2="715" y2="460" stroke="#ef4444" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+
+  <!-- ═══════════════════ VALVE BOXES ═══════════════════ -->
+
+  <!-- Valve Box 1 (East side, zones 1-4) -->
+  <g>
+    <title>Valve Box 1 (East Side) — Contains valves 1-4: Garden drip, Grapes drip, Fruit Trees, South Lawn. Fed by L298N boards 1-2.</title>
+    <rect x="50" y="555" width="280" height="80" class="comp-box" fill="url(#valveGrad)"/>
+    <text x="190" y="575" class="label-title" text-anchor="middle">🌿 Valve Box 1 — East Side</text>
+    <text x="100" y="596" class="label-sm">V1: Garden drip</text>
+    <text x="100" y="610" class="label-sm">V2: Grapes drip</text>
+    <text x="230" y="596" class="label-sm">V3: Fruit Trees</text>
+    <text x="230" y="610" class="label-sm">V4: South Lawn</text>
+  </g>
+
+  <!-- Valve Box 2 (SE corner, zones 5-8) -->
+  <g>
+    <title>Valve Box 2 (Southeast Corner) — Contains valves 5-8: East Lawn, West/NW Lawn, NE Lawn, Peonies drip. Fed by L298N boards 3-4.</title>
+    <rect x="370" y="555" width="280" height="80" class="comp-box" fill="url(#valveGrad)"/>
+    <text x="510" y="575" class="label-title" text-anchor="middle">🌿 Valve Box 2 — SE Corner</text>
+    <text x="380" y="596" class="label-sm">V5: East Lawn</text>
+    <text x="380" y="610" class="label-sm">V6: W/NW Lawn</text>
+    <text x="530" y="596" class="label-sm">V7: NE Lawn</text>
+    <text x="530" y="610" class="label-sm">V8: Peonies drip</text>
+  </g>
+
+  <!-- Zones 9-10 -->
+  <g>
+    <title>Zones 9-10 — Direct ESP32 GPIO control via L298N Board 5. Not in a valve box.</title>
+    <rect x="690" y="555" width="116" height="80" class="comp-box" fill="url(#valveGrad)"/>
+    <text x="748" y="575" class="label-title" text-anchor="middle">🌿 Zones 9-10</text>
+    <text x="700" y="596" class="label-sm">V9</text>
+    <text x="700" y="610" class="label-sm">V10</text>
+  </g>
+
+  <!-- L298N Boards → Valve Boxes -->
+  <line x1="95" y1="522" x2="120" y2="555" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <line x1="245" y1="522" x2="230" y2="555" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <line x1="400" y1="522" x2="440" y2="555" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <line x1="555" y1="522" x2="550" y2="555" class="wire-signal" marker-end="url(#arrowBlue)"/>
+  <line x1="715" y1="522" x2="748" y2="555" class="wire-signal" marker-end="url(#arrowBlue)"/>
+
+  <!-- ═══════════════════ SENSORS (right side) ═══════════════════ -->
+
+  <!-- DHT22 -->
+  <g>
+    <title>DHT22 Temperature &amp; Humidity Sensor — Connected to GPIO 4. Provides ambient readings for irrigation decisions.</title>
+    <rect x="600" y="270" width="120" height="45" class="comp-box" fill="url(#sensorGrad)"/>
+    <text x="660" y="290" class="label-title" text-anchor="middle">🌡 DHT22</text>
+    <text x="660" y="304" class="label-sm" text-anchor="middle">Temp / Humidity</text>
+  </g>
+
+  <!-- ESP32 GPIO 4 → DHT22 -->
+  <path d="M555,215 L580,215 L580,290 L600,290" class="wire-sensor" marker-end="url(#arrowGreen)"/>
+  <text x="586" y="260" class="pin-label" fill="#10b981">GPIO 4</text>
+
+  <!-- Soil Sensors 1-4 -->
+  <g>
+    <title>Capacitive Soil Moisture Sensors 1-4 — Connected to GPIO 32-35 (ADC). Measure volumetric water content in each zone.</title>
+    <rect x="600" y="330" width="120" height="55" class="comp-box" fill="url(#sensorGrad)"/>
+    <text x="660" y="350" class="label-title" text-anchor="middle">💧 Soil Sensors</text>
+    <text x="660" y="364" class="label-sm" text-anchor="middle">x4 Capacitive</text>
+    <text x="660" y="376" class="label-sm" text-anchor="middle">GPIO 32-35 (ADC)</text>
+  </g>
+
+  <!-- ESP32 GPIO 32-35 → Soil Sensors -->
+  <path d="M555,233 L590,233 L590,355 L600,355" class="wire-sensor" marker-end="url(#arrowGreen)"/>
+  <text x="594" y="320" class="pin-label" fill="#10b981">GPIO 32-35</text>
+
+  <!-- Battery Voltage Divider -->
+  <g>
+    <title>Battery Voltage Divider (6:1) — Scales 12V battery voltage to ~2V for ESP32 ADC on GPIO 36 (SVP). Monitors battery health.</title>
+    <rect x="600" y="400" width="120" height="45" class="comp-box" fill="url(#sensorGrad)"/>
+    <text x="660" y="418" class="label-title" text-anchor="middle">⚡ Batt Monitor</text>
+    <text x="660" y="434" class="label-sm" text-anchor="middle">6:1 divider → GPIO 36</text>
+  </g>
+
+  <!-- ESP32 GPIO 36 → Battery divider -->
+  <path d="M555,251 L575,251 L575,420 L600,420" class="wire-sensor" marker-end="url(#arrowGreen)"/>
+  <text x="580" y="395" class="pin-label" fill="#10b981">GPIO 36</text>
+
+  <!-- ═══════════════════ SERVER (WiFi) ═══════════════════ -->
+  <g>
+    <title>Acer Home Server — Runs smart-garden-server (Flask) at 192.168.0.109:5125. Schedules irrigation, collects sensor data, serves web UI.</title>
+    <rect x="850" y="140" width="210" height="75" class="comp-box" fill="url(#serverGrad)"/>
+    <text x="955" y="165" class="label-heading" text-anchor="middle">🖥 Home Server</text>
+    <text x="955" y="183" class="label-sm" text-anchor="middle">Acer · 192.168.0.109:5125</text>
+    <text x="955" y="197" class="label-sm" text-anchor="middle">smart-garden-server (Flask)</text>
+  </g>
+
+  <!-- WiFi ESP32 ↔ Server -->
+  <path d="M555,180 L605,180 L605,155 L775,155 L775,177 L850,177" class="wire-wifi" marker-end="url(#arrowPurple)"/>
+  <text x="780" y="148" class="label-sm" fill="#8b5cf6">📶 WiFi</text>
+
+  <!-- ═══════════════════ ARCHITECTURE ANNOTATION BOX ═══════════════════ -->
+  <g>
+    <title>Architecture overview — I2C expander handles valves 1-8, direct GPIO handles valves 9-10</title>
+    <rect x="830" y="260" width="250" height="200" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="955" y="284" class="label-title" text-anchor="middle" fill="#94a3b8">Architecture Notes</text>
+    <line x1="845" y1="292" x2="1065" y2="292" stroke="#334155" stroke-width="1"/>
+    <text x="845" y="312" class="label-sm">• MCP23017 I2C expander (0x27)</text>
+    <text x="845" y="328" class="label-sm">  → 16 GPIOs for valves 1-8</text>
+    <text x="845" y="344" class="label-sm">  → PA0-7: Boards 1-2</text>
+    <text x="845" y="360" class="label-sm">  → PB0-7: Boards 3-4</text>
+    <text x="845" y="380" class="label-sm">• ESP32 direct GPIO for V9-V10</text>
+    <text x="845" y="396" class="label-sm">  → GPIO 25,26,27,14 → Board 5</text>
+    <text x="845" y="416" class="label-sm">• MOSFET gate cuts 12V to all</text>
+    <text x="845" y="432" class="label-sm">  L298N boards when idle</text>
+    <text x="845" y="452" class="label-sm">• 10 zones, 5 driver boards</text>
+  </g>
+
+  <!-- ═══════════════════ ZONE MAP ═══════════════════ -->
+  <g>
+    <rect x="30" y="660" width="780" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="420" y="685" class="label-title" text-anchor="middle" fill="#94a3b8">Zone Map</text>
+    <line x1="45" y1="693" x2="795" y2="693" stroke="#334155" stroke-width="1"/>
+
+    <text x="45" y="713" class="label-sm" fill="#3b82f6">Via MCP23017 (I2C):</text>
+    <text x="45" y="728" class="label-sm">Z1: Garden drip  Z2: Grapes drip  Z3: Fruit Trees  Z4: South Lawn</text>
+    <text x="45" y="743" class="label-sm">Z5: East Lawn  Z6: W/NW Lawn  Z7: NE Lawn  Z8: Peonies drip</text>
+
+    <text x="530" y="713" class="label-sm" fill="#3b82f6">Via ESP32 GPIO (direct):</text>
+    <text x="530" y="728" class="label-sm">Z9: (Board 5 ChA)  Z10: (Board 5 ChB)</text>
+  </g>
+
+  <!-- ═══════════════════ WIRING SUMMARY TABLE ═══════════════════ -->
+  <g>
+    <rect x="830" y="490" width="250" height="270" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="955" y="514" class="label-title" text-anchor="middle" fill="#94a3b8">Pin Summary</text>
+    <line x1="845" y1="522" x2="1065" y2="522" stroke="#334155" stroke-width="1"/>
+
+    <text x="845" y="540" class="pin-label" fill="#f59e0b">I2C Bus</text>
+    <text x="845" y="553" class="label-sm">GPIO 21 → SDA (MCP23017)</text>
+    <text x="845" y="566" class="label-sm">GPIO 22 → SCL (MCP23017)</text>
+
+    <text x="845" y="586" class="pin-label" fill="#3b82f6">Direct Valve Control</text>
+    <text x="845" y="599" class="label-sm">GPIO 25,26 → Board 5 ChA (V9)</text>
+    <text x="845" y="612" class="label-sm">GPIO 27,14 → Board 5 ChB (V10)</text>
+
+    <text x="845" y="632" class="pin-label" fill="#f97316">Power Gate</text>
+    <text x="845" y="645" class="label-sm">GPIO 2 → 1kΩ → 2N3904 base</text>
+
+    <text x="845" y="665" class="pin-label" fill="#10b981">Sensors</text>
+    <text x="845" y="678" class="label-sm">GPIO 4 → DHT22</text>
+    <text x="845" y="691" class="label-sm">GPIO 32-35 → Soil (ADC)</text>
+    <text x="845" y="704" class="label-sm">GPIO 36 → Batt divider (ADC)</text>
+
+    <text x="845" y="724" class="pin-label" fill="#8b5cf6">Network</text>
+    <text x="845" y="737" class="label-sm">WiFi → 192.168.0.109:5125</text>
+    <text x="845" y="750" class="label-sm">External antenna attached</text>
+  </g>
+
+  <!-- ═══════════════════ FOOTER ═══════════════════ -->
+  <text x="550" y="788" class="label-sm" text-anchor="middle" fill="#475569">Smart Garden Wiring Diagram v2 — MCP23017 I/O Expander Architecture — May 2026</text>
+  <text x="550" y="802" class="pin-label" text-anchor="middle" fill="#334155">ESP32 → I2C → MCP23017 → L298N Boards 1-4 (Valves 1-8) | ESP32 → GPIO direct → L298N Board 5 (Valves 9-10)</text>
+
+</svg>

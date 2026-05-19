@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** � **NEW ESP32U + MCP23017 expansion board deployed.** 10 valve zones (8 on MCP23017, 2 on ESP32 GPIO). External antenna (RSSI -36 to -42 dBm). Low-boot TX strategy (8.5 dBm boot, 19.5 dBm post-connect) fixes buck converter brownout on battery-only cold boot. Decoupling caps installed (1000µF + 100nF on 3.3V, 1000µF on buck output). Running on battery+charger through buck converter, USB unplugged.
-**Last Updated:** 2026-05-01
+**Status:** ⚠️ **Firmware fix pending flash.** Two WiFi-recovery bugs fixed in `main.cpp` (AP-mode trap + deep-sleep crashCount lockout). Needs USB flash via `pio run -e esp32 --target upload`. Hardware running — ESP32 back online after manual EN reset (battery had sagged to 10.99V).
+**Last Updated:** 2026-05-18
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -365,6 +365,18 @@ Parts ordered: 10kΩ + 1kΩ resistors. **TO ORDER:** ~~IRF4905 P-FET, 2N3904 NPN
 
 ---
 
+## Physical Installation Plan & Parts Inventory
+
+**Full purchase history, fitting analysis, and shopping list** → [purchase-history.md](purchase-history.md)
+
+**Design:** 2 valve boxes, 9 valves total, 27 Rain Bird 42SA+ rotor heads, 2 drip zones. 1in poly trunk splits to two valve box manifolds. ¾in poly laterals to each zone. ½in swing pipe risers to rotors.
+
+**Water source:** 60 PSI, ~6 GPM at top of hill. No reducers needed for sprinkler zones. Pressure regulators on drip zones only.
+
+**Status (2026-05-01):** ~$106 of fittings/rotors/valves still needed before install. See shopping list at bottom of purchase-history.md.
+
+---
+
 ## Recently shipped (last 7 days)
 
 | Date | Change | Commit |
@@ -417,3 +429,35 @@ For older entries see [smart-garden-journey-archive.md](smart-garden-journey-arc
 - Server: `e53417a` deployed on Acer, service active
 - Soak script: `/tmp/sg-soak.sh` on Acer (one-shot, finished). Status helper: `c:\Temp\sg-status.sh` and `/tmp/sg-status.sh`
 - Temp probe helper: `c:\Temp\sg-temp-probe.sh` (rapid 10-sample test)
+
+---
+
+## 2026-05-18 — Battery death recovery: two firmware bugs found & fixed
+
+**Context:** ESP32 was offline — lights on but not on the network. Battery at 10.99V (near-empty for 12V SLA). Solar panel likely couldn't keep up during cloudy stretch, causing battery to sag below buck converter threshold. ESP32 lost power, then when battery recovered enough to boot, it came up but never reconnected to WiFi. Required manual EN button press to recover.
+
+**Diagnosis:**
+- Home server (Acer) reachable, `smart-garden-server.service` was already running
+- ESP32 at 192.168.0.150: 100% ping loss, MAC `68:FE:71:0C:BA:98` not found anywhere on /24 subnet
+- After manual EN reset: ESP32 booted, connected to WiFi, battery 10.99V, RSSI -64 dBm, crashCount 1
+
+**Root cause — two bugs preventing auto-recovery after battery death:**
+
+**Bug 1 — AP mode trap (WiFi watchdog):**
+When `setupWiFi()` fails after 40 attempts (20s), it switches to `WIFI_AP` mode. The WiFi watchdog in `loop()` called `WiFi.disconnect()` + `WiFi.begin()` without switching back to `WIFI_STA`, so reconnect attempts silently failed because the radio was stuck in AP-only mode.
+
+**Fix:** WiFi watchdog now does `WiFi.disconnect(true)` → `WiFi.mode(WIFI_STA)` → re-applies static IP config → `WiFi.begin()`. This ensures STA mode is active regardless of what `setupWiFi()` left behind.
+
+**Bug 2 — Deep sleep crashCount lockout:**
+`crashCount` increments on every boot and only resets to 0 when WiFi connects. After `SAFE_MODE_THRESHOLD * 2` (40) boots without WiFi, the ESP32 enters 10-min deep sleep. On wake, crashCount is *even higher* (41, 42, ...), so it immediately deep sleeps again — **permanently locked out**. Physical reset doesn't help because NVS persists across resets.
+
+**Fix:** On deep sleep wake (`ESP_RST_DEEPSLEEP`), if crashCount ≥ threshold, cap it back to `SAFE_MODE_THRESHOLD` (20). This creates a sustainable retry pattern: try 20 times → sleep 10 min → try 20 more → sleep 10 min → ... until WiFi is available. No permanent lockout.
+
+**Changes (not yet flashed):**
+- `src/main.cpp`: WiFi watchdog — `WiFi.disconnect(true)`, `WiFi.mode(WIFI_STA)`, re-apply static IP before `WiFi.begin()`
+- `src/main.cpp`: Deep sleep recovery — cap crashCount on `ESP_RST_DEEPSLEEP` wake
+
+**Next steps:**
+- [ ] Flash firmware via USB: `cd C:\MyCode\smart-garden && pio run -e esp32 --target upload --upload-port COM5`
+- [ ] Monitor battery voltage — 10.99V is concerning, check solar panel positioning and Renogy charge controller LEDs
+- [ ] Consider adding a low-voltage cutoff (e.g., don't attempt WiFi below 11.0V, just deep sleep and wait for solar)

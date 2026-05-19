@@ -124,6 +124,23 @@ const char* MQTT_PASS     = "";
 #define WIFI_TX_DBM           WIFI_POWER_19_5dBm  // TX power after WiFi connects (full range for reliability)
 #define WIFI_BOOT_TX_DBM      WIFI_POWER_8_5dBm   // TX power during boot (low current to prevent brownout on buck converter)
 
+// Adaptive TX power — lower TX when signal is strong, raise when weak.
+// Saves ~30-60 mA at low power vs max power. Checked every 30s in loop().
+// Hysteresis band prevents oscillation (must cross both thresholds to change).
+#define ADAPTIVE_TX_ENABLED       true
+#define ADAPTIVE_TX_INTERVAL_MS   30000              // How often to evaluate (30s)
+#define ADAPTIVE_TX_RSSI_STRONG   -50                // RSSI above this → step down TX
+#define ADAPTIVE_TX_RSSI_WEAK     -65                // RSSI below this → step up TX
+// Between -50 and -65 → hold current level (hysteresis dead zone)
+// Power ladder (low to high). ESP-IDF silently caps to regulatory max.
+#define ADAPTIVE_TX_LEVELS        4
+static const wifi_power_t ADAPTIVE_TX_LADDER[] = {
+    WIFI_POWER_8_5dBm,    // ~8.5 dBm  — minimal, fine at RSSI > -50
+    WIFI_POWER_13dBm,     // ~13 dBm
+    WIFI_POWER_17dBm,     // ~17 dBm
+    WIFI_POWER_19_5dBm,   // ~19.5 dBm — max, last resort
+};
+
 // ============================================================
 // Reliability — task watchdog + scheduled reboot
 // ============================================================

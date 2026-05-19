@@ -1,0 +1,249 @@
+location:
+  lat: 47.74
+  lon: -121.98
+  timezone: America/Los_Angeles
+esp32:
+  url: http://192.168.0.150
+  poll_interval_sec: 300
+  valve_timeout_sec: 3600
+  reboot_token: garden-reboot-9847
+watering_window:
+  start: 04:00
+  end: 07:00
+  evening_start: '20:00'
+  evening_end: '22:00'
+  evening_zones:
+  - 7
+  - 8
+sensors:
+  dht22: true
+  soil_0: true
+  soil_1: false
+  soil_2: false
+  soil_3: false
+zones:
+- id: 0
+  name: Front Yard A
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator  # MP3500 (adj) + MP3000-360 (full) mix
+  kc:
+  - 0.6
+  - 0.75
+  - 0.8
+  - 0.65
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 0
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 1
+  name: Front Yard B
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator
+  kc:
+  - 0.6
+  - 0.75
+  - 0.8
+  - 0.65
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 0
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 2
+  name: Enclosed Backyard A
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator
+  description: Fruit trees side of enclosed fence area
+  kc:
+  - 0.6
+  - 0.7
+  - 0.85
+  - 0.6
+  dry_trigger: 40
+  wet_target: 72
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 1
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 3
+  name: Enclosed Backyard B
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator
+  description: Garden side of enclosed fence area
+  kc:
+  - 0.6
+  - 0.7
+  - 0.85
+  - 0.6
+  dry_trigger: 40
+  wet_target: 72
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 1
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 4
+  name: Southeast
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator
+  description: Southeast area inside enclosed fence
+  kc:
+  - 0.6
+  - 0.75
+  - 0.8
+  - 0.65
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 2
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 5
+  name: South
+  type: sprinkler
+  installed: false
+  heads: 3
+  head_type: mp_rotator
+  description: South center area
+  kc:
+  - 0.6
+  - 0.75
+  - 0.8
+  - 0.65
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 3
+  est_gpm: 3.4
+  precip_rate_iph: 0.4
+- id: 6
+  name: Southwest
+  type: sprinkler
+  installed: false
+  heads: 4
+  head_type: mp_rotator
+  description: Southwest lawn area
+  kc:
+  - 0.6
+  - 0.75
+  - 0.8
+  - 0.65
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 1
+  est_gpm: 4.5
+  precip_rate_iph: 0.4
+- id: 7
+  name: Peonies (drip)
+  type: drip
+  installed: false
+  heads: 1
+  description: Peony planting bed
+  root_depth_in: 10
+  kc:
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.5
+  dry_trigger: 35
+  wet_target: 70
+  max_runtime_min: 45
+  cycle_soak: false
+  soil_sensor: 3
+  est_gpm: 0.5
+  precip_rate_iph: 0.4
+- id: 8
+  name: Garden (drip)
+  type: drip
+  installed: false
+  heads: 1
+  description: Vegetable garden
+  root_depth_in: 12
+  kc:
+  - 0.7
+  - 0.9
+  - 1.15
+  - 0.8
+  dry_trigger: 40
+  wet_target: 80
+  max_runtime_min: 60
+  cycle_soak: false
+  soil_sensor: 2
+  est_gpm: 0.5
+  precip_rate_iph: 0.4
+
+- id: 9
+  name: "Spare"
+  type: "sprinkler"
+  installed: false
+  heads: 0
+  description: "Spare zone (Board 5, Ch B) - not yet assigned"
+  root_depth_in: 6
+  kc: [0.6, 0.75, 0.8, 0.65]
+  dry_trigger: 45
+  wet_target: 75
+  max_runtime_min: 20
+  cycle_soak: false
+  soil_sensor: null
+  est_gpm: 0
+  precip_rate_iph: 0
+
+skip_rules:
+  rain_forecast_mm: 5.0
+  rain_probability_pct: 60
+  wind_speed_mph: 15.0
+  freeze_temp_f: 35.0
+  recent_rain_mm: 8.0
+billing:
+  cycle_start_day: 1
+  tiers:
+  - max_cf: 200
+    rate: 0.0
+  - max_cf: 400
+    rate: 5.1
+  - max_cf: 600
+    rate: 6.56
+  - max_cf: 800
+    rate: 8.03
+  - max_cf: 1000
+    rate: 9.48
+  - max_cf: 999999
+    rate: 10.97
+  base_fee: 34.26
+  sewer_flat: 91.18
+  storm_flat: 28.72
+weather_adjustment:
+  baseline_temp_f: 60.0
+  baseline_humidity_pct: 50.0
+  temp_factor: 4.0
+  rain_factor: -200.0
+  min_scale_pct: 0
+  max_scale_pct: 200
+soil:
+  awc_in_per_in: 0.15
+  default_root_depth_in: 6
+  default_mad_pct: 50
+dashboard:
+  port: 5125
+  host: 0.0.0.0
+  threads: 16

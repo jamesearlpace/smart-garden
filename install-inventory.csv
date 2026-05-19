@@ -1,0 +1,60 @@
+Category,Item,Description,Qty,Unit,Have,Need,Notes
+Valves,Orbit 57861 DC Latching Solenoid,24V AC replaced by DC latching — the ones you're already using,9,ea,5,4,README says 1 wired; need 9 more for all 10 zones (7 active + Peonies + spare)
+Valves,Valve Box - Standard (10in round),Underground box to house each valve,2,ea,0,2,One per active zone; group nearby zones to reduce boxes
+Valves,Valve Box - Jumbo (12×17in rectangular),Larger box if grouping 2-3 valves in a manifold,2,ea,2,0,Optional — replace round boxes where valves cluster
+Valve Manifold,¾in PVC Manifold Tee,Connects valves to main supply line,7,ea,0,7,One per valve; glue into manifold assembly
+Valve Manifold,¾in PVC Slip × FPT Adapter,Connects PVC manifold to valve inlet threads,7,ea,0,7,Orbit 57861 has ¾in FPT inlet/outlet
+Valve Manifold,¾in PVC Slip × MPT Adapter,Connects valve outlet to zone supply line,7,ea,0,7,Downstream side of each valve
+Water Source,¾in Brass Hose Bibb Adapter (FHT × MPT),Connects garden hose thread to PVC main line,1,ea,1,0,Or tap directly into existing supply line
+Water Source,¾in PVC Ball Valve,Manual main shutoff upstream of all zone valves,0,ea,,0,
+Water Source,¾in Backflow Preventer (Anti-Siphon or PVB),Code-required — prevents irrigation water from back-flowing into potable supply,1,ea,1,0,Check Duvall/King County code for required type
+Water Source,¾in Pressure Regulator (25-30 PSI),Required for drip zones; install on drip branch,1,ea,2,-1,Drip emitters rated for 25 PSI
+Water Source,¾in Inline Filter (150 mesh),Protects drip emitters from clogging,0,ea,,0,Install before drip manifold
+Main Line,¾in Schedule 40 PVC Pipe (10ft sticks),Main supply from water source to valve manifold(s),8,ea,0,8,~80ft estimated; adjust to your yard layout
+Main Line,¾in Schedule 40 PVC 90° Elbow,Direction changes in main line,8,ea,0,8,Estimate — depends on routing
+Main Line,¾in Schedule 40 PVC Tee,Branch points in main line,4,ea,0,4,Where main line splits to valve groups
+Main Line,PVC Primer (purple) 8oz,Cleans PVC before gluing,1,ea,0,1,
+Main Line,PVC Cement (clear/blue) 8oz,Solvent-weld PVC joints,1,ea,0,1,
+Lawn Zones,½in Schedule 40 PVC Pipe (10ft sticks),Lateral lines from valve to sprinkler heads — Zones 4-7,20,ea,0,20,~200ft total across 4 lawn zones; adjust to coverage area
+Lawn Zones,½in PVC 90° Elbow,Direction changes in lateral lines,16,ea,0,16,Estimate
+Lawn Zones,½in PVC Tee,Head-to-head connections in lateral runs,12,ea,0,12,Estimate
+Lawn Zones,½in PVC × ½in FPT Tee (or Elbow),Threaded outlet for sprinkler head riser,16,ea,0,16,One per head location
+Lawn Zones,½in × 4in Pop-Up Spray Head (adjustable arc),Sprinkler heads for lawn zones,16,ea,,16,4 heads per zone × 4 lawn zones; adjust for coverage
+Lawn Zones,½in MPT × ½in Barb Funny Pipe Adapter,Flexible connection from lateral to pop-up head,16,ea,,16,Allows heads to flex without cracking PVC
+Lawn Zones,½in Funny Pipe (Swing Pipe) — 50ft roll,Flexible riser pipe between lateral and pop-up,2,roll,,2,"~12in per head × 16 heads; 1 roll is enough, 2 for margin"
+Lawn Zones,½in PVC × ¾in FPT Reducer,Transition from ¾in valve outlet to ½in lateral,4,ea,,4,One per lawn zone valve
+Drip Zones,½in Poly Drip Tubing (100ft roll),Main drip distribution line — Garden + Grapes + Peonies,3,roll,,3,1 roll per drip zone; 300ft total
+Drip Zones,½in Drip Tubing End Cap (compression),Caps the end of each drip run,6,ea,,6,2 per zone (main + branch ends)
+Drip Zones,½in Drip Tubing Tee (compression),Branch points in drip lines,9,ea,,9,3 per zone estimate
+Drip Zones,½in Drip Tubing 90° Elbow (compression),Direction changes in drip lines,9,ea,,9,3 per zone estimate
+Drip Zones,½in Drip Tubing Coupling (compression),Inline splices,6,ea,,6,Spares/repairs
+Drip Zones,½in FPT × ½in Barb Adapter,Connects PVC valve outlet to poly drip tubing,3,ea,,3,One per drip zone
+Drip Zones,Pressure Compensating Drip Emitter (1 GPH),Point-source emitters for individual plants,50,ea,,50,Garden + Grapes + Peonies; adjust to plant count
+Drip Zones,¼in Distribution Tubing (50ft roll),Micro-tubing from ½in mainline to individual emitters,2,roll,,2,
+Drip Zones,¼in Barb Connector (into ½in tubing),Punches into ½in poly to feed ¼in micro-tube,50,ea,,50,One per emitter location
+Drip Zones,Drip Tubing Stakes/Hold-Downs,Pins tubing to the ground,50,ea,,50,Every 2-3ft of tubing
+Fruit Trees,½in Poly Drip Tubing (100ft roll),Ring around each tree's drip line,1,roll,,1,
+Fruit Trees,Bubbler or Multi-Outlet Emitter (2 GPH),Higher-flow emitter for tree watering,8,ea,,8,2 per tree; adjust to tree count
+Fruit Trees,¼in Distribution Tubing (25ft roll),Micro-tube from mainline to tree bubblers,1,roll,,1,
+Fruit Trees,½in FPT × ½in Barb Adapter,Connects PVC valve outlet to tree zone poly tubing,1,ea,,1,
+Fruit Trees,Drip Tubing Stakes/Hold-Downs,Pins tubing around trees,20,ea,,20,
+Wire/Cable,18 AWG / 2-conductor Sprinkler Wire (250ft roll),Runs from junction box to each valve (signal + common),1,roll,,1,Two wires per valve; single multi-conductor roll is easier but 2-conductor × 7 runs works
+Wire/Cable,18 AWG / 7-conductor + common Sprinkler Wire (250ft),Alternative: single multi-strand cable for all valves in one trench,1,roll,,1,"Use THIS or the 2-conductor above, not both"
+Wire/Cable,Waterproof Wire Connectors (silicone-filled),Splice valve leads to trunk wire underground,14,ea,,14,2 per valve (signal + common)
+Wire/Cable,Wire Pulling Lubricant,If running wire through conduit,1,ea,,1,Optional
+Conduit/Protection,¾in Schedule 40 PVC Conduit (10ft),Protects wire runs from junction box to valve area,4,ea,,4,~40ft; adjust to distance
+Conduit/Protection,¾in Conduit Sweep Elbow,Gradual bends in conduit runs,4,ea,,4,
+Conduit/Protection,¾in Conduit LB Fitting,Access point at conduit entry to junction box,1,ea,,1,
+Enclosure,Weatherproof Junction Box (12×12×6 NEMA 4X or equiv),Outdoor enclosure for all electronics,1,ea,,1,Must fit ESP32 + 5× L298N + MCP23017 + buck converter + battery
+Enclosure,DIN Rail (35mm × 12in),Mounting rail inside box for boards,2,ea,,2,Optional but keeps things organized
+Enclosure,DIN Rail Terminal Blocks,Screw terminals for valve wire connections,10,ea,,10,One per valve pair; much cleaner than wire nuts inside box
+Enclosure,Cable Glands (PG9 or PG11),Weatherproof wire entry points into junction box,4,ea,,4,"Valve wires, solar input, sensor cables"
+Enclosure,Mounting Post or Stake (for junction box),Elevates box above ground near valve manifold,1,ea,,1,"Pressure-treated 4×4 post, or mount to fence/wall"
+Enclosure,Stainless Steel Mounting Screws/Bolts,Secure box to post,8,ea,,8,
+Trenching/Install,Marking Paint (spray can),Mark trench lines before digging,1,ea,,1,
+Trenching/Install,Landscape Staples (6in),Pin tubing and backfilled trench,50,ea,,50,
+Trenching/Install,Teflon Tape (½in × 520in roll),Thread sealant for all threaded connections,2,roll,,2,
+Trenching/Install,Pipe Strap / Clamps (¾in and ½in),Secure pipe in trench before backfill,20,ea,,20,
+Soil Sensors,Waterproof Sensor Housing / Stake,Protect capacitive soil sensors in ground,4,ea,,4,3D-printed or PVC sleeve pushed into soil
+Soil Sensors,22 AWG / 3-conductor Cable (50ft),Signal wire from each soil sensor back to junction box,4,ea,,4,~50ft per sensor run; 3 wires: VCC + GND + signal
+Soil Sensors,Heat Shrink Tubing Assortment,Weatherproof solder joints on sensor leads,1,kit,,1,

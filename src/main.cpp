@@ -171,6 +171,9 @@ void loadValveCounters() {
 // WiFi reconnect counter
 uint32_t wifiReconnects = 0;
 
+// Adaptive TX power — current ladder index (0 = lowest, ADAPTIVE_TX_LEVELS-1 = max)
+int adaptiveTxIndex = ADAPTIVE_TX_LEVELS - 1;  // start at max, let it step down
+
 // ============================================================
 // Valve control
 // ============================================================
@@ -400,6 +403,7 @@ void handleApiStatus() {
     sys["wifiRSSI"] = WiFi.RSSI();
     sys["wifiReconnects"] = wifiReconnects;
     sys["txPowerRaw"] = (int)WiFi.getTxPower();  // [#6] runtime regulatory cap, varies between boots
+    sys["txAdaptiveLevel"] = adaptiveTxIndex;     // 0=lowest, ADAPTIVE_TX_LEVELS-1=max
     sys["ip"] = WiFi.localIP().toString();
     sys["mac"] = WiFi.macAddress();
     sys["eventCount"] = eventCount;
@@ -686,6 +690,19 @@ void setup() {
     // === Battery protection: if crash-looping too fast, deep sleep to preserve battery ===
     // Store last boot timestamp in NVS. If we've hit SAFE_MODE_THRESHOLD crashes
     // and the system is STILL crash-looping, go to deep sleep for 10 minutes.
+    //
+    // Deep sleep wake recovery: when waking FROM deep sleep, cap crashCount at
+    // SAFE_MODE_THRESHOLD so we get another SAFE_MODE_THRESHOLD attempts before
+    // sleeping again. This creates a retry pattern:
+    //   try N times → sleep 10min → try N times → sleep 10min → ...
+    // instead of permanent lockout.
+    if (lastResetReason == ESP_RST_DEEPSLEEP && crashCount >= SAFE_MODE_THRESHOLD * 2) {
+        crashCount = SAFE_MODE_THRESHOLD;  // give another round of attempts
+        nvs.begin(NVS_NAMESPACE, false);
+        nvs.putUInt("crashCnt", crashCount);
+        nvs.end();
+        Serial.printf("[RECOVERY] Woke from deep sleep — crashCount capped to %u for retry\n", crashCount);
+    }
     if (crashCount >= SAFE_MODE_THRESHOLD * 2) {
         Serial.printf("!!! BATTERY PROTECTION — %u consecutive crashes !!!\n", crashCount);
         Serial.println("!!! Entering deep sleep for 10 minutes to preserve battery !!!");
@@ -980,7 +997,11 @@ void loop() {
         if (WiFi.status() != WL_CONNECTED) {
             wifiFailCount++;
             Serial.printf("WiFi disconnected (attempt %d/30)... reconnecting\n", wifiFailCount);
-            WiFi.disconnect();
+            WiFi.disconnect(true);       // disconnect and clear saved credentials
+            WiFi.mode(WIFI_STA);          // ensure STA mode (fixes AP-mode trap after setupWiFi failure)
+            #if USE_STATIC_IP
+            WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS1);
+            #endif
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             wifiReconnects++;
             logEvent("wifi", "reconnect");
@@ -997,6 +1018,35 @@ void loop() {
             wifiFailCount = 0;
         }
     }
+
+    // Adaptive TX power — step down when signal is strong, step up when weak.
+    // Saves 30-60 mA at low TX vs max. Only runs when WiFi is connected.
+    #if ADAPTIVE_TX_ENABLED
+    {
+        static unsigned long lastAdaptiveTx = 0;
+        if (WiFi.status() == WL_CONNECTED && millis() - lastAdaptiveTx >= ADAPTIVE_TX_INTERVAL_MS) {
+            lastAdaptiveTx = millis();
+            int rssi = WiFi.RSSI();
+            int oldIndex = adaptiveTxIndex;
+
+            if (rssi > ADAPTIVE_TX_RSSI_STRONG && adaptiveTxIndex > 0) {
+                adaptiveTxIndex--;  // signal strong — step down to save power
+            } else if (rssi < ADAPTIVE_TX_RSSI_WEAK && adaptiveTxIndex < ADAPTIVE_TX_LEVELS - 1) {
+                adaptiveTxIndex++;  // signal weak — step up for reliability
+            }
+            // Between thresholds → hold (hysteresis)
+
+            if (adaptiveTxIndex != oldIndex) {
+                WiFi.setTxPower(ADAPTIVE_TX_LADDER[adaptiveTxIndex]);
+                int txRaw = (int)WiFi.getTxPower();
+                Serial.printf("[ADAPTIVE TX] RSSI=%d → step %s: level %d/%d (%.1f dBm, raw=%d)\n",
+                              rssi, adaptiveTxIndex < oldIndex ? "DOWN" : "UP",
+                              adaptiveTxIndex, ADAPTIVE_TX_LEVELS - 1,
+                              txRaw / 4.0, txRaw);
+            }
+        }
+    }
+    #endif
 
     // Read sensors periodically
     if (millis() - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {

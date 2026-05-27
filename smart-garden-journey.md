@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **Firmware flashed (power optimization + WiFi recovery).** ESP32 offline — battery depleted, solar recharging, waiting for Wanderer LVD reconnect (~12.6V). Dashboard: history chart axes aligned, mobile nav GPU fix deployed.
+**Status:** ⚠️ **ESP32 has power but not connecting to WiFi.** LEDs on (buck + ESP32), ping unreachable. Needs serial debug. Firmware flashed (power opt), dashboard axes aligned, battery voltage calibrated. Ratio fix (6.283) pending next flash.
 **Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -235,15 +235,31 @@ Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
 3. WiFi modem sleep comment fix
 4. WiFi-recovery bugs from 05-21
 
-### ESP32 offline — battery depleted
+### ESP32 powered but not on WiFi (unresolved)
 
-After USB unplug, ESP32 has no power. Battery was at ~10.6V reported. Renogy Wanderer LVD has cut load output at 11.1V. Solar panel charging; will auto-reconnect at ~12.6V (hardcoded in Wanderer firmware, not configurable).
+After flashing and putting the box back outside:
+- **Buck converter LED: ON** — battery is supplying 12V → 5V
+- **ESP32 LED: ON** — chip has power and is running
+- **Ping: 100% loss** — WiFi not connected (Destination Host Unreachable, not timeout)
+- **HTTP: no response** — web server unreachable
 
-**Wanderer LVD thresholds (SLA mode, not configurable):**
-| Parameter | Value |
-|-----------|-------|
-| Low Voltage Disconnect (LVD) | 11.1V |
-| Low Voltage Reconnect (LVR) | 12.6V |
+**This rules out the LVD theory.** Battery voltage is sufficient — the Wanderer load output is active. The ESP32 simply isn't connecting to WiFi from its deployed location.
+
+**Likely causes (in order):**
+1. **WiFi out of range** — chip worked indoors during flash (strong signal), but deployed junction box may be at the edge of WiFi coverage. The new firmware booted fine on the desk with instant WiFi connect.
+2. **Crash loop → deep sleep lockout** — firmware enters 10-min deep sleep after 10 consecutive crashes. If WiFi fails to connect, the watchdog triggers `ESP.restart()`, and after 10 iterations the chip goes dormant.
+3. **AP-mode trap** — if WiFi connect fails repeatedly, older recovery code might switch to AP mode instead of retrying.
+
+**To diagnose:** Plug in USB, open serial monitor (`pio device monitor --baud 115200 --port COM5`). Serial output will show exactly what's happening — WiFi connect attempts, crash counter, watchdog state.
+
+**Battery calibration was wrong.** The reported 10.6V was actually ~11.1V or higher (battery has enough charge to power the system). The 4,209 DB rows were already corrected, firmware ratio fix (6.283) is committed but needs another USB flash.
+
+**Next steps:**
+1. Bring box inside, plug USB, read serial output
+2. If WiFi range issue → consider repositioning box or adding WiFi repeater
+3. Flash updated voltage divider ratio (6.283) at the same time
+4. Test mobile nav on phone
+5. Count voltage divider resistors while box is open
 
 ### Battery voltage calibration (applied)
 

@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** 🔴 **ESP32 powered but stuck — not on WiFi for hours.** LEDs on, ping unreachable. Needs USB serial debug at the junction box. Firmware was flashed (power opt) but chip never connected to WiFi after being put back outside. Voltage ratio fix (6.283) also pending flash.
+**Status:** 🔴 **ESP32 in WiFi lockout — RCA done, fix committed, needs flash.** Three bugs found: low TX on reconnect, crash counter not clearing on loop() recovery, no TX bump during setup connect. Fix in commit `27f087f` + voltage ratio fix — both pending USB flash at junction box.
 **Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -235,37 +235,42 @@ Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
 3. WiFi modem sleep comment fix
 4. WiFi-recovery bugs from 05-21
 
-### ESP32 powered but not on WiFi (unresolved — persistent)
+### WiFi lockout RCA (commit `27f087f`, pending flash)
 
-After flashing and putting the box back outside:
-- **Buck converter LED: ON** — battery is supplying 12V → 5V
-- **ESP32 LED: ON** — chip has power and is running
-- **Ping: 100% loss** — WiFi not connected (Destination Host Unreachable, not timeout)
-- **HTTP: no response** — web server unreachable
-- **Tested multiple times over several hours** — never comes online. Not transient.
+**Symptom:** ESP32 has power (LEDs on) but never connects to WiFi from deployed location. Worked fine indoors during flash.
 
-**This rules out both the LVD theory AND a transient boot issue.** The chip has power, has been running for hours, and never connects. The firmware worked perfectly when flashed indoors (instant WiFi connect, clean boot, all sensors reporting). The problem only manifests at the deployed location.
+**Root cause — three compounding bugs:**
 
-**Most likely cause: deep sleep lockout.** The firmware enters 10-min deep sleep after 10 consecutive crashes. If WiFi failed to connect on the first boot outside (weak signal, interference, or timeout), the watchdog triggers `ESP.restart()` after 60s. After 10 consecutive crash-restarts, the chip enters deep sleep for 10 minutes. But on wake from deep sleep, if WiFi fails again, the crash counter persists in NVS — so it immediately re-enters deep sleep. **The chip is effectively bricked until power-cycled or serial-debugged.**
+1. **Low TX power on reconnect (8.5 dBm instead of 19.5 dBm).** `setupWiFi()` boots at `WIFI_BOOT_TX_DBM` (8.5 dBm) to prevent brownout. If WiFi fails to connect in setup, TX is never bumped to full. The loop() watchdog then retries at 8.5 dBm — **12× weaker than full power.** From the junction box at the edge of WiFi range, 8.5 dBm can't reach the AP.
 
-**Box is bolted outside** — can't bring it indoors. Must take laptop to the box with USB cable.
+2. **Crash counter never resets on loop() WiFi recovery.** `crashCount` resets to 0 ONLY if WiFi connects during `setup()` (line 813). If WiFi later connects via the loop() watchdog, the crash counter stays high. So even successful recovery doesn't prevent the crash counter from climbing to the deep sleep threshold on the next reboot.
 
-**To diagnose:** Plug laptop USB into ESP32 at the junction box, run:
+3. **No TX power escalation during setup connect.** `setupWiFi()` tries 40 attempts (20s) all at 8.5 dBm. If the AP is reachable at full power but not at boot power, all 40 attempts fail.
+
+**The lockout spiral:**
+```
+Boot → low TX (8.5 dBm) → WiFi fails 40 attempts → AP mode
+  → loop() watchdog retries at 8.5 dBm × 30 (5 min) → ESP.restart()
+  → crashCount++ → repeat 20 times → deep sleep 10 min
+  → wake → cap crashCount to 20 → repeat cycle forever
+```
+
+**Fixes applied (commit `27f087f`):**
+
+1. **`WiFi.setTxPower(WIFI_TX_DBM)` in loop() reconnect** — reconnect attempts use full 19.5 dBm, not boot 8.5 dBm. Brownout risk is negligible after initial boot.
+
+2. **Crash counter reset on loop() WiFi recovery** — when `wifiFailCount` transitions from >0 to 0 (WiFi reconnected), clear `crashCnt` in NVS and reset `safeMode`. Prevents deep sleep lockout spiral.
+
+3. **Mid-connect TX bump in setupWiFi()** — at attempt 20 (10s into connect), bump TX from boot to full. Gives the brownout-safe window, then escalates power for weak-signal locations.
+
+**Also pending flash:** voltage ratio fix (6.283f) from earlier commit.
+
+**To deploy:** Take laptop to junction box, plug USB, flash + verify:
 ```
 cd C:\MyCode\smart-garden
+~\.platformio\penv\Scripts\pio.exe run -e esp32 --target upload --upload-port COM5
 ~\.platformio\penv\Scripts\pio.exe device monitor --baud 115200 --port COM5
 ```
-Serial output will show: WiFi connect attempts, crash counter state, deep sleep entry.
-
-**To recover (if deep sleep lockout confirmed):**
-1. Disconnect battery briefly (resets NVS crash counter)
-2. Reconnect — chip boots fresh
-3. If WiFi connects → working. If not → signal is too weak, need extender.
-
-**While at the box, also:**
-- Flash voltage ratio fix (6.283f)
-- Count resistors in voltage divider
-- Check antenna connector is snug (external 5dBi antenna on ESP32-WROOM-32U)
 
 ### Battery voltage calibration (applied)
 

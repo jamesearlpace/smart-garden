@@ -200,7 +200,7 @@ static inline void disableDriverPower() {
     digitalWrite(POWER_GATE_PIN, LOW);
 }
 
-// Read battery voltage via 1:5 divider on GPIO 36 (4x10k + 1x10k -> ratio 5).
+// Read battery voltage via divider on GPIO 36. Ratio calibrated from LVD trip point.
 // Averages 8 samples to denoise. Returns volts.
 // IMPORTANT: only call from the main loop task. ADC1 is shared with soil pins;
 // concurrent reads from the web server task can wedge the WebServer handler.

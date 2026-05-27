@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** 🔴 **ESP32 in WiFi lockout — RCA done, fix committed, needs flash.** Three bugs found: low TX on reconnect, crash counter not clearing on loop() recovery, no TX bump during setup connect. Fix in commit `27f087f` + voltage ratio fix — both pending USB flash at junction box.
+**Status:** ✅ **System operational.** New ESP32 board deployed (old one fried by accidental short). WiFi modem sleep + CPU 160MHz. Eero moved closer for signal. Battery calibrated to Wanderer (13.2V). New MAC: `00:70:07:26:48:DC`.
 **Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -96,7 +96,7 @@ pio device monitor --baud 115200 --port COM5
 ### Hardware
 | Component | Model | Notes |
 |-----------|-------|-------|
-| MCU | ESP32-WROOM-32U | External antenna, MAC `68:FE:71:0C:BA:98`, static IP 192.168.0.150 |
+| MCU | ESP32-WROOM-32U | External antenna, MAC `00:70:07:26:48:DC` (replacement board, old `68:FE:71:0C:BA:98` fried 2026-05-27), static IP 192.168.0.150 |
 | I/O Expander | Waveshare MCP23017 | I2C addr 0x27, valves 1-8 on PA0-PB7 |
 | Antenna | 2.4 GHz 5dBi external | U.FL/IPEX connector on 32U |
 | Solar | ECO-WORTHY 10W 12V | ~1.6 Ah/day in Duvall WA |
@@ -235,44 +235,54 @@ Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
 3. WiFi modem sleep comment fix
 4. WiFi-recovery bugs from 05-21
 
-### WiFi lockout RCA (commit `27f087f`, pending flash)
+### WiFi lockout RCA — RESOLVED
 
-**Symptom:** ESP32 has power (LEDs on) but never connects to WiFi from deployed location. Worked fine indoors during flash.
+**Root cause: CPU light sleep (`esp_light_sleep_start()`) caused Eero mesh to deauthenticate the ESP32.** The chip would connect to WiFi, enter light sleep after 5 min of no state-changing API calls, and the Eero would drop it. This triggered the WiFi watchdog → crash loop → deep sleep lockout spiral.
 
-**Root cause — three compounding bugs:**
+**Contributing bugs found and fixed:**
+1. Low TX power on reconnect (8.5 dBm instead of 19.5 dBm) — fixed `27f087f`
+2. Crash counter not clearing on loop() WiFi recovery — fixed `27f087f`
+3. No TX escalation during setup connect — fixed `27f087f` (mid-connect bump at attempt 20)
 
-1. **Low TX power on reconnect (8.5 dBm instead of 19.5 dBm).** `setupWiFi()` boots at `WIFI_BOOT_TX_DBM` (8.5 dBm) to prevent brownout. If WiFi fails to connect in setup, TX is never bumped to full. The loop() watchdog then retries at 8.5 dBm — **12× weaker than full power.** From the junction box at the edge of WiFi range, 8.5 dBm can't reach the AP.
+**Resolution:** Disabled CPU light sleep entirely. Replaced with WiFi modem sleep only (`WIFI_PS_MIN_MODEM`) which saves ~30-50 mA on the radio without halting the CPU. Eero maintains association. Commit `2c8db79`.
 
-2. **Crash counter never resets on loop() WiFi recovery.** `crashCount` resets to 0 ONLY if WiFi connects during `setup()` (line 813). If WiFi later connects via the loop() watchdog, the crash counter stays high. So even successful recovery doesn't prevent the crash counter from climbing to the deep sleep threshold on the next reboot.
+**Signal strength:** RSSI degraded from -50 dBm (May 21-22) to -74 dBm (May 27). Moved Eero closer to junction box. System now stable at -74 dBm with 0% packet loss.
 
-3. **No TX power escalation during setup connect.** `setupWiFi()` tries 40 attempts (20s) all at 8.5 dBm. If the AP is reachable at full power but not at boot power, all 40 attempts fail.
+### ESP32 board replacement
 
-**The lockout spiral:**
-```
-Boot → low TX (8.5 dBm) → WiFi fails 40 attempts → AP mode
-  → loop() watchdog retries at 8.5 dBm × 30 (5 min) → ESP.restart()
-  → crashCount++ → repeat 20 times → deep sleep 10 min
-  → wake → cap crashCount to 20 → repeat cycle forever
-```
+Original ESP32-WROOM-32U (MAC `68:FE:71:0C:BA:98`) **destroyed by accidental short** while adjusting wiring with battery connected. Spark seen, board went silent (no serial output, esptool can't connect).
 
-**Fixes applied (commit `27f087f`):**
+Replaced with identical spare ESP32-WROOM-32U (MAC `00:70:07:26:48:DC`). Same external 5dBi antenna reattached. All firmware flashed, all sensors and valves working.
 
-1. **`WiFi.setTxPower(WIFI_TX_DBM)` in loop() reconnect** — reconnect attempts use full 19.5 dBm, not boot 8.5 dBm. Brownout risk is negligible after initial boot.
+**Lesson:** Always disconnect battery before inserting/removing the ESP32 from headers. The soldered battery/solar connections make this difficult — consider adding an inline switch or fuse.
 
-2. **Crash counter reset on loop() WiFi recovery** — when `wifiFailCount` transitions from >0 to 0 (WiFi reconnected), clear `crashCnt` in NVS and reset `safeMode`. Prevents deep sleep lockout spiral.
+### Battery voltage calibration — final (Wanderer reference)
 
-3. **Mid-connect TX bump in setupWiFi()** — at attempt 20 (10s into connect), bump TX from boot to full. Gives the brownout-safe window, then escalates power for weak-signal locations.
+**Wanderer display reads 13.2V, ESP32 reported 12.83V (ratio 6.283).**
 
-**Also pending flash:** voltage ratio fix (6.283f) from earlier commit.
+Correction factor: `13.2 / 12.83 = 1.02884`
 
-**To deploy:** Take laptop to junction box, plug USB, flash + verify:
-```
-cd C:\MyCode\smart-garden
-~\.platformio\penv\Scripts\pio.exe run -e esp32 --target upload --upload-port COM5
-~\.platformio\penv\Scripts\pio.exe device monitor --baud 115200 --port COM5
-```
+**Three-layer fix:**
+1. **Server-side (live):** `irrigation.py` multiplies incoming `batteryV` by 1.02884 before logging
+2. **Database:** 4,200 rows corrected (cumulative: original × 1.04713 × 1.02884)
+3. **Firmware ratio (pending flash):** `BATTERY_DIVIDER_RATIO` updated to `6.464f` — when flashed, server correction can be removed
 
-### Battery voltage calibration (applied)
+### Firmware on chip (commit `2c8db79`)
+- CPU 160 MHz (was 240)
+- WiFi modem sleep (`WIFI_PS_MIN_MODEM`) — radio sleeps between DTIM beacons
+- CPU light sleep DISABLED — causes Eero deauth
+- WiFi lockout fix: full TX on reconnect, crash counter reset on loop() recovery, mid-connect TX bump
+- Voltage divider ratio: 6.283 (server applies 1.02884x correction; firmware ratio 6.464 pending next flash)
+
+### Pending firmware changes (next flash)
+- `BATTERY_DIVIDER_RATIO` 6.283 → 6.464 (then remove server-side 1.02884x correction)
+
+**Next steps:**
+1. Monitor battery voltage trend overnight — verify solar keeps up with modem-sleep power draw
+2. Test mobile nav on phone (CSS fix deployed earlier)
+3. Add inline switch/fuse for battery disconnect
+
+### Battery voltage calibration — superseded by Wanderer-referenced calibration above
 
 **Logic:** Wanderer LVD trips at 11.1V. ESP32 went offline → actual battery was 11.1V. But firmware reported 10.60V. Therefore the divider ratio was wrong.
 
@@ -290,7 +300,7 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 - `main.cpp`: removed contradicting comment that said "4x10k + 1x10k → ratio 5"
 - Will take effect on next USB flash
 
-**Next steps when ESP32 comes back online:**
+**Next steps (superseded — see resolved RCA above):**
 1. Verify new firmware power draw via battery voltage trend (should drain much slower)
 2. Count resistors in voltage divider for definitive ratio
 3. Multimeter reading to cross-check calibration

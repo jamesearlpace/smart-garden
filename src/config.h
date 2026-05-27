@@ -92,10 +92,10 @@ const char* MQTT_PASS     = "";
 #define GATE_SETTLE_MS     5     // Settle time after enabling 12V before pulsing valve
 
 // Battery voltage divider on GPIO 36 (VP).
-// Calibrated 2026-05-27: Wanderer LVD trips at 11.1V, last ADC reading was 10.6V
-// with ratio 6.0 → true ratio = 6.0 * (11.1/10.6) = 6.283. Verify with multimeter.
+// Calibrated 2026-05-27: Wanderer reads 13.2V, ESP32 reads 12.83V with ratio 6.283
+// → true ratio = 6.283 * (13.2/12.83) = 6.464. Server also applies 1.02884x until flashed.
 #define BATTERY_ADC_PIN          36
-#define BATTERY_DIVIDER_RATIO    6.283f
+#define BATTERY_DIVIDER_RATIO    6.464f
 
 // ============================================================
 // System Settings

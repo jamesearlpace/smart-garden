@@ -1098,32 +1098,19 @@ void loop() {
     #endif
 
     // ================================================================
-    // Light sleep — save power when idle, wake on WiFi/timer
+    // WiFi modem sleep — save radio power when idle
+    // NOTE: CPU light sleep (esp_light_sleep_start) is DISABLED — it causes
+    // Eero mesh to deauthenticate the ESP32. WiFi modem sleep alone saves
+    // ~30-50 mA by powering down the radio between DTIM beacons while keeping
+    // the CPU running and WiFi association alive.
     // ================================================================
-    #if LIGHT_SLEEP_ENABLED
+    #if WIFI_MODEM_SLEEP_ENABLED
     {
-        // Stay fully awake if:
-        //  1. Any valve is currently open
-        //  2. Recent API activity (manual control / calibration session)
-        //  3. Recent valve close (let things settle)
-        bool anyValveOpen = false;
-        for (int i = 0; i < NUM_VALVES; i++) {
-            if (valves[i].isOpen) { anyValveOpen = true; break; }
-        }
-        bool recentApi = (lastApiActivityMs > 0) &&
-                         (millis() - lastApiActivityMs < AWAKE_HOLD_MS);
-        bool recentValve = (lastValveCloseMs > 0) &&
-                           (millis() - lastValveCloseMs < AWAKE_HOLD_VALVE_MS);
-
-        if (!anyValveOpen && !recentApi && !recentValve) {
-            // Enable WiFi modem sleep (keeps association, wakes on incoming packet)
+        static bool modemSleepSet = false;
+        if (!modemSleepSet) {
             esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-            // Light sleep — CPU halts, WiFi stays associated, wakes on:
-            //   - timer (LIGHT_SLEEP_INTERVAL_MS)
-            //   - incoming WiFi packet (HTTP request)
-            esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_INTERVAL_MS * 1000ULL);  // microseconds
-            esp_sleep_enable_wifi_wakeup();
-            esp_light_sleep_start();
+            modemSleepSet = true;
+            Serial.println("[POWER] WiFi modem sleep enabled (radio sleeps between DTIM beacons)");
         }
     }
     #endif

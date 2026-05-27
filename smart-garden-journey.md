@@ -237,15 +237,39 @@ Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
 
 ### ESP32 offline — battery depleted
 
-After USB unplug, ESP32 has no power. Battery was at ~10.6V reported (may be lower — voltage divider ratio uncertain). Renogy Wanderer LVD has cut load output. Solar panel charging; will auto-reconnect at ~12.6V.
+After USB unplug, ESP32 has no power. Battery was at ~10.6V reported. Renogy Wanderer LVD has cut load output at 11.1V. Solar panel charging; will auto-reconnect at ~12.6V (hardcoded in Wanderer firmware, not configurable).
 
-**Voltage divider uncertainty:** `config.h` says 6:1 ratio (5×10k + 1×10k), `main.cpp` comment says 5:1 (4×10k + 1×10k). User doesn't remember which was wired. Need multimeter verification next time box is open. If ratio is wrong, all historical battery_v readings in DB are off by 16.7%.
+**Wanderer LVD thresholds (SLA mode, not configurable):**
+| Parameter | Value |
+|-----------|-------|
+| Low Voltage Disconnect (LVD) | 11.1V |
+| Low Voltage Reconnect (LVR) | 12.6V |
+
+### Battery voltage calibration (applied)
+
+**Logic:** Wanderer LVD trips at 11.1V. ESP32 went offline → actual battery was 11.1V. But firmware reported 10.60V. Therefore the divider ratio was wrong.
+
+**Correction factor:** `11.1 / 10.60049 = 1.04713`
+
+**DB fix:** Updated 4,209 historical `battery_v` rows in `system_health` table:
+```sql
+UPDATE system_health SET battery_v = ROUND(battery_v * (11.1 / 10.60049), 4)
+WHERE battery_v IS NOT NULL AND battery_v BETWEEN 8 AND 15;
+```
+Excluded garbage readings outside 8-15V range (floating pin before divider was wired).
+
+**Firmware fix (commit `dce7d63`, pending flash):**
+- `config.h`: `BATTERY_DIVIDER_RATIO` changed from `6.0f` to `6.283f`
+- `main.cpp`: removed contradicting comment that said "4x10k + 1x10k → ratio 5"
+- Will take effect on next USB flash
 
 **Next steps when ESP32 comes back online:**
 1. Verify new firmware power draw via battery voltage trend (should drain much slower)
-2. Count resistors in voltage divider, fix `BATTERY_DIVIDER_RATIO` if needed
-3. Test mobile nav on phone
-4. Consider bigger battery (12V 20Ah, ~$40-50) for 3-week reserve
+2. Count resistors in voltage divider for definitive ratio
+3. Multimeter reading to cross-check calibration
+4. Flash updated ratio (`6.283f`) — needs another USB flash
+5. Test mobile nav on phone
+6. Consider bigger battery (12V 20Ah, ~$40-50) for 3-week reserve
 
 ---
 

@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
 <link rel="manifest" href="/static/manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
 /* ═══════════════════════════════════════
    Smart Garden Dashboard — Rachio-inspired
@@ -81,7 +82,9 @@ a{color:var(--blue);text-decoration:none}
 .emergency-btn:hover{background:var(--red);color:#fff}
 
 /* ── Panels ── */
-.panel{display:none}.panel.active{display:block}
+.panel{display:none;contain:content}.panel.active{display:block}
+/* Prevent chart canvases from creating stacking contexts that interfere with mobile-nav */
+.panel canvas{position:relative;z-index:1}
 
 /* ── Cards ── */
 .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
@@ -344,7 +347,9 @@ a{color:var(--blue);text-decoration:none}
 
 /* ── Mobile Responsive ── */
 .mobile-nav{display:none;position:fixed!important;bottom:0!important;left:0;right:0;background:var(--bg-card);
-  border-top:1px solid var(--border);z-index:9999;padding:6px 0 env(safe-area-inset-bottom,6px)}
+  border-top:1px solid var(--border);z-index:9999;padding:6px 0 env(safe-area-inset-bottom,6px);
+  will-change:transform;transform:translateZ(0);-webkit-transform:translateZ(0);
+  contain:layout style;-webkit-backface-visibility:hidden;backface-visibility:hidden}
 .mobile-nav-inner{display:flex;justify-content:space-around}
 .mob-nav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 8px;
   cursor:pointer;color:var(--text3);font-size:.62rem;font-weight:600;transition:color .15s}
@@ -2623,11 +2628,6 @@ function loadDrilldownChart(ddId, hours) {
 function loadDHTBoxChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     // Compute dew point (°F) per reading using Magnus formula
     // and flag condensation risk when PCB surface ≈ air − 9 drops near dew point
     var PCB_OFFSET = 9; // °F cooler than air via radiative loss
@@ -2645,19 +2645,20 @@ function loadDHTBoxChart(canvasId, url, hours) {
       // Show the temp at which condensation would start = dewpoint + PCB_OFFSET
       return Math.round((dpF + PCB_OFFSET) * 10) / 10;
     });
+    var timestamps = data.map(function(r){ return new Date(r.ts); });
     var chartDatasets = [
       {
-        label: 'Temp (°F)', data: data.map(function(r){return r.temp_f;}),
+        label: 'Temp (°F)', data: data.map(function(r,i){return {x:timestamps[i],y:r.temp_f};}),
         borderColor: '#ef4444', backgroundColor: '#ef444415',
         borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, yAxisID: 'y'
       },
       {
-        label: 'Humidity (%)', data: data.map(function(r){return r.humidity;}),
+        label: 'Humidity (%)', data: data.map(function(r,i){return {x:timestamps[i],y:r.humidity};}),
         borderColor: '#3b82f6', backgroundColor: '#3b82f615',
         borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, yAxisID: 'y1'
       },
       {
-        label: 'Condensation Risk Temp (°F)', data: condensationTemp,
+        label: 'Condensation Risk Temp (°F)', data: data.map(function(r,i){return {x:timestamps[i],y:condensationTemp[i]};}),
         borderColor: '#f59e0b', backgroundColor: 'transparent',
         borderWidth: 1.5, borderDash: [6,4], pointRadius: 0, fill: false, tension: 0.3, yAxisID: 'y',
         hidden: false
@@ -2700,7 +2701,7 @@ function loadDHTBoxChart(canvasId, url, hours) {
     if (!canvas) return;
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: {labels: labels, datasets: chartDatasets},
+      data: {datasets: chartDatasets},
       plugins: [humidityBandsPlugin],
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -2727,7 +2728,7 @@ function loadDHTBoxChart(canvasId, url, hours) {
           }
         },
         scales: {
-          x: {display: true, ticks: {maxTicksLimit: 6, autoSkip: true, maxRotation: 45, font:{size:8}}, grid:{display:false}},
+          x: shTimeAxis(hours),
           y: {display: true, position: 'left', title: {display: true, text: '°F', font:{size:9}}, ticks: {font:{size:9}}, grid:{color:'#e5e7eb22'}},
           y1: {display: true, position: 'right', title: {display: true, text: 'Humidity %', font:{size:9}}, min: 0, max: 100, ticks: {font:{size:9}}, grid:{display:false}}
         }
@@ -2742,7 +2743,7 @@ function loadSensorChart(canvasId, url, hours, datasets, dualAxis) {
     var chartDatasets = datasets.map(function(ds) {
       return {
         label: ds.label,
-        data: data.map(function(r){ return r[ds.field]; }),
+        data: data.map(function(r){ return {x: new Date(r.ts), y: r[ds.field]}; }),
         borderColor: ds.color,
         backgroundColor: ds.color + '15',
         borderWidth: 1.5,
@@ -2752,14 +2753,8 @@ function loadSensorChart(canvasId, url, hours, datasets, dualAxis) {
         yAxisID: ds.yAxisID || 'y'
       };
     });
-    // Build concise labels — deduplicate dates, show only time when same day
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     var scales = {
-      x: {display: true, ticks: {maxTicksLimit: 6, autoSkip: true, maxRotation: 45, font:{size:8}}, grid:{display:false}},
+      x: shTimeAxis(hours),
       y: {display: true, position: 'left', ticks: {font:{size:9}}, grid:{color:'#e5e7eb22'}}
     };
     if (dualAxis) {
@@ -2770,7 +2765,7 @@ function loadSensorChart(canvasId, url, hours, datasets, dualAxis) {
     if (!canvas) return;
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: {labels: labels, datasets: chartDatasets},
+      data: {datasets: chartDatasets},
       options: {
         responsive: true, maintainAspectRatio: false,
         layout: {padding: {bottom: 2}},
@@ -3926,20 +3921,14 @@ function loadSensorHistory(hours) {
 function loadConnectivityChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
-    var latency = data.map(function(r){ return r.success ? r.latency_ms : null; });
-    var fails = data.map(function(r){ return r.success ? null : 0; });
+    var latency = data.map(function(r){ return {x:new Date(r.ts),y:r.success ? r.latency_ms : null}; });
+    var fails = data.map(function(r){ return r.success ? null : {x:new Date(r.ts),y:0}; });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
           {label: 'Latency (ms)', data: latency, borderColor: '#10b981', backgroundColor: '#10b98115',
            borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3, yAxisID: 'y'},
@@ -3951,7 +3940,7 @@ function loadConnectivityChart(canvasId, url, hours) {
         responsive: true, maintainAspectRatio: false,
         plugins: {legend:{display: true, position:'top', labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales: {
-          x: {display:true, ticks:{maxTicksLimit:6,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x: shTimeAxis(hours),
           y: {display:true, position:'left', ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'},
               title:{display:true,text:'ms',font:{size:8}}}
         }
@@ -3964,11 +3953,6 @@ function loadConnectivityChart(canvasId, url, hours) {
 function loadSoilDualChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
@@ -3976,16 +3960,15 @@ function loadSoilDualChart(canvasId, url, hours) {
     var spikePct = data.map(function(r,i) {
       if (i === 0) return null;
       var jump = Math.abs((r.pct||0) - (data[i-1].pct||0));
-      return jump > 15 ? r.pct : null;
+      return jump > 15 ? {x: new Date(r.ts), y: r.pct} : null;
     });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Moisture %', data:data.map(function(r){return r.pct;}),
+          {label:'Moisture %', data:data.map(function(r){return {x:new Date(r.ts),y:r.pct};}),
            borderColor:'#10b981', backgroundColor:'#10b98115', borderWidth:1.5, pointRadius:0, fill:true, tension:0.3, yAxisID:'y'},
-          {label:'Raw ADC', data:data.map(function(r){return r.raw;}),
+          {label:'Raw ADC', data:data.map(function(r){return {x:new Date(r.ts),y:r.raw};}),
            borderColor:'#f59e0b', backgroundColor:'transparent', borderWidth:1, pointRadius:0, fill:false, tension:0.3, yAxisID:'y1'},
           {label:'Spike (>15% jump)', data:spikePct,
            borderColor:'#ef4444', backgroundColor:'#ef4444', borderWidth:0, pointRadius:5, pointStyle:'crossRot', showLine:false, yAxisID:'y'}
@@ -3995,7 +3978,7 @@ function loadSoilDualChart(canvasId, url, hours) {
         responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:true, position:'top', labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales:{
-          x:{display:true, ticks:{maxTicksLimit:6,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true, position:'left', min:0, max:100, ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'}, title:{display:true,text:'%',font:{size:8}}},
           y1:{display:true, position:'right', reverse:true, ticks:{font:{size:9}}, grid:{display:false}, title:{display:true,text:'raw (inverted)',font:{size:8}}}
         }
@@ -4017,19 +4000,13 @@ function loadSoilNoiseChart(canvasId, url, hours) {
       });
       return;
     }
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
-    var spikeVal = data.map(function(r){ return r.spike ? r.jump : null; });
-    var railedVal = data.map(function(r){ return r.railed ? r.stddev : null; });
+    var spikeVal = data.map(function(r){ return r.spike ? {x:new Date(r.ts),y:r.jump} : null; });
+    var railedVal = data.map(function(r){ return r.railed ? {x:new Date(r.ts),y:r.stddev} : null; });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Noise (StdDev)', data:data.map(function(r){return r.stddev;}),
+          {label:'Noise (StdDev)', data:data.map(function(r){return {x:new Date(r.ts),y:r.stddev};}),
            borderColor:'#3b82f6', backgroundColor:'#3b82f618', borderWidth:1.5, pointRadius:0, fill:true, tension:0.3, yAxisID:'y'},
           {label:'Spike (>15%)', data:spikeVal,
            borderColor:'#ef4444', backgroundColor:'#ef4444', borderWidth:0, pointRadius:5, pointStyle:'crossRot', showLine:false, yAxisID:'y'},
@@ -4048,7 +4025,7 @@ function loadSoilNoiseChart(canvasId, url, hours) {
           }}}
         },
         scales:{
-          x:{display:true, ticks:{maxTicksLimit:6,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true, ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'}, title:{display:true,text:'stddev / jump',font:{size:8}}}
         }
       }
@@ -4083,22 +4060,16 @@ function loadSoilWifiChart(canvasId, noiseUrl, healthUrl, hours) {
                 String(d.getHours()).padStart(2,'0')+':'+String(Math.floor(d.getMinutes()/5)*5).toString().padStart(2,'0');
       healthMap[key] = h.wifi_rssi;
     });
-    var labels = noise.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     var rssiData = noise.map(function(r) {
       var d = new Date(r.ts);
       var key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+
                 String(d.getHours()).padStart(2,'0')+':'+String(Math.floor(d.getMinutes()/5)*5).toString().padStart(2,'0');
-      return healthMap[key] || null;
+      return {x: new Date(r.ts), y: healthMap[key] || null};
     });
-    var spikeDots = noise.map(function(r) { return r.spike ? r.jump : null; });
+    var spikeDots = noise.map(function(r) { return r.spike ? {x:new Date(r.ts),y:r.jump} : null; });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
           {label:'WiFi RSSI (dBm)', data:rssiData,
            borderColor:'#a855f7', backgroundColor:'#a855f715', borderWidth:1.5, pointRadius:0, fill:true, tension:0.3, yAxisID:'y'},
@@ -4110,7 +4081,7 @@ function loadSoilWifiChart(canvasId, noiseUrl, healthUrl, hours) {
         responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:true, position:'top', labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales:{
-          x:{display:true, ticks:{maxTicksLimit:6,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true, position:'left', ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'}, title:{display:true,text:'dBm',font:{size:8}}},
           y1:{display:true, position:'right', ticks:{font:{size:9}}, grid:{display:false}, title:{display:true,text:'jump %',font:{size:8}}}
         }
@@ -4123,12 +4094,7 @@ function loadSoilWifiChart(canvasId, noiseUrl, healthUrl, hours) {
 function loadUptimeChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1) + '/' + d.getDate() + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
-    var uptimeHrs = data.map(function(r){ return r.uptime_sec ? Math.round(r.uptime_sec / 3600 * 10) / 10 : null; });
+    var uptimeHrs = data.map(function(r){ return {x:new Date(r.ts),y:r.uptime_sec ? Math.round(r.uptime_sec / 3600 * 10) / 10 : null}; });
     // Detect reboots: where uptime drops or boot_count changes
     var reboots = data.map(function(r, i) {
       if (i === 0) return null;
@@ -4136,7 +4102,7 @@ function loadUptimeChart(canvasId, url, hours) {
       var curUp = r.uptime_sec || 0;
       var prevBoot = data[i-1].boot_count || 0;
       var curBoot = r.boot_count || 0;
-      if (curUp < prevUp - 60 || curBoot > prevBoot) return 0; // plot at y=0 for visibility
+      if (curUp < prevUp - 60 || curBoot > prevBoot) return {x:new Date(r.ts),y:0}; // plot at y=0 for visibility
       return null;
     });
     var rebootCount = reboots.filter(function(r){return r !== null;}).length;
@@ -4146,7 +4112,6 @@ function loadUptimeChart(canvasId, url, hours) {
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
           {label: 'Uptime (hrs)', data: uptimeHrs, borderColor: '#8b5cf6', backgroundColor: '#8b5cf615',
            borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3, yAxisID: 'y'},
@@ -4158,7 +4123,7 @@ function loadUptimeChart(canvasId, url, hours) {
         responsive: true, maintainAspectRatio: false,
         plugins: {legend:{display: true, position:'top', labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales: {
-          x: {display:true, ticks:{maxTicksLimit:6,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x: shTimeAxis(hours),
           y: {display:true, position:'left', ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'},
               title:{display:true,text:'hrs',font:{size:8}}}
         }
@@ -4183,11 +4148,7 @@ function loadWateringChart(canvasId, url, hours) {
       return;
     }
     var zoneColors = ['#10b981','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316'];
-    var labels = data.map(function(r) {
-      var d = new Date(r.start_ts);
-      return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    });
-    var durations = data.map(function(r){ return Math.round((r.duration_sec || 0) / 60 * 10) / 10; });
+    var durations = data.map(function(r){ return {x:new Date(r.start_ts),y:Math.round((r.duration_sec || 0) / 60 * 10) / 10}; });
     var colors = data.map(function(r){ return zoneColors[r.zone_id % zoneColors.length]; });
     var tooltipLabels = data.map(function(r){
       return 'Zone ' + (r.zone_id + 1) + ' (' + (r.trigger_reason || '?') + ')';
@@ -4195,13 +4156,13 @@ function loadWateringChart(canvasId, url, hours) {
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: labels,
         datasets: [{
           label: 'Duration (min)',
           data: durations,
           backgroundColor: colors,
           borderWidth: 0,
-          barPercentage: 0.8
+          barPercentage: 0.8,
+          maxBarThickness: 20
         }]
       },
       options: {
@@ -4211,7 +4172,7 @@ function loadWateringChart(canvasId, url, hours) {
           tooltip:{callbacks:{title:function(ctx){return tooltipLabels[ctx[0].dataIndex];}}}
         },
         scales: {
-          x: {display:true, ticks:{maxTicksLimit:8,autoSkip:true,maxRotation:45,font:{size:8}}, grid:{display:false}},
+          x: shTimeAxis(hours),
           y: {display:true, ticks:{font:{size:9}}, grid:{color:'#e5e7eb22'},
               title:{display:true,text:'min',font:{size:8}}}
         }
@@ -4233,19 +4194,13 @@ function loadDecisionChart(canvasId, url, hours) {
       });
       return;
     }
-    var labels = data.map(function(r) {
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Skipped',data:data.map(function(r){return r.zones_skipped||0;}),backgroundColor:'#22c55e88',stack:'s'},
-          {label:'Watered',data:data.map(function(r){return r.zones_watered||0;}),backgroundColor:'#3b82f688',stack:'s'},
-          {label:'Outside Window',data:data.map(function(r){return r.zones_outside_window||0;}),backgroundColor:'#94a3b844',stack:'s'}
+          {label:'Skipped',data:data.map(function(r){return {x:new Date(r.ts),y:r.zones_skipped||0};}),backgroundColor:'#22c55e88',stack:'s',maxBarThickness:20},
+          {label:'Watered',data:data.map(function(r){return {x:new Date(r.ts),y:r.zones_watered||0};}),backgroundColor:'#3b82f688',stack:'s',maxBarThickness:20},
+          {label:'Outside Window',data:data.map(function(r){return {x:new Date(r.ts),y:r.zones_outside_window||0};}),backgroundColor:'#94a3b844',stack:'s',maxBarThickness:20}
         ]
       },
       options: {
@@ -4259,7 +4214,7 @@ function loadDecisionChart(canvasId, url, hours) {
           }}}
         },
         scales:{
-          x:{display:true,ticks:{maxTicksLimit:8,autoSkip:true,maxRotation:45,font:{size:8}},grid:{display:false},stacked:true},
+          x:Object.assign({},shTimeAxis(hours),{stacked:true}),
           y:{display:true,stacked:true,ticks:{font:{size:9},stepSize:1},grid:{color:'#e5e7eb22'},title:{display:true,text:'zones',font:{size:8}}}
         }
       }
@@ -4291,21 +4246,19 @@ function loadDailyUsageChart(canvasId, url, hours) {
       dayMap[r.day].watered=r.zones_watered||0;
     });
     var days = Object.keys(dayMap).sort();
-    var labels = days.map(function(d){return d.slice(5);});// MM-DD
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Gallons Used',data:days.map(function(d){return Math.round((dayMap[d].gallons||0)*10)/10;}),backgroundColor:'#3b82f6aa',yAxisID:'y'},
-          {label:'Events',data:days.map(function(d){return dayMap[d].events||0;}),backgroundColor:'#f59e0b55',yAxisID:'y1'}
+          {label:'Gallons Used',data:days.map(function(d){return {x:new Date(d+'T12:00:00'),y:Math.round((dayMap[d].gallons||0)*10)/10};}),backgroundColor:'#3b82f6aa',yAxisID:'y',maxBarThickness:30},
+          {label:'Events',data:days.map(function(d){return {x:new Date(d+'T12:00:00'),y:dayMap[d].events||0};}),backgroundColor:'#f59e0b55',yAxisID:'y1',maxBarThickness:30}
         ]
       },
       options: {
         responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:true,position:'top',labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales:{
-          x:{display:true,ticks:{maxTicksLimit:10,autoSkip:true,font:{size:8}},grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true,position:'left',ticks:{font:{size:9}},grid:{color:'#e5e7eb22'},title:{display:true,text:'gal',font:{size:8}}},
           y1:{display:true,position:'right',ticks:{font:{size:9},stepSize:1},grid:{display:false},title:{display:true,text:'events',font:{size:8}}}
         }
@@ -4327,15 +4280,13 @@ function loadCostChart(canvasId, url, hours) {
       });
       return;
     }
-    var labels = data.map(function(r){return r.date.slice(5);});
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Actual Cost ($)',data:data.map(function(r){return Math.round((r.cost||0)*100)/100;}),
+          {label:'Actual Cost ($)',data:data.map(function(r){return {x:new Date(r.date+'T12:00:00'),y:Math.round((r.cost||0)*100)/100};}),
            borderColor:'#ef4444',backgroundColor:'#ef444425',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3,yAxisID:'y'},
-          {label:'Avoided Cost ($)',data:data.map(function(r){return Math.round((r.cost_avoided||0)*100)/100;}),
+          {label:'Avoided Cost ($)',data:data.map(function(r){return {x:new Date(r.date+'T12:00:00'),y:Math.round((r.cost_avoided||0)*100)/100};}),
            borderColor:'#22c55e',backgroundColor:'#22c55e25',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3,yAxisID:'y'}
         ]
       },
@@ -4343,7 +4294,7 @@ function loadCostChart(canvasId, url, hours) {
         responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:true,position:'top',labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales:{
-          x:{display:true,ticks:{maxTicksLimit:10,autoSkip:true,font:{size:8}},grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true,ticks:{font:{size:9},callback:function(v){return '$'+v;}},grid:{color:'#e5e7eb22'},title:{display:true,text:'$',font:{size:8}}}
         }
       }
@@ -4364,17 +4315,15 @@ function loadBalanceChart(canvasId, url, hours) {
       });
       return;
     }
-    var labels = data.map(function(r){return r.ts.slice(5);});
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
-        labels: labels,
         datasets: [
-          {label:'Balance (mm)',data:data.map(function(r){return r.balance_mm;}),
+          {label:'Balance (mm)',data:data.map(function(r){return {x:new Date(r.ts),y:r.balance_mm};}),
            borderColor:'#3b82f6',backgroundColor:'#3b82f625',borderWidth:2,pointRadius:0,fill:true,tension:0.3},
-          {label:'TAW (mm)',data:data.map(function(r){return r.taw_mm;}),
+          {label:'TAW (mm)',data:data.map(function(r){return {x:new Date(r.ts),y:r.taw_mm};}),
            borderColor:'#22c55e',backgroundColor:'transparent',borderWidth:1,borderDash:[6,3],pointRadius:0,fill:false},
-          {label:'MAD trigger (mm)',data:data.map(function(r){return r.mad_mm;}),
+          {label:'MAD trigger (mm)',data:data.map(function(r){return {x:new Date(r.ts),y:r.mad_mm};}),
            borderColor:'#ef4444',backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,fill:false}
         ]
       },
@@ -4382,7 +4331,7 @@ function loadBalanceChart(canvasId, url, hours) {
         responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:true,position:'top',labels:{boxWidth:10,font:{size:8},padding:4}}},
         scales:{
-          x:{display:true,ticks:{maxTicksLimit:10,autoSkip:true,font:{size:8}},grid:{display:false}},
+          x:shTimeAxis(hours),
           y:{display:true,ticks:{font:{size:9}},grid:{color:'#e5e7eb22'},title:{display:true,text:'mm',font:{size:8}}}
         }
       }
@@ -4423,6 +4372,19 @@ function loadFaultStatus() {
 
 // ── System Telemetry chart functions ──
 
+/* Shared time-axis config for ALL history charts — ensures identical x-range */
+function shTimeAxis(hours) {
+  var now = new Date();
+  var min = new Date(now.getTime() - hours * 3600000);
+  return {
+    type: 'time',
+    time: { tooltipFormat: 'MMM d, h:mm a', displayFormats: { hour: 'ha', day: 'MMM d' } },
+    min: min, max: now,
+    ticks: { maxTicksLimit: 8, font: { size: 9 } },
+    grid: { display: false }
+  };
+}
+
 function loadBatteryChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     var hasData = data.some(function(r){ return r.battery_v != null; });
@@ -4441,23 +4403,18 @@ function loadBatteryChart(canvasId, url, hours) {
       return;
     }
     canvas.style.display = '';
-    var labels = data.map(function(r){
-      var d2 = new Date(r.ts);
-      if (hours <= 24) return d2.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d2.getMonth()+1)+'/'+d2.getDate()+' '+d2.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
-    var volts = data.map(function(r){ return r.battery_v; });
+    var volts = data.map(function(r){ return {x: new Date(r.ts), y: r.battery_v}; });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: { labels: labels, datasets: [{
+      data: { datasets: [{
         label: 'Battery (V)', data: volts, borderColor: '#22c55e', backgroundColor: '#22c55e15',
         borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3
       }]},
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: { display: true, ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+        scales: { x: shTimeAxis(hours),
                   y: { title: { display: true, text: 'Volts' } } }
       }
     });
@@ -4482,16 +4439,11 @@ function loadWifiReconnectsChart(canvasId, url, hours) {
       return;
     }
     canvas.style.display = '';
-    var labels = data.map(function(r){
-      var d2 = new Date(r.ts);
-      if (hours <= 24) return d2.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d2.getMonth()+1)+'/'+d2.getDate()+' '+d2.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
-    var recon = data.map(function(r){ return r.wifi_reconnects; });
+    var recon = data.map(function(r){ return {x:new Date(r.ts),y:r.wifi_reconnects}; });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: { labels: labels, datasets: [{
+      data: { datasets: [{
         label: 'Reconnects', data: recon, borderColor: '#f59e0b', backgroundColor: '#f59e0b15',
         borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3, stepped: 'before'
       }]},
@@ -4503,7 +4455,7 @@ function loadWifiReconnectsChart(canvasId, url, hours) {
             return v + ' reconnects (cumulative since boot)';
           }}}
         },
-        scales: { x: { display: true, ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+        scales: { x: shTimeAxis(hours),
                   y: { beginAtZero: true, title: { display: true, text: 'Reconnects' } } }
       }
     });
@@ -4528,23 +4480,18 @@ function loadCrashChart(canvasId, url, hours) {
       return;
     }
     canvas.style.display = '';
-    var labels = data.map(function(r){
-      var d2 = new Date(r.ts);
-      if (hours <= 24) return d2.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d2.getMonth()+1)+'/'+d2.getDate()+' '+d2.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     // Show crash_count as stepped line, highlight jumps
-    var crashes = data.map(function(r){ return r.crash_count; });
+    var crashes = data.map(function(r){ return {x:new Date(r.ts),y:r.crash_count}; });
     // Detect resets (crash count drops) — mark with red dots
     var resetPts = data.map(function(r, i){
       if (i === 0) return null;
-      if (r.crash_count != null && data[i-1].crash_count != null && r.crash_count < data[i-1].crash_count) return r.crash_count;
+      if (r.crash_count != null && data[i-1].crash_count != null && r.crash_count < data[i-1].crash_count) return {x:new Date(r.ts),y:r.crash_count};
       return null;
     });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
-      data: { labels: labels, datasets: [
+      data: { datasets: [
         { label: 'Crash Count', data: crashes, borderColor: '#ef4444', backgroundColor: '#ef444415',
           borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0, stepped: 'before' },
         { label: 'Reboot', data: resetPts, borderColor: '#ef4444', backgroundColor: '#ef4444',
@@ -4558,7 +4505,7 @@ function loadCrashChart(canvasId, url, hours) {
             return ctx.parsed.y + ' crashes (cumulative)';
           }}}
         },
-        scales: { x: { display: true, ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+        scales: { x: shTimeAxis(hours),
                   y: { beginAtZero: true, title: { display: true, text: 'Crashes' } } }
       }
     });
@@ -4627,26 +4574,21 @@ function loadServerHealth(hours) {
   // Time-series charts
   fetch('/api/server-health-history?hours=' + hours).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
-    var labels = data.map(function(r){
-      var d = new Date(r.ts);
-      if (hours <= 24) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-      return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toLocaleTimeString('en-US',{hour:'numeric'});
-    });
     // Disk %
     var diskCanvas = document.getElementById('sh-chart-disk-pct');
     if (diskCanvas) {
       if (_ddCharts['sh-chart-disk-pct']) _ddCharts['sh-chart-disk-pct'].destroy();
       _ddCharts['sh-chart-disk-pct'] = new Chart(diskCanvas.getContext('2d'), {
         type: 'line',
-        data: { labels: labels, datasets: [{
-          data: data.map(function(r){ return r.disk_pct; }),
+        data: { datasets: [{
+          data: data.map(function(r){ return {x:new Date(r.ts),y:r.disk_pct}; }),
           borderColor: '#22c55e', backgroundColor: '#22c55e15',
           borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3
         }]},
         options: { responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false },
             tooltip: { callbacks: { label: function(ctx){ return ctx.parsed.y + '%'; } } } },
-          scales: { x: { display: true, ticks: { maxTicksLimit: 6, font: { size: 9 } } },
+          scales: { x: shTimeAxis(hours),
                     y: { min: 0, suggestedMax: 20, ticks: { callback: function(v){ return v + '%'; } } } } }
       });
     }
@@ -4656,15 +4598,15 @@ function loadServerHealth(hours) {
       if (_ddCharts['sh-chart-db-size']) _ddCharts['sh-chart-db-size'].destroy();
       _ddCharts['sh-chart-db-size'] = new Chart(dbCanvas.getContext('2d'), {
         type: 'line',
-        data: { labels: labels, datasets: [{
-          data: data.map(function(r){ return r.db_size_mb; }),
+        data: { datasets: [{
+          data: data.map(function(r){ return {x:new Date(r.ts),y:r.db_size_mb}; }),
           borderColor: '#3b82f6', backgroundColor: '#3b82f615',
           borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3
         }]},
         options: { responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false },
             tooltip: { callbacks: { label: function(ctx){ return ctx.parsed.y + ' MB'; } } } },
-          scales: { x: { display: true, ticks: { maxTicksLimit: 6, font: { size: 9 } } },
+          scales: { x: shTimeAxis(hours),
                     y: { ticks: { callback: function(v){ return v + ' MB'; } } } } }
       });
     }
@@ -4676,14 +4618,14 @@ function loadServerHealth(hours) {
       var bgColors = temps.map(function(t){ return t > 80 ? '#ef444430' : t > 65 ? '#f59e0b20' : '#22c55e10'; });
       _ddCharts['sh-chart-cpu-temp'] = new Chart(cpuCanvas.getContext('2d'), {
         type: 'line',
-        data: { labels: labels, datasets: [{
-          data: temps, borderColor: '#ef4444', backgroundColor: '#ef444415',
+        data: { datasets: [{
+          data: data.map(function(r){ return {x:new Date(r.ts),y:r.cpu_temp_c}; }), borderColor: '#ef4444', backgroundColor: '#ef444415',
           borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3
         }]},
         options: { responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false },
             tooltip: { callbacks: { label: function(ctx){ return ctx.parsed.y + '°C (' + Math.round(ctx.parsed.y*9/5+32) + '°F)'; } } } },
-          scales: { x: { display: true, ticks: { maxTicksLimit: 6, font: { size: 9 } } },
+          scales: { x: shTimeAxis(hours),
                     y: { ticks: { callback: function(v){ return v + '°C'; } } } } }
       });
     }
@@ -5373,6 +5315,17 @@ function cfgSave() {
 document.querySelectorAll('.mob-nav-item[data-panel]').forEach(function(item) {
   item.addEventListener('click', function() { showPanel(item.dataset.panel); });
 });
+// Force mobile nav visible after chart rendering (history page has 20+ charts that hammer the DOM)
+var _origShow = showPanel;
+showPanel = function(id) {
+  _origShow(id);
+  if (id === 'history' && window.innerWidth <= 768) {
+    setTimeout(function() {
+      var nav = document.querySelector('.mobile-nav');
+      if (nav) { nav.style.display = 'block'; nav.style.visibility = 'visible'; }
+    }, 500);
+  }
+};
 </script>
 </body>
 </html>

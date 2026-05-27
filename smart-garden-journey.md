@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** ⚠️ **Firmware power optimization pending flash + plumbing permit submitted.** Three firmware changes ready: (1) status polls no longer prevent light sleep, (2) CPU 240→160 MHz, (3) WiFi modem sleep comment fix. Also: WiFi-recovery bugs from 05-21 still pending. All need USB flash. Server-side: forecast-vs-actual feature deployed, battery voltage chart on home page.
+**Status:** ✅ **Firmware flashed (power optimization + WiFi recovery).** ESP32 offline — battery depleted, solar recharging, waiting for Wanderer LVD reconnect (~12.6V). Dashboard: history chart axes aligned, mobile nav GPU fix deployed.
 **Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -195,6 +195,60 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 ---
 
+## Session Log: 2026-05-27 (Dashboard Fixes + Firmware Flash)
+
+### Dashboard: History chart time axes aligned (deployed)
+
+**Problem:** Each history chart built its own x-axis from its data points (category labels). Charts with different data density showed different time ranges — battery chart might span 11AM-8AM while DHT22 only showed 8PM-8AM.
+
+**Fix:** Created shared `shTimeAxis(hours)` helper that returns a Chart.js `type: 'time'` config with identical `min`/`max` bounds from `getChartTimeBounds()`. Converted all 15+ chart functions to use `{x: new Date(r.ts), y: value}` data format instead of separate `labels`/`data` arrays. Added `chartjs-adapter-date-fns` CDN (was missing from git version).
+
+**Charts converted:** loadSensorChart, loadDHTBoxChart, loadSoilDualChart, loadSoilNoiseChart, loadSoilWifiChart, loadConnectivityChart, loadUptimeChart, loadWateringChart, loadDecisionChart, loadDailyUsageChart, loadCostChart, loadBalanceChart, loadWifiReconnectsChart, loadCrashChart, loadBatteryChart, loadServerHealth (disk/db/cpu).
+
+**Encoding incident:** First attempt used `ssh cat | Out-File` which mangled UTF-8 → garbled all emoji on the dashboard. Fixed by using `git stash` to recover clean file, then applying changes via Python script with explicit `encoding='utf-8'`.
+
+### Dashboard: Mobile nav fix attempt (deployed, unverified)
+
+**Problem:** Bottom mobile nav bar (Home/Zones/History/Settings/Forecast) not visible on History page on phone.
+
+**Attempted fixes:**
+1. CSS `will-change:transform; transform:translateZ(0)` on `.mobile-nav` — GPU compositing layer
+2. CSS `contain:layout style` on `.mobile-nav`, `contain:content` on `.panel`, `z-index:1` on canvases
+3. JS forced-visibility — 500ms timer after switching to History panel sets `display:block; visibility:visible`
+
+**Status:** Deployed but not yet verified on phone (user moved on to firmware flash).
+
+### Firmware: Power optimization FLASHED ✅
+
+Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
+- CPU: 160 MHz (was 240) ✅
+- WiFi: low-boot TX 8.5 dBm → 19.5 dBm post-connect ✅
+- Boot #201, crash counter 1/20
+- All 10 valves closed (safe startup) ✅
+- DHT22: 65.7°F, 57.4% humidity ✅
+- Free heap: 240KB ✅
+- WiFi connected to 192.168.0.150 ✅
+
+**Changes on chip (commit `ee95dd3`):**
+1. `handleApiStatus()` no longer resets `lastApiActivityMs` — light sleep not blocked by status polls
+2. CPU 240→160 MHz
+3. WiFi modem sleep comment fix
+4. WiFi-recovery bugs from 05-21
+
+### ESP32 offline — battery depleted
+
+After USB unplug, ESP32 has no power. Battery was at ~10.6V reported (may be lower — voltage divider ratio uncertain). Renogy Wanderer LVD has cut load output. Solar panel charging; will auto-reconnect at ~12.6V.
+
+**Voltage divider uncertainty:** `config.h` says 6:1 ratio (5×10k + 1×10k), `main.cpp` comment says 5:1 (4×10k + 1×10k). User doesn't remember which was wired. Need multimeter verification next time box is open. If ratio is wrong, all historical battery_v readings in DB are off by 16.7%.
+
+**Next steps when ESP32 comes back online:**
+1. Verify new firmware power draw via battery voltage trend (should drain much slower)
+2. Count resistors in voltage divider, fix `BATTERY_DIVIDER_RATIO` if needed
+3. Test mobile nav on phone
+4. Consider bigger battery (12V 20Ah, ~$40-50) for 3-week reserve
+
+---
+
 ## Open issues
 
 | Repo | # | Sev | Summary |
@@ -241,7 +295,7 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 - Home chart loads on page init via `loadBatteryChart('home-chart-battery', ...)`.
 - History chart loads in `loadSensorHistory()` as `sh-chart-battery-top`.
 
-### Firmware: Power optimization (PENDING FLASH)
+### Firmware: Power optimization (FLASHED 2026-05-27)
 
 **Root cause identified:** `handleApiStatus()` set `lastApiActivityMs = millis()` on every call. Server polls `/api/status` every 5 min. `AWAKE_HOLD_MS = 300000` (5 min). Result: chip never entered light sleep — each poll arrived just as the hold expired.
 

@@ -113,7 +113,7 @@ const char* MQTT_PASS     = "";
 // ============================================================
 // Light Sleep — power saving between activity
 // ============================================================
-#define LIGHT_SLEEP_ENABLED      true    // Enable light sleep when idle
+#define LIGHT_SLEEP_ENABLED      false   // DISABLED 2026-05-27: causes WiFi deauth from Eero mesh
 #define LIGHT_SLEEP_INTERVAL_MS  100     // Light sleep duration per cycle (ms) — WiFi stays associated
 #define AWAKE_HOLD_MS            300000  // Stay fully awake 5 min after last API hit (for calibration)
 #define AWAKE_HOLD_VALVE_MS      60000   // Stay awake 60s after last valve close

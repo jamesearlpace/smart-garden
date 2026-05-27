@@ -1,10 +1,50 @@
 # Smart Garden — Journey Doc
 
-**Status:** ⚠️ **Firmware fix pending flash.** Two WiFi-recovery bugs fixed in `main.cpp` (AP-mode trap + deep-sleep crashCount lockout). Needs USB flash via `pio run -e esp32 --target upload`. Hardware running — ESP32 back online after manual EN reset (battery had sagged to 10.99V).
-**Last Updated:** 2026-05-18
+**Status:** ⚠️ **Firmware power optimization pending flash + plumbing permit submitted.** Three firmware changes ready: (1) status polls no longer prevent light sleep, (2) CPU 240→160 MHz, (3) WiFi modem sleep comment fix. Also: WiFi-recovery bugs from 05-21 still pending. All need USB flash. Server-side: forecast-vs-actual feature deployed, battery voltage chart on home page.
+**Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
+
+---
+
+## Plumbing Permit — Irrigation Water Tap
+
+**Status:** Application submitted 2026-05-21 via Duvall permit portal. **Permit #26-175.** Currently in Administrative Review.
+
+### What's being done
+Tapping into the potable water supply right after the water meter (NW corner of property) to create a dedicated irrigation supply line. Bypasses house plumbing for better flow (expect ~7.5-8.5 GPM vs. current 6.0 GPM through hose bibb).
+
+### Permit documents (all in `C:\MyCode\smart-garden\`)
+| File | Purpose |
+|------|---------|
+| `permit-plumbing-schematic.svg` | Plumbing connection diagram: meter → tee → ball valve → DCVA → 1" poly → 2 valve boxes (4+5) |
+| `permit-site-plan.svg` | Property layout showing meter, tee, DCVA, main line route, valve box locations |
+| `permit-acting-as-own-contractor.pdf` | City form — print, sign, scan, upload |
+
+### Backflow preventer decision
+- **Proposed:** DCVA (Double Check Valve Assembly) — Watts 007M1-QT, 1" bronze
+- **Why DCVA:** Can install underground in valve box (no freeze risk, no ugly riser), handles backpressure, single device for whole system
+- **Alternative:** PVB (Pressure Vacuum Breaker) — cheaper (~$150 vs ~$200-500) but must be above ground 12" above highest head
+- **Hazard classification:** Low hazard (no chemical injection) per WAC 246-290-490
+- **Annual testing required:** By Sept 1 each year, certified BAT tester. City mails reminder in June.
+- **Key contact:** Duvall Public Works backflow line: 425-788-3434 / CoDbackflow@duvallwa.gov
+- **Permit tech:** 425-788-2779 / permit.technician@duvallwa.gov
+
+### Connection layout
+```
+Water Meter (¾", NW corner) → existing pipe → NEW TEE
+  ├→ Right: existing water to house (no change)
+  └→ Down: Ball Valve → DCVA → 1" Poly (100 PSI) → VB1 (4 valves) → VB2 (5 valves)
+```
+
+### Next steps after permit approval
+1. Call 425-788-3434 to confirm DCVA is accepted (or if they require PVB)
+2. Buy the backflow device (Watts 007M1-QT 1" at Lowe's — bookmarked)
+3. Do the plumbing work (shut off water, cut in tee, install ball valve + DCVA, run 1" poly)
+4. Schedule inspection: permit.technician@duvallwa.gov or 425-788-1160 (24h advance, leave trench open)
+5. After approval: hire certified BAT for initial field test (find at https://wcs.greenriver.edu/bat/hire-a-bat/)
+6. Annual backflow test due by Sept 1 each year
 
 ---
 
@@ -34,10 +74,12 @@ http://192.168.0.109:5125
 
 ### Deploy server changes
 ```powershell
-cd C:\MyCode\smart-garden-server
-scp <file>.py jamesearlpace@192.168.0.109:~/smart-garden-server/
+cd C:\MyCode\smart-garden\server-prod
+scp database.py dashboard.py irrigation.py server.py jamesearlpace@192.168.0.109:~/smart-garden-server/
+scp templates/*.html jamesearlpace@192.168.0.109:~/smart-garden-server/templates/
 ssh jamesearlpace@192.168.0.109 "sudo systemctl restart smart-garden-server.service"
 ```
+**Local working copies:** `C:\MyCode\smart-garden\server-prod\` (mirrors `~/smart-garden-server/` on Acer).
 **NOT a git repo on the server** — deploy by scp, not pull.
 
 ### Flash firmware (USB only — OTA disabled)
@@ -168,6 +210,63 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 | smart-garden-server | (closed) | — | Chip-temp false positives — fixed 2026-04-22. |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji, #12 reboot wiring — closed 2026-04-21. |
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
+
+---
+
+## Session Log: 2026-05-26 (Forecast vs Actual + Battery Optimization)
+
+### Server: Forecast vs Actual feature (deployed)
+
+**New DB table:** `forecast_snapshot` — captures daily per-zone predictions (balance, ET, days-until-water, predicted skip reason). Schema in `database.py`, UNIQUE on `(forecast_date, zone_id)`.
+
+**Daily job:** `save_daily_forecast_snapshot()` in `irrigation.py` — runs at **3:55 AM** (cron in `server.py`) before the 4:00 AM watering window. Records what the system predicts will happen.
+
+**Comparison engine:** `get_forecast_vs_actual(days)` in `database.py` — LEFT JOINs forecast snapshots with `watering_event` and `skip_event`. Computes outcome labels: `correct_water`, `correct_skip`, `false_skip`, `missed_skip`, `no_event`. Also `get_forecast_accuracy_summary(days)` for aggregate stats.
+
+**API endpoints** (in `dashboard.py`):
+- `GET /api/forecast-vs-actual?days=30` — comparison data + accuracy summary
+- `POST /api/forecast-snapshot` — manual trigger for testing
+- `GET /forecast-vs-actual` — serves `forecast_vs_actual.html`
+
+**UI:** `templates/forecast_vs_actual.html` — dark theme matching existing dashboard. Accuracy banner, date-grouped timeline, zone/outcome/date-range filters, "Take Snapshot Now" button. Nav links added to desktop sidebar (🎯 icon) and mobile bottom nav.
+
+**Files changed on Acer:** `database.py`, `dashboard.py`, `irrigation.py`, `server.py`, `templates/index.html`, `templates/forecast.html`, `templates/forecast_vs_actual.html`.
+
+**First snapshot seeded:** 9 zones (Front Yard A/B, Enclosed Backyard A/B, SE, S, SW, Garden, Grapes). Sprinkler zones ~9 days until water, drip zones ~16-19 days.
+
+### Server: Battery voltage chart prominent (deployed)
+
+- **Home page:** Battery voltage card added below health cards (Uptime/WiFi/Memory/Crashes), above Sensors. Shows current voltage with color coding (🟢>12.4V, 🟡12.0–12.4V, 🔴<12.0V, ⚡>13.5V charging) + 24h chart.
+- **History page:** Battery chart moved to top (first chart, before DHT22/Soil). Same color legend + 200px chart with time range buttons.
+- Home chart loads on page init via `loadBatteryChart('home-chart-battery', ...)`.
+- History chart loads in `loadSensorHistory()` as `sh-chart-battery-top`.
+
+### Firmware: Power optimization (PENDING FLASH)
+
+**Root cause identified:** `handleApiStatus()` set `lastApiActivityMs = millis()` on every call. Server polls `/api/status` every 5 min. `AWAKE_HOLD_MS = 300000` (5 min). Result: chip never entered light sleep — each poll arrived just as the hold expired.
+
+**Changes in `src/main.cpp` and `src/config.h`:**
+
+1. **`handleApiStatus()` no longer resets `lastApiActivityMs`** — status polls (read-only) let the chip wake briefly (~50ms), serve, and go back to light sleep. Only state-changing commands (valve, closeall, reboot) keep the chip fully awake for 5 min. This is the big win (~80 mA saved idle).
+
+2. **`RUN_CPU_MHZ` 240 → 160** in `config.h` — still fast enough for WiFi + web server, saves ~15% CPU power.
+
+3. **`WiFi.setSleep(false)` comment updated** — clarified this is only for initial connect; the light sleep path already re-enables `WIFI_PS_MIN_MODEM` correctly via `esp_wifi_set_ps()`.
+
+**Expected impact:** ~120-150 mA continuous → ~30-50 mA average (mostly sleeping). On 7Ah SLA: ~2 days → ~5-6 days runtime without solar.
+
+**Valve commands still instant:** chip wakes from light sleep on incoming WiFi packet, <100ms latency.
+
+**To flash:**
+```powershell
+cd C:\MyCode\smart-garden
+pio run -e esp32 --target upload --upload-port COM5
+pio device monitor --baud 115200 --port COM5
+```
+
+### Hardware recommendations noted
+- **Bigger battery:** 12V 20Ah (~$40-50) would give ~3 weeks reserve vs 7 days with 7Ah.
+- **Solar angle:** Tilt panel to ~48° (latitude match) for 30-40% winter output improvement.
 
 ---
 

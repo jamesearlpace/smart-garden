@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forecast — Smart Garden</title>
+<style>
+:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0;
+        --text2: #94a3b8; --green: #22c55e; --blue: #3b82f6; --amber: #f59e0b;
+        --red: #ef4444; --purple: #a855f7; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px 16px 80px; max-width: 900px; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin-bottom: 4px; }
+.sub { color: var(--text2); font-size: .85rem; margin-bottom: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px;
+        border: 1px solid var(--border); }
+.card h2 { font-size: 1rem; margin-bottom: 8px; }
+a { color: var(--blue); text-decoration: none; }
+.loading { text-align: center; padding: 40px; color: var(--text2); }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
+.tab { padding: 10px 20px; font-size: .9rem; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent;
+       margin-bottom: -2px; color: var(--text2); transition: color .2s, border-color .2s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--green); border-bottom-color: var(--green); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* Forecast tab styles */
+.weather { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.stat { text-align: center; }
+.stat .val { font-size: 1.3rem; font-weight: 700; }
+.stat .lbl { font-size: .7rem; color: var(--text2); }
+.zone { display: flex; justify-content: space-between; align-items: center; padding: 10px 0;
+        border-bottom: 1px solid var(--border); }
+.zone:last-child { border-bottom: none; }
+.zone-name { font-weight: 600; font-size: .95rem; }
+.zone-detail { font-size: .8rem; color: var(--text2); }
+.zone-forecast { text-align: right; }
+.days { font-size: 1.2rem; font-weight: 700; }
+.days.soon { color: var(--amber); }
+.days.now { color: var(--red); }
+.days.ok { color: var(--green); }
+.next-date { font-size: .75rem; color: var(--text2); }
+.bar-wrap { height: 6px; background: #334155; border-radius: 3px; margin-top: 4px; width: 120px; }
+.bar { height: 100%; border-radius: 3px; }
+
+/* Forecast vs Actual tab styles */
+.accuracy-banner { display: flex; gap: 16px; flex-wrap: wrap; }
+.acc-stat { flex: 1; min-width: 100px; text-align: center; padding: 12px; background: #0f172a; border-radius: 8px; }
+.acc-stat .aval { font-size: 1.6rem; font-weight: 700; }
+.acc-stat .albl { font-size: .7rem; color: var(--text2); margin-top: 2px; }
+.acc-good { color: var(--green); }
+.acc-warn { color: var(--amber); }
+.acc-bad { color: var(--red); }
+.controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.controls select, .controls button { background: var(--card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 12px; font-size: .85rem; cursor: pointer; }
+.day-group { margin-bottom: 16px; }
+.day-header { font-size: .85rem; font-weight: 600; color: var(--text2); margin-bottom: 8px;
+              padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.event-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid #1e293b; align-items: flex-start; }
+.event-row:last-child { border-bottom: none; }
+.zone-col { width: 140px; flex-shrink: 0; }
+.zone-col .name { font-weight: 600; font-size: .9rem; }
+.forecast-col, .actual-col { flex: 1; min-width: 0; }
+.col-header { font-size: .65rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); margin-bottom: 4px; }
+.forecast-col .detail { color: var(--purple); font-size: .85rem; }
+.actual-col .detail { font-size: .85rem; }
+.outcome-col { width: 90px; flex-shrink: 0; text-align: center; }
+.badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: .75rem; font-weight: 600; }
+.badge-correct_water, .badge-correct_skip { background: rgba(34,197,94,.15); color: var(--green); }
+.badge-false_skip { background: rgba(239,68,68,.15); color: var(--red); }
+.badge-missed_skip { background: rgba(245,158,11,.15); color: var(--amber); }
+.badge-no_event, .badge-other { background: rgba(148,163,184,.1); color: var(--text2); }
+.empty { text-align: center; padding: 40px; color: var(--text2); }
+.empty .icon { font-size: 2rem; margin-bottom: 8px; }
+.seed-btn { margin-top: 12px; padding: 8px 20px; background: var(--blue); color: white;
+            border: none; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+
+/* Mobile bottom nav */
+.mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
+              border-top: 1px solid var(--border); z-index: 100; padding: 4px 0; }
+.mobile-nav-inner { display: flex; justify-content: space-around; }
+.mob-nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 8px;
+                font-size: .65rem; color: var(--text2); text-decoration: none; cursor: pointer; }
+.mob-nav-item.active { color: var(--green); }
+.mob-nav-item .mob-icon { font-size: 1.2rem; }
+@media (max-width: 800px) {
+  .mobile-nav { display: block; }
+  body { padding-bottom: 80px; }
+  .event-row { flex-direction: column; gap: 6px; }
+  .zone-col { width: auto; }
+  .outcome-col { width: auto; text-align: left; }
+  .accuracy-banner { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<h1>🌧️ Forecast</h1>
+<div class="sub">Watering predictions and accuracy tracking</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('forecast')">Forecast</div>
+  <div class="tab" onclick="switchTab('comparison')">Forecast vs Actual</div>
+</div>
+
+<!-- ═══ TAB 1: Forecast ═══ -->
+<div class="tab-panel active" id="tab-forecast">
+  <div id="forecast-content"><div class="loading">Loading forecast...</div></div>
+</div>
+
+<!-- ═══ TAB 2: Forecast vs Actual ═══ -->
+<div class="tab-panel" id="tab-comparison">
+  <div class="controls">
+    <select id="dayRange" onchange="loadComparison()">
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30" selected>Last 30 days</option>
+      <option value="90">Last 90 days</option>
+    </select>
+    <select id="zoneFilter" onchange="applyFilter()">
+      <option value="all">All zones</option>
+    </select>
+    <select id="outcomeFilter" onchange="applyFilter()">
+      <option value="all">All outcomes</option>
+      <option value="correct_water">✅ Correct water</option>
+      <option value="correct_skip">✅ Correct skip</option>
+      <option value="false_skip">❌ False skip</option>
+      <option value="missed_skip">⚠️ Missed skip</option>
+      <option value="no_event">— No event</option>
+    </select>
+  </div>
+  <div id="comparison-content"><div class="loading">Loading...</div></div>
+</div>
+
+<!-- Mobile bottom nav -->
+<div class="mobile-nav">
+  <div class="mobile-nav-inner">
+    <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
+    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','zones')"><span class="mob-icon">🌿</span>Zones</a>
+    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','history')"><span class="mob-icon">📊</span>History</a>
+    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','settings')"><span class="mob-icon">⚙️</span>Settings</a>
+    <a href="/forecast" class="mob-nav-item active"><span class="mob-icon">🌧️</span>Forecast</a>
+  </div>
+</div>
+
+<script>
+/* ═══ Tab switching ═══ */
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('.tab-panel#tab-' + id).classList.add('active');
+  // Activate the clicked tab
+  var tabs = document.querySelectorAll('.tab');
+  if (id === 'forecast') tabs[0].classList.add('active');
+  else tabs[1].classList.add('active');
+  localStorage.setItem('sg-forecast-tab', id);
+  if (id === 'comparison' && !compLoaded) loadComparison();
+}
+
+/* ═══ TAB 1: Forecast ═══ */
+async function loadForecast() {
+  try {
+    const r = await fetch('/api/forecast');
+    if (r.status === 401) { window.location.href = '/login'; return; }
+    const d = await r.json();
+    renderForecast(d);
+  } catch(e) {
+    document.getElementById('forecast-content').innerHTML = '<div class="card">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderForecast(d) {
+  let html = '';
+  const w = d.weather || {};
+  html += '<div class="card"><h2>Current Conditions</h2><div class="weather">';
+  html += fstat(w.temp_f ? w.temp_f.toFixed(0) + '°F' : '?', 'Temperature');
+  html += fstat(w.humidity_pct ? w.humidity_pct + '%' : '?', 'Humidity');
+  html += fstat(d.et0_today ? d.et0_today.toFixed(1) + 'mm' : '?', 'ET₀ Today');
+  html += fstat(w.rain_forecast_mm ? w.rain_forecast_mm.toFixed(1) + 'mm' : '0mm', 'Rain Forecast');
+  html += fstat(w.wind_mph ? w.wind_mph.toFixed(0) + 'mph' : '?', 'Wind');
+  html += '</div></div>';
+
+  html += '<div class="card"><h2>Zone Forecast</h2>';
+  if (!d.zones || d.zones.length === 0) {
+    html += '<div style="color:var(--text2);padding:12px">No zone data available</div>';
+  } else {
+    d.zones.forEach(z => {
+      const days = z.days_until_water;
+      let daysText, daysClass;
+      if (days === null || days === undefined) { daysText = '?'; daysClass = 'ok'; }
+      else if (days <= 0) { daysText = 'Today'; daysClass = 'now'; }
+      else if (days <= 2) { daysText = days.toFixed(0) + 'd'; daysClass = 'soon'; }
+      else { daysText = days.toFixed(0) + 'd'; daysClass = 'ok'; }
+      const pct = z.balance_pct !== null ? z.balance_pct : 0;
+      const barColor = pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--amber)' : 'var(--red)';
+      html += '<div class="zone"><div>';
+      html += '<div class="zone-name">' + z.name + '</div>';
+      html += '<div class="zone-detail">' + (z.type === 'drip' ? '💧 Drip' : '🌱 Sprinkler') +
+              ' · ET: ' + (z.etc_mm ? z.etc_mm.toFixed(1) : '?') + 'mm/day</div>';
+      html += '<div class="bar-wrap"><div class="bar" style="width:' + pct + '%;background:' + barColor + '"></div></div>';
+      html += '</div><div class="zone-forecast">';
+      html += '<div class="days ' + daysClass + '">' + daysText + '</div>';
+      html += z.next_water_date ? '<div class="next-date">' + z.next_water_date + '</div>' : '';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+  html += '<div class="card" style="font-size:.85rem;color:var(--text2)">⏰ Morning window: ' +
+          (d.window_start || '4:00') + ' – ' + (d.window_end || '7:00') + ' AM</div>';
+  document.getElementById('forecast-content').innerHTML = html;
+}
+
+function fstat(val, label) {
+  return '<div class="stat"><div class="val">' + val + '</div><div class="lbl">' + label + '</div></div>';
+}
+
+/* ═══ TAB 2: Forecast vs Actual ═══ */
+let rawData = null;
+let compLoaded = false;
+
+async function loadComparison() {
+  compLoaded = true;
+  const days = document.getElementById('dayRange').value;
+  try {
+    const r = await fetch('/api/forecast-vs-actual?days=' + days);
+    if (r.status === 401) { window.location.href = '/login'; return; }
+    rawData = await r.json();
+    populateZoneFilter(rawData.comparisons);
+    applyFilter();
+  } catch(e) {
+    document.getElementById('comparison-content').innerHTML = '<div class="card">Error: ' + e.message + '</div>';
+  }
+}
+
+function populateZoneFilter(comparisons) {
+  const sel = document.getElementById('zoneFilter');
+  const current = sel.value;
+  const zones = new Map();
+  comparisons.forEach(c => { if (!zones.has(c.zone_id)) zones.set(c.zone_id, c.zone_name); });
+  sel.innerHTML = '<option value="all">All zones</option>';
+  zones.forEach((name, id) => { sel.innerHTML += '<option value="' + id + '">' + name + '</option>'; });
+  sel.value = current;
+}
+
+function applyFilter() {
+  if (!rawData) return;
+  const zoneVal = document.getElementById('zoneFilter').value;
+  const outcomeVal = document.getElementById('outcomeFilter').value;
+  let filtered = rawData.comparisons;
+  if (zoneVal !== 'all') filtered = filtered.filter(c => c.zone_id == zoneVal);
+  if (outcomeVal !== 'all') filtered = filtered.filter(c => c.outcome === outcomeVal);
+  renderComparison(rawData.accuracy, filtered);
+}
+
+function renderComparison(accuracy, comparisons) {
+  let html = '';
+  if (accuracy && accuracy.total > 0) {
+    const accPct = accuracy.accuracy_pct;
+    const accClass = accPct >= 80 ? 'acc-good' : accPct >= 60 ? 'acc-warn' : 'acc-bad';
+    html += '<div class="card"><h2>Accuracy Summary</h2><div class="accuracy-banner">';
+    html += accStat(accPct !== null ? accPct + '%' : '—', 'Accuracy', accClass);
+    html += accStat(accuracy.total, 'Predictions', '');
+    html += accStat(accuracy.total_waterings, 'Waterings', 'acc-good');
+    html += accStat(accuracy.total_skips, 'Skips', '');
+    html += accStat(accuracy.false_skips, 'False Skips', accuracy.false_skips > 0 ? 'acc-bad' : '');
+    html += accStat(accuracy.missed_skips, 'Missed Skips', accuracy.missed_skips > 0 ? 'acc-warn' : '');
+    html += '</div></div>';
+  }
+  if (!comparisons || comparisons.length === 0) {
+    html += '<div class="card empty"><div class="icon">📊</div><div>No forecast data yet.</div>';
+    html += '<div style="color:var(--text2);font-size:.85rem;margin-top:8px">Forecasts are captured daily at 3:55 AM.<br>';
+    html += 'You can take a manual snapshot now to start collecting data.</div>';
+    html += '<button class="seed-btn" onclick="seedSnapshot()">Take Snapshot Now</button></div>';
+    document.getElementById('comparison-content').innerHTML = html;
+    return;
+  }
+  const byDate = {};
+  comparisons.forEach(c => { if (!byDate[c.forecast_date]) byDate[c.forecast_date] = []; byDate[c.forecast_date].push(c); });
+  const dates = Object.keys(byDate).sort().reverse();
+  html += '<div class="timeline">';
+  dates.forEach(d => {
+    html += '<div class="day-group"><div class="day-header">' + formatDate(d) + '</div>';
+    byDate[d].forEach(c => { html += renderRow(c); });
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('comparison-content').innerHTML = html;
+}
+
+function renderRow(c) {
+  let html = '<div class="event-row">';
+  html += '<div class="zone-col"><div class="name">' + esc(c.zone_name) + '</div></div>';
+  html += '<div class="forecast-col"><div class="col-header">Predicted</div><div class="detail">';
+  if (c.predicted_skip) html += '⏭️ Skip' + (c.predicted_skip_reason ? ' (' + esc(c.predicted_skip_reason) + ')' : '');
+  else if (c.predicted_days !== null) {
+    if (c.predicted_days <= 0) html += '💧 Water today';
+    else { html += '⏳ ' + c.predicted_days.toFixed(0) + 'd until water';
+           if (c.predicted_date) html += ' (' + formatDate(c.predicted_date) + ')'; }
+  } else html += '— No ET demand';
+  html += '</div><div style="font-size:.75rem;color:var(--text2)">Balance: ' +
+          (c.balance_mm !== null ? c.balance_mm.toFixed(1) : '?') + '/' +
+          (c.taw_mm !== null ? c.taw_mm.toFixed(1) : '?') + 'mm · ET: ' +
+          (c.etc_mm !== null ? c.etc_mm.toFixed(1) : '?') + 'mm' +
+          (c.rain_forecast_mm > 0 ? ' · Rain fcst: ' + c.rain_forecast_mm.toFixed(1) + 'mm' : '') + '</div></div>';
+  html += '<div class="actual-col"><div class="col-header">Actual</div><div class="detail">';
+  if (c.actually_watered) {
+    const mins = c.actual_duration_sec ? (c.actual_duration_sec / 60).toFixed(0) : '?';
+    const gal = c.actual_gallons ? c.actual_gallons.toFixed(1) : null;
+    html += '💧 Watered ' + mins + ' min'; if (gal) html += ' (' + gal + ' gal)';
+    if (c.actual_trigger) html += ' — ' + esc(c.actual_trigger);
+  } else if (c.actually_skipped) {
+    html += '⏭️ Skipped: ' + esc(c.actual_skip_reason || 'unknown');
+    if (c.actual_gallons_saved) html += ' (saved ' + c.actual_gallons_saved.toFixed(1) + ' gal)';
+  } else html += '<span style="color:var(--text2)">No watering or skip event</span>';
+  html += '</div>';
+  if (c.actually_watered && c.actual_soil_before !== null)
+    html += '<div style="font-size:.75rem;color:var(--text2)">Soil: ' +
+            (c.actual_soil_before !== null ? c.actual_soil_before + '%' : '?') + ' → ' +
+            (c.actual_soil_after !== null ? c.actual_soil_after + '%' : '?') + '</div>';
+  html += '</div>';
+  html += '<div class="outcome-col"><span class="badge badge-' + c.outcome + '">' + outcomeLabel(c.outcome) + '</span></div>';
+  html += '</div>';
+  return html;
+}
+
+function outcomeLabel(o) {
+  return { correct_water:'✅ Correct', correct_skip:'✅ Correct', false_skip:'❌ False Skip',
+           missed_skip:'⚠️ Missed', no_event:'— None', other:'? Other' }[o] || o;
+}
+function formatDate(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+}
+function esc(s) { if (!s) return ''; const el = document.createElement('span'); el.textContent = s; return el.innerHTML; }
+function accStat(val, label, cls) {
+  return '<div class="acc-stat"><div class="aval ' + (cls||'') + '">' + val + '</div><div class="albl">' + label + '</div></div>';
+}
+
+async function seedSnapshot() {
+  const btn = document.querySelector('.seed-btn');
+  btn.textContent = 'Saving...'; btn.disabled = true;
+  try {
+    const r = await fetch('/api/forecast-snapshot', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) { btn.textContent = '✅ Saved'; setTimeout(loadComparison, 1000); }
+    else { btn.textContent = 'Error: ' + (d.error||'unknown'); setTimeout(() => { btn.textContent = 'Take Snapshot Now'; btn.disabled = false; }, 3000); }
+  } catch(e) { btn.textContent = 'Error'; setTimeout(() => { btn.textContent = 'Take Snapshot Now'; btn.disabled = false; }, 3000); }
+}
+
+/* ═══ Init ═══ */
+loadForecast();
+setInterval(loadForecast, 300000);
+// Restore last tab
+const savedTab = localStorage.getItem('sg-forecast-tab');
+if (savedTab === 'comparison') switchTab('comparison');
+</script>
+</body>
+</html>

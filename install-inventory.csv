@@ -5,16 +5,15 @@ Valves,Valve Box - Jumbo (12×17in rectangular),Larger box if grouping 2-3 valve
 Valve Manifold,¾in PVC Manifold Tee,Connects valves to main supply line,7,ea,0,7,One per valve; glue into manifold assembly
 Valve Manifold,¾in PVC Slip × FPT Adapter,Connects PVC manifold to valve inlet threads,7,ea,0,7,Orbit 57861 has ¾in FPT inlet/outlet
 Valve Manifold,¾in PVC Slip × MPT Adapter,Connects valve outlet to zone supply line,7,ea,0,7,Downstream side of each valve
-Water Source,¾in Brass Hose Bibb Adapter (FHT × MPT),Connects garden hose thread to PVC main line,1,ea,1,0,Or tap directly into existing supply line
-Water Source,¾in PVC Ball Valve,Manual main shutoff upstream of all zone valves,0,ea,,0,
-Water Source,¾in Backflow Preventer (Anti-Siphon or PVB),Code-required — prevents irrigation water from back-flowing into potable supply,1,ea,1,0,Check Duvall/King County code for required type
+Water Source,¾in Brass Tee (copper/brass),Splice into existing ¾in water line after meter to branch irrigation,1,ea,0,1,New tee right after water meter (NW corner)
+Water Source,1in Ball Valve,Manual main shutoff for irrigation branch,1,ea,0,1,Downstream of tee upstream of DCVA
+Water Source,1in DCVA Backflow Preventer (Watts 007M1-QT),Code-required double check valve assembly — prevents backflow into potable supply,1,ea,0,1,Install in underground valve box. Permit submitted 2026-05-21. Annual BAT test required by Sept 1.
 Water Source,¾in Pressure Regulator (25-30 PSI),Required for drip zones; install on drip branch,1,ea,2,-1,Drip emitters rated for 25 PSI
 Water Source,¾in Inline Filter (150 mesh),Protects drip emitters from clogging,0,ea,,0,Install before drip manifold
-Main Line,¾in Schedule 40 PVC Pipe (10ft sticks),Main supply from water source to valve manifold(s),8,ea,0,8,~80ft estimated; adjust to your yard layout
-Main Line,¾in Schedule 40 PVC 90° Elbow,Direction changes in main line,8,ea,0,8,Estimate — depends on routing
-Main Line,¾in Schedule 40 PVC Tee,Branch points in main line,4,ea,0,4,Where main line splits to valve groups
-Main Line,PVC Primer (purple) 8oz,Cleans PVC before gluing,1,ea,0,1,
-Main Line,PVC Cement (clear/blue) 8oz,Solvent-weld PVC joints,1,ea,0,1,
+Main Line,1in Polyethylene Pipe 100 PSI (100ft roll),Main supply from DCVA to valve boxes,1,roll,0,1,1" poly rated 100 PSI. Run along west property line to backyard.
+Main Line,1in Poly Insert 90° Elbow,Direction changes in main line,4,ea,0,4,Estimate — depends on routing
+Main Line,1in Poly Insert Tee,Branch points in main line for valve boxes,2,ea,0,2,One tee per valve box connection
+Main Line,1in Stainless Steel Clamps,Secure poly fittings,12,ea,0,12,2 per fitting
 Lawn Zones,½in Schedule 40 PVC Pipe (10ft sticks),Lateral lines from valve to sprinkler heads — Zones 4-7,20,ea,0,20,~200ft total across 4 lawn zones; adjust to coverage area
 Lawn Zones,½in PVC 90° Elbow,Direction changes in lateral lines,16,ea,0,16,Estimate
 Lawn Zones,½in PVC Tee,Head-to-head connections in lateral runs,12,ea,0,12,Estimate

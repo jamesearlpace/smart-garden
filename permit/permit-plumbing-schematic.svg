@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="800" viewBox="0 0 1100 800">
+  <style>
+    text { font-family: Arial, Helvetica, sans-serif; }
+    .title { font-size: 20px; font-weight: bold; }
+    .subtitle { font-size: 14px; }
+    .label { font-size: 13px; font-weight: bold; }
+    .detail { font-size: 11px; }
+    .note { font-size: 10px; fill: #555; }
+    .pipe { stroke: #2563eb; stroke-width: 4; fill: none; }
+    .pipe-existing { stroke: #2563eb; stroke-width: 4; fill: none; stroke-dasharray: 8,4; }
+    .component { fill: #f0f9ff; stroke: #1e40af; stroke-width: 2; rx: 6; }
+    .component-new { fill: #dcfce7; stroke: #166534; stroke-width: 2.5; rx: 6; }
+    .arrow { fill: #2563eb; }
+    .flow-arrow { fill: #60a5fa; }
+  </style>
+
+  <!-- Border -->
+  <rect x="10" y="10" width="1080" height="780" fill="white" stroke="#333" stroke-width="2" rx="4"/>
+
+  <!-- Title Block -->
+  <rect x="20" y="20" width="1060" height="65" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" rx="4"/>
+  <text x="550" y="48" text-anchor="middle" class="title">PLUMBING SCHEMATIC — IRRIGATION BACKFLOW CONNECTION</text>
+  <text x="550" y="68" text-anchor="middle" class="subtitle">Pace Residence, Duvall, WA 98019  |  New Irrigation Tap After Water Meter  |  Date: May 2026</text>
+
+  <!-- ========== CITY WATER MAIN ========== -->
+  <line x1="40" y1="200" x2="40" y2="350" class="pipe" stroke="#6b7280" stroke-width="6"/>
+  <text x="30" y="185" class="label" text-anchor="middle" transform="rotate(-90, 30, 275)">CITY WATER MAIN</text>
+
+  <!-- ========== WATER METER ========== -->
+  <line x1="40" y1="270" x2="120" y2="270" class="pipe" stroke="#6b7280" stroke-width="4"/>
+  <rect x="120" y="245" width="100" height="50" class="component"/>
+  <text x="170" y="267" text-anchor="middle" class="label">WATER</text>
+  <text x="170" y="282" text-anchor="middle" class="label">METER</text>
+  <text x="170" y="310" text-anchor="middle" class="detail">(existing, ¾")</text>
+
+  <!-- Pipe from meter to tee -->
+  <line x1="220" y1="270" x2="320" y2="270" class="pipe-existing"/>
+  <text x="270" y="260" text-anchor="middle" class="note">existing ¾" copper</text>
+
+  <!-- ========== TEE (NEW) ========== -->
+  <circle cx="340" cy="270" r="18" fill="#dcfce7" stroke="#166534" stroke-width="2.5"/>
+  <text x="340" y="275" text-anchor="middle" class="label" style="font-size:16px">T</text>
+  <text x="340" y="240" text-anchor="middle" class="label" fill="#166534">NEW TEE</text>
+  <text x="340" y="228" text-anchor="middle" class="detail" fill="#166534">¾" copper/brass</text>
+
+  <!-- ========== TO HOUSE (existing, no change) ========== -->
+  <line x1="358" y1="270" x2="500" y2="270" class="pipe-existing"/>
+  <rect x="500" y="245" width="130" height="50" class="component"/>
+  <text x="565" y="267" text-anchor="middle" class="label">TO HOUSE</text>
+  <text x="565" y="282" text-anchor="middle" class="detail">(existing, no change)</text>
+  <!-- Arrow -->
+  <polygon points="495,270 505,264 505,276" class="flow-arrow"/>
+
+  <!-- ========== IRRIGATION BRANCH (NEW — going down from tee) ========== -->
+  <line x1="340" y1="288" x2="340" y2="370" class="pipe" stroke="#16a34a" stroke-width="4"/>
+  <text x="355" y="340" class="detail" fill="#166534">NEW</text>
+
+  <!-- ========== BALL VALVE (NEW) ========== -->
+  <rect x="295" y="370" width="90" height="40" class="component-new"/>
+  <text x="340" y="387" text-anchor="middle" class="label" fill="#166534">BALL</text>
+  <text x="340" y="400" text-anchor="middle" class="label" fill="#166534">VALVE</text>
+  <text x="340" y="425" text-anchor="middle" class="detail" fill="#166534">manual shutoff</text>
+
+  <!-- Pipe from ball valve to DCVA -->
+  <line x1="340" y1="410" x2="340" y2="460" class="pipe" stroke="#16a34a" stroke-width="4"/>
+
+  <!-- ========== DCVA BACKFLOW PREVENTER (NEW) ========== -->
+  <rect x="265" y="460" width="150" height="55" class="component-new" stroke-width="3"/>
+  <text x="340" y="483" text-anchor="middle" class="label" fill="#166534" style="font-size:14px">DCVA</text>
+  <text x="340" y="500" text-anchor="middle" class="detail" fill="#166534">Double Check Valve Assy</text>
+  <text x="340" y="530" text-anchor="middle" class="detail" fill="#166534">Watts 007M1-QT or equiv.</text>
+  <text x="340" y="543" text-anchor="middle" class="note">Install in underground valve box</text>
+
+  <!-- Pipe from DCVA to PVC main -->
+  <line x1="340" y1="515" x2="340" y2="570" class="pipe" stroke="#16a34a" stroke-width="4"/>
+
+  <!-- ========== 1" POLY MAIN LINE ========== -->
+  <line x1="340" y1="570" x2="700" y2="570" class="pipe" stroke="#16a34a" stroke-width="4"/>
+  <text x="520" y="560" text-anchor="middle" class="label" fill="#166534">1" POLY PIPE (100 PSI RATED) — MAIN IRRIGATION LINE (BURIED)</text>
+
+  <!-- ========== VALVE BOX 1 (4 valves) ========== -->
+  <line x1="520" y1="570" x2="520" y2="600" class="pipe" stroke="#16a34a" stroke-width="3"/>
+  <rect x="470" y="600" width="100" height="50" class="component-new"/>
+  <text x="520" y="620" text-anchor="middle" class="label" fill="#166534">VALVE BOX 1</text>
+  <text x="520" y="635" text-anchor="middle" class="detail" fill="#166534">4 valves</text>
+  <text x="520" y="665" text-anchor="middle" class="detail" fill="#166534">Orbit 57861 DC Latching</text>
+
+  <!-- VB1 Zone branches -->
+  <line x1="485" y1="650" x2="440" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="415" y="700" class="detail" fill="#166534">Zone 1</text>
+  <line x1="503" y1="650" x2="483" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="465" y="700" class="detail" fill="#166534">Zone 2</text>
+  <line x1="537" y1="650" x2="557" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="545" y="700" class="detail" fill="#166534">Zone 3</text>
+  <line x1="555" y1="650" x2="600" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="590" y="700" class="detail" fill="#166534">Zone 4</text>
+
+  <!-- ========== VALVE BOX 2 (5 valves) ========== -->
+  <line x1="700" y1="570" x2="700" y2="600" class="pipe" stroke="#16a34a" stroke-width="3"/>
+  <rect x="650" y="600" width="100" height="50" class="component-new"/>
+  <text x="700" y="620" text-anchor="middle" class="label" fill="#166534">VALVE BOX 2</text>
+  <text x="700" y="635" text-anchor="middle" class="detail" fill="#166534">5 valves</text>
+  <text x="700" y="665" text-anchor="middle" class="detail" fill="#166534">Orbit 57861 DC Latching</text>
+
+  <!-- VB2 Zone branches -->
+  <line x1="660" y1="650" x2="630" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="615" y="700" class="detail" fill="#166534">Zone 5</text>
+  <line x1="678" y1="650" x2="668" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="655" y="700" class="detail" fill="#166534">Zone 6</text>
+  <line x1="700" y1="650" x2="710" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="700" y="700" class="detail" fill="#166534">Zone 7</text>
+  <line x1="722" y1="650" x2="750" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="742" y="700" class="detail" fill="#166534">Zone 8</text>
+  <line x1="740" y1="650" x2="790" y2="690" class="pipe" stroke="#16a34a" stroke-width="2"/>
+  <text x="782" y="700" class="detail" fill="#166534">Zone 9</text>
+
+  <!-- ========== LEGEND ========== -->
+  <rect x="650" y="120" width="400" height="130" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" rx="4"/>
+  <text x="670" y="145" class="label">LEGEND</text>
+
+  <line x1="670" y1="165" x2="720" y2="165" class="pipe-existing"/>
+  <text x="730" y="169" class="detail">Existing pipe (no change)</text>
+
+  <line x1="670" y1="185" x2="720" y2="185" stroke="#16a34a" stroke-width="4"/>
+  <text x="730" y="189" class="detail">New pipe (this permit)</text>
+
+  <rect x="670" y="198" width="50" height="18" class="component"/>
+  <text x="730" y="212" class="detail">Existing component</text>
+
+  <rect x="670" y="222" width="50" height="18" class="component-new"/>
+  <text x="730" y="236" class="detail">New component (this permit)</text>
+
+  <!-- ========== NOTES ========== -->
+  <rect x="20" y="720" width="1060" height="50" fill="#fffbeb" stroke="#f59e0b" stroke-width="1" rx="4"/>
+  <text x="35" y="740" class="detail" font-weight="bold">NOTES:</text>
+  <text x="35" y="753" class="note">1. Main irrigation line is 1" polyethylene pipe, 100 PSI rated.  2. DCVA installed in underground valve box for freeze protection.  3. No chemical injection — low hazard per WAC 246-290-490.</text>
+  <text x="35" y="766" class="note">4. Existing house supply line is unchanged.  5. Ball valve provides manual shutoff for irrigation system.  6. 9 zones total (4 + 5).</text>
+</svg>

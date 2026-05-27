@@ -13,7 +13,8 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_system.h"  // esp_reset_reason()
-#include "esp_sleep.h"   // esp_deep_sleep_start()
+#include "esp_sleep.h"   // esp_deep_sleep_start(), esp_light_sleep_start()
+#include "esp_wifi.h"    // esp_wifi_set_ps() for light sleep WiFi power save
 #include "esp_ota_ops.h" // esp_ota_mark_app_valid_cancel_rollback()
 #include "esp_task_wdt.h" // task watchdog timer
 #include <WiFi.h>
@@ -91,6 +92,10 @@ unsigned long bootTimeMillis = 0;  // millis() at boot for uptime calc
 // Initialized to 0 so fallback won't fire until at least one server contact
 // (or until uptime exceeds FALLBACK_SERVER_SILENT_HOURS \u2014 see logic in loop).
 unsigned long lastServerContactMs = 0;
+
+// Light sleep — tracks last API activity to stay awake during manual control
+unsigned long lastApiActivityMs = 0;      // any HTTP request
+unsigned long lastValveCloseMs = 0;       // last valve close event
 
 struct FallbackZone {
     uint16_t intervalHours;   // run every N hours; 0 = disabled
@@ -181,6 +186,7 @@ struct Valve {
     uint8_t in1;
     uint8_t in2;
     bool isOpen;
+    bool useMCP;       // true = MCP23017 I/O expander, false = direct ESP32 GPIO
     const char* name;
 };
 
@@ -210,23 +216,24 @@ float readBatteryVoltage() {
 volatile float cachedBatteryV = 0.0f;
 
 Valve valves[NUM_VALVES] = {
-    {VALVE1_IN1, VALVE1_IN2, false, "Zone 1 - Garden (drip)"},
-    {VALVE2_IN1, VALVE2_IN2, false, "Zone 2 - Grapes (drip)"},
-    {VALVE3_IN1, VALVE3_IN2, false, "Zone 3 - Fruit Trees"},
-    {VALVE4_IN1, VALVE4_IN2, false, "Zone 4 - South Lawn"},
-    {VALVE5_IN1, VALVE5_IN2, false, "Zone 5 - East Lawn"},
-    {VALVE6_IN1, VALVE6_IN2, false, "Zone 6 - West/NW Lawn"},
-    {VALVE7_IN1, VALVE7_IN2, false, "Zone 7 - NE Lawn"},
-    {VALVE8_IN1, VALVE8_IN2, false, "Zone 8 - Peonies (drip)"},
-    {VALVE9_IN1, VALVE9_IN2, false, "Zone 9 - Garden (drip)"},
-    {VALVE10_IN1, VALVE10_IN2, false, "Zone 10 - Spare"},
+    //  in1            in2            open   MCP?   name
+    {VALVE1_IN1,  VALVE1_IN2,  false, true,  "Zone 1"},
+    {VALVE2_IN1,  VALVE2_IN2,  false, true,  "Zone 2"},
+    {VALVE3_IN1,  VALVE3_IN2,  false, true,  "Zone 3"},
+    {VALVE4_IN1,  VALVE4_IN2,  false, true,  "Zone 4"},
+    {VALVE5_IN1,  VALVE5_IN2,  false, VALVE5_MCP, "Zone 5"},
+    {VALVE6_IN1,  VALVE6_IN2,  false, VALVE6_MCP, "Zone 6"},
+    {VALVE7_IN1,  VALVE7_IN2,  false, VALVE7_MCP, "Zone 7"},
+    {VALVE8_IN1,  VALVE8_IN2,  false, VALVE8_MCP, "Zone 8"},
+    {VALVE9_IN1,  VALVE9_IN2,  false, VALVE9_MCP, "Zone 9"},
+    {VALVE10_IN1, VALVE10_IN2, false, false, "Zone 10"},
 };
 
 void openValve(int idx) {
     if (idx < 0 || idx >= NUM_VALVES) return;
     Valve& v = valves[idx];
     enableDriverPower();
-    if (idx < VALVES_ON_MCP) {
+    if (v.useMCP) {
         mcp.digitalWrite(v.in1, HIGH);
         mcp.digitalWrite(v.in2, LOW);
         delay(VALVE_PULSE_MS);
@@ -258,7 +265,7 @@ void closeValve(int idx) {
         durationSec = (millis() - valveLastOpenedMs[idx]) / 1000;
     }
     enableDriverPower();
-    if (idx < VALVES_ON_MCP) {
+    if (v.useMCP) {
         mcp.digitalWrite(v.in1, LOW);
         mcp.digitalWrite(v.in2, HIGH);
         delay(VALVE_PULSE_MS);
@@ -274,6 +281,7 @@ void closeValve(int idx) {
     disableDriverPower();
     v.isOpen = false;
     valveCloseCount[idx]++;
+    lastValveCloseMs = millis();  // light sleep: stay awake briefly after valve activity
     Serial.printf("Valve %d CLOSED (%s) [total: %u, was open %lus]\n", idx + 1, v.name, valveCloseCount[idx], durationSec);
     char detail[48];
     snprintf(detail, sizeof(detail), "Valve %d CLOSED (%lus open)", idx + 1, durationSec);
@@ -364,6 +372,10 @@ void handleRoot() {
 // API: Get system status as JSON
 void handleApiStatus() {
     lastServerContactMs = millis();  // server heartbeat
+    // NOTE: Do NOT set lastApiActivityMs here — status polls should not
+    // prevent light sleep. Only state-changing commands (valve, closeall,
+    // reboot) keep the chip fully awake. The chip wakes from light sleep
+    // to serve this request (~50ms), then goes back to sleep.
     JsonDocument doc;
     doc["temp"] = isnan(temperature) ? 0 : temperature;
     doc["hum"] = isnan(humidity) ? 0 : humidity;
@@ -447,6 +459,7 @@ void handleApiStatus() {
 // API: Open or close a single valve
 void handleApiValve() {
     lastServerContactMs = millis();  // server heartbeat
+    lastApiActivityMs = millis();    // keep awake for manual control
     if (!server.hasArg("id") || !server.hasArg("action")) {
         server.send(400, "text/plain", "Missing id or action");
         return;
@@ -473,6 +486,7 @@ void handleApiValve() {
 // API: Close all valves
 void handleApiCloseAll() {
     lastServerContactMs = millis();  // server heartbeat
+    lastApiActivityMs = millis();    // keep awake for manual control
     closeAllValves();
     server.send(200, "text/plain", "All valves closed");
 }
@@ -483,6 +497,7 @@ void handleApiCloseAll() {
 // Token check prevents accidental reboots from LAN scanners / mistyped curls.
 void handleApiReboot() {
     lastServerContactMs = millis();  // server heartbeat
+    lastApiActivityMs = millis();    // keep awake for manual control
     if (server.arg("token") != API_REBOOT_TOKEN) {
         server.send(401, "text/plain", "unauthorized");
         return;
@@ -636,8 +651,8 @@ void setupWiFi() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-        WiFi.setSleep(false);  // Disable modem sleep — keeps radio always on so incoming
-                               // TCP SYNs aren't missed. Costs ~20mA but prevents wedge.
+        WiFi.setSleep(false);  // Disable modem sleep during initial connect — re-enabled
+                               // by light sleep path when idle (esp_wifi_set_ps).
         // Bump TX power to full now that WiFi is connected and power has stabilized
         bool txOk2 = WiFi.setTxPower(WIFI_TX_DBM);
         int txRaw2 = (int)WiFi.getTxPower();
@@ -749,22 +764,20 @@ void setup() {
         Serial.printf("[INIT] MCP23017 found at 0x%02X\n", MCP23017_ADDR);
     }
 
-    // Configure all MCP23017 pins as outputs for valve control
-    Serial.println("[INIT] Configuring MCP23017 pins...");
-    for (int i = 0; i < VALVES_ON_MCP; i++) {
-        mcp.pinMode(valves[i].in1, OUTPUT);
-        mcp.pinMode(valves[i].in2, OUTPUT);
-        mcp.digitalWrite(valves[i].in1, LOW);
-        mcp.digitalWrite(valves[i].in2, LOW);
-    }
-
-    // Configure ESP32 GPIO pins for valves beyond the MCP23017
-    Serial.println("[INIT] Configuring ESP32 GPIO pins for valves 9-10...");
-    for (int i = VALVES_ON_MCP; i < NUM_VALVES; i++) {
-        pinMode(valves[i].in1, OUTPUT);
-        pinMode(valves[i].in2, OUTPUT);
-        digitalWrite(valves[i].in1, LOW);
-        digitalWrite(valves[i].in2, LOW);
+    // Configure valve pins — each valve specifies MCP or GPIO via useMCP flag
+    Serial.println("[INIT] Configuring valve pins...");
+    for (int i = 0; i < NUM_VALVES; i++) {
+        if (valves[i].useMCP) {
+            mcp.pinMode(valves[i].in1, OUTPUT);
+            mcp.pinMode(valves[i].in2, OUTPUT);
+            mcp.digitalWrite(valves[i].in1, LOW);
+            mcp.digitalWrite(valves[i].in2, LOW);
+        } else {
+            pinMode(valves[i].in1, OUTPUT);
+            pinMode(valves[i].in2, OUTPUT);
+            digitalWrite(valves[i].in1, LOW);
+            digitalWrite(valves[i].in2, LOW);
+        }
     }
 
     // Close all valves ONLY on clean boot (power-on or manual reset).
@@ -1052,6 +1065,8 @@ void loop() {
     if (millis() - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
         readSensors();
         lastSensorRead = millis();
+        Serial.printf("[HOURLY] Battery=%.2fV RSSI=%d Heap=%u Temp=%.1fC\n",
+                      cachedBatteryV, WiFi.RSSI(), ESP.getFreeHeap(), temperatureRead());
 
         #if MQTT_ENABLED
         mqttPublishStatus();
@@ -1061,6 +1076,37 @@ void loop() {
     #if MQTT_ENABLED
     if (!mqtt.connected()) mqttReconnect();
     mqtt.loop();
+    #endif
+
+    // ================================================================
+    // Light sleep — save power when idle, wake on WiFi/timer
+    // ================================================================
+    #if LIGHT_SLEEP_ENABLED
+    {
+        // Stay fully awake if:
+        //  1. Any valve is currently open
+        //  2. Recent API activity (manual control / calibration session)
+        //  3. Recent valve close (let things settle)
+        bool anyValveOpen = false;
+        for (int i = 0; i < NUM_VALVES; i++) {
+            if (valves[i].isOpen) { anyValveOpen = true; break; }
+        }
+        bool recentApi = (lastApiActivityMs > 0) &&
+                         (millis() - lastApiActivityMs < AWAKE_HOLD_MS);
+        bool recentValve = (lastValveCloseMs > 0) &&
+                           (millis() - lastValveCloseMs < AWAKE_HOLD_VALVE_MS);
+
+        if (!anyValveOpen && !recentApi && !recentValve) {
+            // Enable WiFi modem sleep (keeps association, wakes on incoming packet)
+            esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+            // Light sleep — CPU halts, WiFi stays associated, wakes on:
+            //   - timer (LIGHT_SLEEP_INTERVAL_MS)
+            //   - incoming WiFi packet (HTTP request)
+            esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_INTERVAL_MS * 1000ULL);  // microseconds
+            esp_sleep_enable_wifi_wakeup();
+            esp_light_sleep_start();
+        }
+    }
     #endif
 }
 

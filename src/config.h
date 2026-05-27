@@ -42,36 +42,48 @@ const char* MQTT_PASS     = "";
 
 // L298N H-Bridge control pins — ALL on MCP23017 I/O expander
 // Pin numbers are MCP23017 pin numbers (0-15): PA0-PA7 = 0-7, PB0-PB7 = 8-15
-// Board 1: Valves 1 & 2 (PA0-PA3)
-#define VALVE1_IN1     0   // PA0
-#define VALVE1_IN2     1   // PA1
-#define VALVE2_IN1     2   // PA2
-#define VALVE2_IN2     3   // PA3
+// Each valve specifies useMCP flag — allows mixed MCP/GPIO at any position.
 
-// Board 2: Valves 3 & 4 (PA4-PA7)
-#define VALVE3_IN1     4   // PA4
-#define VALVE3_IN2     5   // PA5
-#define VALVE4_IN1     6   // PA6
-#define VALVE4_IN2     7   // PA7
+// Board 3: Valves 1 & 2 (PB0-PB3)
+#define VALVE1_IN1     8   // PB0
+#define VALVE1_IN2     9   // PB1
+#define VALVE2_IN1     11  // PB3 (swapped — physically reversed wiring)
+#define VALVE2_IN2     10  // PB2
 
-// Board 3: Valves 5 & 6 (PB0-PB3)
-#define VALVE5_IN1     8   // PB0
-#define VALVE5_IN2     9   // PB1
-#define VALVE6_IN1     10  // PB2
-#define VALVE6_IN2     11  // PB3
+// Board 4: Valves 3 & 4 (PB4-PB7)
+#define VALVE3_IN1     12  // PB4
+#define VALVE3_IN2     13  // PB5
+#define VALVE4_IN1     15  // PB7 (swapped — physically reversed wiring)
+#define VALVE4_IN2     14  // PB6
 
-// Board 4: Valves 7 & 8 (PB4-PB7)
-#define VALVE7_IN1     12  // PB4
-#define VALVE7_IN2     13  // PB5
-#define VALVE8_IN1     14  // PB6
-#define VALVE8_IN2     15  // PB7
+// Valve 5 = was valve 9 (ESP32 GPIO — board 5)
+#define VALVE5_IN1     25  // ESP32 GPIO 25
+#define VALVE5_IN2     26  // ESP32 GPIO 26
+#define VALVE5_MCP     false
 
-// Board 5: Valves 9 & 10 — direct ESP32 GPIOs (MCP23017 full)
-#define VALVE9_IN1     25  // ESP32 GPIO 25
-#define VALVE9_IN2     26  // ESP32 GPIO 26
+// Valve 6 = was valve 5 (MCP PA0-PA1 — board 1)
+#define VALVE6_IN1     0   // PA0
+#define VALVE6_IN2     1   // PA1
+#define VALVE6_MCP     true
+
+// Valve 7 = was valve 8 (MCP PA7/PA6 swapped — board 2)
+#define VALVE7_IN1     7   // PA7 (swapped — wires reversed)
+#define VALVE7_IN2     6   // PA6
+#define VALVE7_MCP     true
+
+// Valve 8 = was valve 7 (MCP PA4-PA5 — board 2)
+#define VALVE8_IN1     4   // PA4
+#define VALVE8_IN2     5   // PA5
+#define VALVE8_MCP     true
+
+// Valve 9 = was valve 6 (MCP PA3/PA2 swapped — board 1)
+#define VALVE9_IN1     3   // PA3 (swapped — wires reversed)
+#define VALVE9_IN2     2   // PA2
+#define VALVE9_MCP     true
+
+// Board 5: Valve 10 — direct ESP32 GPIO (spare)
 #define VALVE10_IN1    27  // ESP32 GPIO 27
 #define VALVE10_IN2    14  // ESP32 GPIO 14
-#define VALVES_ON_MCP  8   // first 8 valves use MCP23017, rest use ESP32 GPIO
 
 // Power gate (P-FET via NPN level shifter): HIGH = L298Ns powered, LOW = idle.
 // GPIO 2 is also onboard LED -> visual indicator. Strapping pin defaults LOW
@@ -95,7 +107,15 @@ const char* MQTT_PASS     = "";
 #define MCP_SDA_PIN        21
 #define MCP_SCL_PIN        22
 #define VALVE_PULSE_MS     100   // How long to pulse the solenoid (ms)
-#define SENSOR_READ_INTERVAL_MS  60000  // Read sensors every 60 seconds
+#define SENSOR_READ_INTERVAL_MS  3600000  // Read sensors every 60 minutes (hourly voltage report)
+
+// ============================================================
+// Light Sleep — power saving between activity
+// ============================================================
+#define LIGHT_SLEEP_ENABLED      true    // Enable light sleep when idle
+#define LIGHT_SLEEP_INTERVAL_MS  100     // Light sleep duration per cycle (ms) — WiFi stays associated
+#define AWAKE_HOLD_MS            300000  // Stay fully awake 5 min after last API hit (for calibration)
+#define AWAKE_HOLD_VALVE_MS      60000   // Stay awake 60s after last valve close
 #define WEB_SERVER_PORT    80
 
 // ============================================================
@@ -118,7 +138,7 @@ const char* MQTT_PASS     = "";
 // Power Management
 // ============================================================
 #define BOOT_CPU_MHZ          80    // CPU freq during boot (lower = less current draw)
-#define RUN_CPU_MHZ           240   // CPU freq after WiFi connects (full speed)
+#define RUN_CPU_MHZ           160   // CPU freq after WiFi connects (160 saves ~15% power vs 240, still fast enough for WiFi + web server)
 #define SAFE_MODE_THRESHOLD   20    // Consecutive crashes before entering safe mode (bumped from 5: TWDT now catches real hangs; safe mode shouldn't trip on transient brownouts)
 #define SAFE_MODE_DELAY_SEC   15    // Extra stabilization delay in safe mode
 #define WIFI_TX_DBM           WIFI_POWER_19_5dBm  // TX power after WiFi connects (full range for reliability)

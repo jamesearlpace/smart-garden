@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** ⚠️ **ESP32 has power but not connecting to WiFi.** LEDs on (buck + ESP32), ping unreachable. Needs serial debug. Firmware flashed (power opt), dashboard axes aligned, battery voltage calibrated. Ratio fix (6.283) pending next flash.
+**Status:** 🔴 **ESP32 powered but stuck — not on WiFi for hours.** LEDs on, ping unreachable. Needs USB serial debug at the junction box. Firmware was flashed (power opt) but chip never connected to WiFi after being put back outside. Voltage ratio fix (6.283) also pending flash.
 **Last Updated:** 2026-05-27
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -235,31 +235,37 @@ Flashed via USB (COM5) at ~11:00 AM. Verified clean boot on serial monitor:
 3. WiFi modem sleep comment fix
 4. WiFi-recovery bugs from 05-21
 
-### ESP32 powered but not on WiFi (unresolved)
+### ESP32 powered but not on WiFi (unresolved — persistent)
 
 After flashing and putting the box back outside:
 - **Buck converter LED: ON** — battery is supplying 12V → 5V
 - **ESP32 LED: ON** — chip has power and is running
 - **Ping: 100% loss** — WiFi not connected (Destination Host Unreachable, not timeout)
 - **HTTP: no response** — web server unreachable
+- **Tested multiple times over several hours** — never comes online. Not transient.
 
-**This rules out the LVD theory.** Battery voltage is sufficient — the Wanderer load output is active. The ESP32 simply isn't connecting to WiFi from its deployed location.
+**This rules out both the LVD theory AND a transient boot issue.** The chip has power, has been running for hours, and never connects. The firmware worked perfectly when flashed indoors (instant WiFi connect, clean boot, all sensors reporting). The problem only manifests at the deployed location.
 
-**Likely causes (in order):**
-1. **WiFi out of range** — chip worked indoors during flash (strong signal), but deployed junction box may be at the edge of WiFi coverage. The new firmware booted fine on the desk with instant WiFi connect.
-2. **Crash loop → deep sleep lockout** — firmware enters 10-min deep sleep after 10 consecutive crashes. If WiFi fails to connect, the watchdog triggers `ESP.restart()`, and after 10 iterations the chip goes dormant.
-3. **AP-mode trap** — if WiFi connect fails repeatedly, older recovery code might switch to AP mode instead of retrying.
+**Most likely cause: deep sleep lockout.** The firmware enters 10-min deep sleep after 10 consecutive crashes. If WiFi failed to connect on the first boot outside (weak signal, interference, or timeout), the watchdog triggers `ESP.restart()` after 60s. After 10 consecutive crash-restarts, the chip enters deep sleep for 10 minutes. But on wake from deep sleep, if WiFi fails again, the crash counter persists in NVS — so it immediately re-enters deep sleep. **The chip is effectively bricked until power-cycled or serial-debugged.**
 
-**To diagnose:** Plug in USB, open serial monitor (`pio device monitor --baud 115200 --port COM5`). Serial output will show exactly what's happening — WiFi connect attempts, crash counter, watchdog state.
+**Box is bolted outside** — can't bring it indoors. Must take laptop to the box with USB cable.
 
-**Battery calibration was wrong.** The reported 10.6V was actually ~11.1V or higher (battery has enough charge to power the system). The 4,209 DB rows were already corrected, firmware ratio fix (6.283) is committed but needs another USB flash.
+**To diagnose:** Plug laptop USB into ESP32 at the junction box, run:
+```
+cd C:\MyCode\smart-garden
+~\.platformio\penv\Scripts\pio.exe device monitor --baud 115200 --port COM5
+```
+Serial output will show: WiFi connect attempts, crash counter state, deep sleep entry.
 
-**Next steps:**
-1. Bring box inside, plug USB, read serial output
-2. If WiFi range issue → consider repositioning box or adding WiFi repeater
-3. Flash updated voltage divider ratio (6.283) at the same time
-4. Test mobile nav on phone
-5. Count voltage divider resistors while box is open
+**To recover (if deep sleep lockout confirmed):**
+1. Disconnect battery briefly (resets NVS crash counter)
+2. Reconnect — chip boots fresh
+3. If WiFi connects → working. If not → signal is too weak, need extender.
+
+**While at the box, also:**
+- Flash voltage ratio fix (6.283f)
+- Count resistors in voltage divider
+- Check antenna connector is snug (external 5dBi antenna on ESP32-WROOM-32U)
 
 ### Battery voltage calibration (applied)
 

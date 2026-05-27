@@ -648,6 +648,12 @@ void setupWiFi() {
         delay(500);
         Serial.print(".");
         attempts++;
+        // At halfway point, bump to full TX — if low-boot TX can't reach the AP,
+        // full power might. Brownout risk is lower after 10s of stable runtime.
+        if (attempts == 20) {
+            WiFi.setTxPower(WIFI_TX_DBM);
+            Serial.print("[TX bump mid-connect]");
+        }
     }
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -1015,6 +1021,9 @@ void loop() {
             #if USE_STATIC_IP
             WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS1);
             #endif
+            // Use FULL TX power for reconnect — boot TX (8.5 dBm) is too weak for
+            // marginal signal locations. The brownout risk only applies during cold boot.
+            WiFi.setTxPower(WIFI_TX_DBM);
             WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             wifiReconnects++;
             logEvent("wifi", "reconnect");
@@ -1028,6 +1037,16 @@ void loop() {
                 ESP.restart();
             }
         } else {
+            if (wifiFailCount > 0) {
+                // WiFi just recovered — reset crash counter so we don't stay in
+                // safe mode or spiral into deep sleep lockout.
+                nvs.begin(NVS_NAMESPACE, false);
+                nvs.putUInt("crashCnt", 0);
+                nvs.end();
+                crashCount = 0;
+                safeMode = false;
+                Serial.printf("[RECOVERY] WiFi reconnected after %d attempts — crash counter cleared\n", wifiFailCount);
+            }
             wifiFailCount = 0;
         }
     }

@@ -449,6 +449,7 @@ a{color:var(--blue);text-decoration:none}
     <div class="nav-item" data-panel="history"><span class="icon">📊</span> History</div>
     <div class="nav-item" data-panel="settings"><span class="icon">⚙️</span> Settings</div>
     <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
+    <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
   </div>
   <div class="sidebar-footer">
     <span class="status-dot" id="sb-dot"></span>
@@ -2048,6 +2049,23 @@ a{color:var(--blue);text-decoration:none}
     <div id="settings-about"></div>
   </div>
 
+  <!-- ═══ Cam Panel ═══ -->
+  <div class="panel" id="p-cam">
+    <div class="section-header"><h2>📷 Water Meter Cam</h2>
+      <span class="aside">
+        <button onclick="camToggleFlash()" class="btn" style="font-size:.78rem;padding:4px 12px">💡 Flash</button>
+      </span>
+    </div>
+
+    <div class="card" style="text-align:center;padding:16px">
+      <div style="margin-bottom:8px">
+        <span id="cam-status" style="color:var(--green);font-size:.85rem">● Live — refreshing every 5s</span>
+      </div>
+      <img id="cam-img" alt="Camera offline — are you on the home network?"
+           style="max-width:100%;border-radius:8px;border:2px solid var(--border)">
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -2057,7 +2075,7 @@ a{color:var(--blue);text-decoration:none}
 
 var PANEL_TITLES = {
   home: 'Home', zones: 'Zones & Map',
-  history: 'History', settings: 'Settings',
+  history: 'History', settings: 'Settings', cam: 'Water Meter Cam',
   /* legacy panels kept for composite views */
   controls: 'Valve Controls', wiring: 'Wiring Diagram',
   dashboard: 'Dashboard', activity: 'Activity Log',
@@ -5308,6 +5326,7 @@ function cfgSave() {
     <div class="mob-nav-item" data-panel="history"><span class="mob-icon">📊</span>History</div>
     <div class="mob-nav-item" data-panel="settings"><span class="mob-icon">⚙️</span>Settings</div>
     <a href="/forecast" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🌧️</span>Forecast</a>
+    <div class="mob-nav-item" data-panel="cam"><span class="mob-icon">📷</span>Cam</div>
   </div>
 </div>
 <script>
@@ -5324,6 +5343,38 @@ showPanel = function(id) {
       var nav = document.querySelector('.mobile-nav');
       if (nav) { nav.style.display = 'block'; nav.style.visibility = 'visible'; }
     }, 500);
+  }
+};
+</script>
+
+<!-- ═══ Water Meter Cam JS ═══ -->
+<script>
+var camInterval = null;
+
+function camToggleFlash() {
+  fetch('/api/cam/flash', {method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    // brief flash status
+  }).catch(function(){});
+}
+
+function camRefresh() {
+  var panel = document.getElementById('p-cam');
+  if (!panel || !panel.classList.contains('active')) return;
+  var img = document.getElementById('cam-img');
+  var newImg = new Image();
+  newImg.onload = function() { img.src = newImg.src; };
+  newImg.src = '/api/cam/capture?t=' + Date.now();
+}
+
+// Start/stop live refresh when cam panel is shown/hidden
+var _origShowCam = showPanel;
+showPanel = function(id) {
+  _origShowCam(id);
+  if (id === 'cam') {
+    camRefresh();
+    if (!camInterval) camInterval = setInterval(camRefresh, 5000);
+  } else {
+    if (camInterval) { clearInterval(camInterval); camInterval = null; }
   }
 };
 </script>

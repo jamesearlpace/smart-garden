@@ -13,8 +13,9 @@ import os
 import tempfile
 from datetime import datetime
 
+import requests as http_requests
 import yaml
-from flask import make_response,  Flask, render_template, request, jsonify, redirect, url_for
+from flask import make_response, Response, Flask, render_template, request, jsonify, redirect, url_for
 
 import database as db
 from irrigation import ESP32_MANUAL_TIMEOUT
@@ -254,7 +255,7 @@ def create_app(config, engine, weather, billing):
     @app.before_request
     def check_auth():
         # Public routes
-        public = ("/login", "/auth/", "/favicon.ico", "/static/")
+        public = ("/login", "/auth/", "/favicon.ico", "/static/", "/api/cam/upload")
         if any(request.path.startswith(p) for p in public) or request.path == "/login":
             return None
         # Check session cookie
@@ -1162,5 +1163,61 @@ def create_app(config, engine, weather, billing):
             "totalOpens": health_data.get("totalValveOpens", 0),
             "totalCloses": health_data.get("totalValveCloses", 0),
         })
+
+    # ═══ Water Meter Cam proxy ═══
+    CAM_URL = "http://192.168.0.160"
+
+    # In-memory storage for latest pushed image
+    cam_state = {"image": None, "timestamp": None, "flash": False}
+
+    @app.route("/api/cam/upload", methods=["POST"])
+    def cam_upload():
+        """Receive a JPEG push from the ESP32-CAM."""
+        data = request.get_data()
+        if not data or len(data) < 100:
+            return jsonify({"error": "No image data"}), 400
+        cam_state["image"] = data
+        cam_state["timestamp"] = datetime.now().isoformat()
+        return "OK", 200
+
+    @app.route("/api/cam/latest")
+    def cam_latest():
+        """Serve the most recently pushed image."""
+        if not cam_state["image"]:
+            return jsonify({"error": "No image yet"}), 404
+        return Response(cam_state["image"], mimetype="image/jpeg",
+                       headers={"Cache-Control": "no-cache"})
+
+    @app.route("/api/cam/status")
+    def cam_status():
+        """Return cam metadata."""
+        return jsonify({
+            "has_image": cam_state["image"] is not None,
+            "timestamp": cam_state["timestamp"],
+            "size": len(cam_state["image"]) if cam_state["image"] else 0,
+        })
+
+    @app.route("/api/cam/capture")
+    def cam_capture():
+        """Proxy a JPEG capture from the ESP32-CAM (fallback)."""
+        try:
+            r = http_requests.get(f"{CAM_URL}/capture", timeout=5)
+            return Response(r.content, mimetype="image/jpeg",
+                           headers={"Cache-Control": "no-cache"})
+        except Exception as e:
+            # Fall back to latest pushed image
+            if cam_state["image"]:
+                return Response(cam_state["image"], mimetype="image/jpeg",
+                               headers={"Cache-Control": "no-cache"})
+            return jsonify({"error": str(e)}), 502
+
+    @app.route("/api/cam/flash", methods=["POST"])
+    def cam_flash():
+        """Toggle the ESP32-CAM flash LED."""
+        try:
+            r = http_requests.get(f"{CAM_URL}/flash", timeout=3)
+            return jsonify({"status": r.text})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
 
     return app

@@ -340,12 +340,17 @@ function generateSimData(zoneIdx, days) {
     var sprinkler = 0;
     var decision = null;
 
-    // Arm logic: arm early enough to water BEFORE hitting MAD
-    var shouldArm = !armed && !recovering && moisture <= madNow + 14;
+    // Arm logic: arm when moisture will cross MAD by end of TODAY
+    // Daily drain ≈ 6-8%, so arm at MAD + 7 (one day ahead)
+    // This triggers the CURRENT morning's 4 AM window, before the afternoon dip
+    var dailyDrain = 0.22 * zone.kc * (wx.et0mult || 1) * 56 * 0.637; // integral of sin bell × 56 steps × 2/π
+    // Simplified: just use MAD + estimated daily drain
+    var armThreshold = madNow + dailyDrain * 1.1; // 10% safety margin
+    var shouldArm = !armed && !recovering && moisture <= armThreshold;
 
     // Pre-emptive arm: if tomorrow is forecast hot (>82°F) and we're below madNow+8
     var wxTomorrow = dailyWeather[di + 1] || wx;
-    if (!armed && !recovering && wxTomorrow.hi > 82 && moisture < madNow + 14 && h >= 18) {
+    if (!armed && !recovering && wxTomorrow.hi > 82 && moisture < armThreshold + 5 && h >= 18) {
       shouldArm = true;
       if (!armed) decision = { step: stepIdx, type: 'arm-preemptive', day: di,
         reason: 'Tomorrow forecast ' + wxTomorrow.hi.toFixed(0) + '°F — pre-watering to build buffer' };
@@ -389,18 +394,18 @@ function generateSimData(zoneIdx, days) {
           decision = { step: stepIdx, type: 'water-despite-rain', day: di,
             reason: 'Rain expected ' + rainReason + ' but moisture ' + moisture.toFixed(0) + '% too low to skip (' + madNow.toFixed(0) + '% MAD)' };
         }
-        // No rain expected — continue to stress/water checks
-        // Check 3: Beneficial stress not yet reached? (intentional delay for root growth)
-        else if (!rainExpected && cumulativeStressHrs < 1 && moisture > madNow + 1 && (stepIdx - lastWateredStep) < 96 * 3) {
+        // Only delay if moisture is still well above MAD (won't cross today)
+        else if (!rainExpected && cumulativeStressHrs < 1 && moisture > madNow + 5 && (stepIdx - lastWateredStep) < 96 * 3) {
           if (!decision) decision = { step: stepIdx, type: 'skip-stress-target', day: di,
             reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress — soil at ' + moisture.toFixed(0) + '%, letting roots reach for water' };
         }
         // All clear: water
         else if (!rainExpected) {
           recovering = true;
-        var extraDepth = Math.max(0, (tempF - 65)) * 0.06;
-        cycleTarget = madNow + 18 + extraDepth + rng() * 3;
-        cycleTarget = Math.min(82, cycleTarget);
+        // Recover to ~70%: enough buffer for 3+ days before next MAD crossing
+        var extraDepth = Math.max(0, (tempF - 65)) * 0.04;
+        cycleTarget = madNow + 20 + extraDepth + rng() * 2;
+        cycleTarget = Math.min(80, cycleTarget);
           decision = { step: stepIdx, type: 'water', day: di,
             reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
                     tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };

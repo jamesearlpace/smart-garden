@@ -315,7 +315,7 @@ function generateSimData(zoneIdx, days) {
       var phase = (h + m / 60 - 6) / 14 * Math.PI;
       var tempBoost = 1 + Math.max(0, tempF - 72) * 0.01;
       var windBoost = 1 + Math.max(0, windMph - 5) * 0.005;
-      drain = Math.sin(phase) * 0.22 * zone.kc * (wx.et0mult || 1) * tempBoost * windBoost;
+      drain = Math.sin(phase) * 0.18 * zone.kc * (wx.et0mult || 1) * tempBoost * windBoost;
     }
     moisture -= drain;
 
@@ -534,7 +534,7 @@ function renderUI(stats, MAD, decisions) {
 
   document.getElementById('stats-row').innerHTML =
     '<div class="stat"><div class="stat-value ' + cls(cd>=2&&cd<=4, cd>0) + '">' + stats.cycleDays + ' days</div><div class="stat-label">Avg Cycle Length</div><div class="stat-hint">Target: 2–4 days</div></div>' +
-    '<div class="stat"><div class="stat-value ' + cls(sh>=1&&sh<=4, sh<8) + '">' + stats.stressPerCycle + ' hrs</div><div class="stat-label">Stress / Cycle</div><div class="stat-hint">Sweet spot: 1–4 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(sh>=2&&sh<=8, sh<12) + '">' + stats.stressPerCycle + ' hrs</div><div class="stat-label">Stress / Cycle</div><div class="stat-hint">Sweet spot: 2–8 hrs</div></div>' +
     '<div class="stat"><div class="stat-value ' + cls(dsh==0, dsh<=1) + '">' + stats.deepStressPerCycle + ' hrs</div><div class="stat-label">Deep Stress / Cycle</div><div class="stat-hint">Target: 0 hrs</div></div>' +
     '<div class="stat"><div class="stat-value ' + cls(di>=0.4&&di<=0.8, di>0) + '">' + stats.depthIn + '"</div><div class="stat-label">Depth Per Cycle</div><div class="stat-hint">Target: 0.5–0.75"</div></div>';
 

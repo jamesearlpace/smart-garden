@@ -660,14 +660,14 @@ class IrrigationEngine:
             log.error("Cannot reach ESP32 ΓÇö skipping cycle")
             return
 
-        # Build soil reading map: zone_id ΓåÆ pct (installed zones only)
+        # Build soil reading map: zone_id → pct (installed zones only)
         soil_readings = {}
         invalid_sensor_zones = set()
         for zone in installed_zones:
             sensor_idx = self._coerce_soil_sensor_index(zone, len(soil_list))
             if sensor_idx is None:
                 # No soil sensor — that's fine, we use water balance model
-                pass
+                continue
             soil_readings[zone["id"]] = soil_list[sensor_idx]["pct"]
 
         # Evaluate each zone (installed only)

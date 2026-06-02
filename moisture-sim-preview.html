@@ -119,9 +119,9 @@
     </select>
     <div class="range-btns">
       <button data-days="3">3d</button>
-      <button data-days="7" class="active">7d</button>
+      <button data-days="7">7d</button>
       <button data-days="14">14d</button>
-      <button data-days="30">30d</button>
+      <button data-days="30" class="active">30d</button>
     </div>
   </div>
 
@@ -159,7 +159,7 @@ var ZONES = [
   { name: 'Grapes (drip)', precipRate: 0.4, kc: 0.55, madPct: 45, wiltPct: 30, rootDepthIn: 18 },
 ];
 
-var currentZone = 0, currentDays = 7, chartInstance = null;
+var currentZone = 0, currentDays = 30, chartInstance = null;
 
 // ─── Deterministic PRNG ───
 function mkRng(seed) {
@@ -180,41 +180,102 @@ function generateSimData(zoneIdx, days) {
   var rng = mkRng(zoneIdx * 7919 + days * 31);
   var MAD_BASE = zone.madPct;
   var WILT_BASE = zone.wiltPct;
-  var moisture = MAD_BASE + 18 + rng() * 8;  // start healthy
+  var moisture = MAD_BASE + 18;       // start healthy at ~68%
   var points = [];
-  var decisions = [];  // decision log
+  var decisions = [];
 
-  // ── Weather scenario: PNW early June with one hot spell ──
+  // ══════════════════════════════════════════════════════════════
+  // Hand-crafted 30-day PNW scenario (May 26 – Jun 24)
+  // Tells a story: late spring → early summer transition
+  //
+  // Week 1 (May 26-Jun 1): Spring cool, frequent drizzle
+  // Week 2 (Jun 2-8): Warming up, first real dry stretch
+  // Week 3 (Jun 9-15): HEAT WAVE — 3 days above 85°F
+  // Week 4 (Jun 16-22): Marine push, cool and breezy
+  // Days 25-30 (Jun 22-24): Normal early summer
+  //
+  // Each day has: hi, lo, maxWind, rainTomorrow, et0mult
+  // Rain events are placed separately
+  // ══════════════════════════════════════════════════════════════
+  var scenario30 = [
+    // Week 1: Spring cool, 2 rain events
+    { hi: 62, lo: 44, maxWind: 5,  rainTomorrow: false, et0mult: 0.70 }, //  0 Mon — cool overcast
+    { hi: 65, lo: 46, maxWind: 4,  rainTomorrow: true,  et0mult: 0.75 }, //  1 Tue — rain coming
+    { hi: 58, lo: 48, maxWind: 6,  rainTomorrow: false, et0mult: 0.55 }, //  2 Wed — rainy, 0.20"
+    { hi: 64, lo: 45, maxWind: 4,  rainTomorrow: false, et0mult: 0.72 }, //  3 Thu — clearing
+    { hi: 66, lo: 47, maxWind: 3,  rainTomorrow: false, et0mult: 0.78 }, //  4 Fri — partly sunny
+    { hi: 60, lo: 49, maxWind: 7,  rainTomorrow: true,  et0mult: 0.60 }, //  5 Sat — drizzle coming
+    { hi: 56, lo: 47, maxWind: 8,  rainTomorrow: false, et0mult: 0.50 }, //  6 Sun — light rain 0.10"
+    // Week 2: Warming, drying out — first irrigation needed
+    { hi: 70, lo: 50, maxWind: 4,  rainTomorrow: false, et0mult: 0.88 }, //  7 Mon — nice day
+    { hi: 72, lo: 52, maxWind: 5,  rainTomorrow: false, et0mult: 0.92 }, //  8 Tue — warmer
+    { hi: 74, lo: 53, maxWind: 14, rainTomorrow: false, et0mult: 0.95 }, //  9 Wed — windy! 14 mph
+    { hi: 75, lo: 54, maxWind: 4,  rainTomorrow: false, et0mult: 1.00 }, // 10 Thu — first water cycle
+    { hi: 73, lo: 52, maxWind: 5,  rainTomorrow: false, et0mult: 0.95 }, // 11 Fri — normal
+    { hi: 76, lo: 55, maxWind: 4,  rainTomorrow: false, et0mult: 1.02 }, // 12 Sat — warm
+    { hi: 71, lo: 51, maxWind: 6,  rainTomorrow: false, et0mult: 0.90 }, // 13 Sun — pleasant
+    // Week 3: HEAT WAVE then rain relief
+    { hi: 78, lo: 56, maxWind: 3,  rainTomorrow: false, et0mult: 1.05 }, // 14 Mon — building heat
+    { hi: 84, lo: 60, maxWind: 4,  rainTomorrow: false, et0mult: 1.20 }, // 15 Tue — hot
+    { hi: 88, lo: 63, maxWind: 5,  rainTomorrow: false, et0mult: 1.30 }, // 16 Wed — peak heat
+    { hi: 86, lo: 62, maxWind: 3,  rainTomorrow: true,  et0mult: 1.25 }, // 17 Thu — still hot, rain forecast
+    { hi: 72, lo: 56, maxWind: 6,  rainTomorrow: false, et0mult: 0.80 }, // 18 Fri — relief rain 0.25"
+    { hi: 68, lo: 50, maxWind: 4,  rainTomorrow: false, et0mult: 0.75 }, // 19 Sat — cool post-rain
+    { hi: 70, lo: 48, maxWind: 5,  rainTomorrow: false, et0mult: 0.82 }, // 20 Sun — recovering
+    // Week 4: Marine push — cool and breezy
+    { hi: 64, lo: 50, maxWind: 12, rainTomorrow: false, et0mult: 0.68 }, // 21 Mon — breezy
+    { hi: 66, lo: 48, maxWind: 15, rainTomorrow: false, et0mult: 0.72 }, // 22 Tue — windy skip day
+    { hi: 68, lo: 49, maxWind: 8,  rainTomorrow: true,  et0mult: 0.78 }, // 23 Wed — rain coming
+    { hi: 60, lo: 48, maxWind: 6,  rainTomorrow: false, et0mult: 0.55 }, // 24 Thu — rain 0.12"
+    { hi: 70, lo: 50, maxWind: 4,  rainTomorrow: false, et0mult: 0.85 }, // 25 Fri — clearing
+    { hi: 74, lo: 52, maxWind: 5,  rainTomorrow: false, et0mult: 0.95 }, // 26 Sat — warming
+    { hi: 76, lo: 54, maxWind: 4,  rainTomorrow: false, et0mult: 1.00 }, // 27 Sun — summer arriving
+    // Overflow days
+    { hi: 72, lo: 51, maxWind: 4,  rainTomorrow: false, et0mult: 0.90 }, // 28
+    { hi: 74, lo: 53, maxWind: 5,  rainTomorrow: false, et0mult: 0.95 }, // 29
+    { hi: 76, lo: 55, maxWind: 4,  rainTomorrow: false, et0mult: 1.00 }, // 30
+    { hi: 73, lo: 52, maxWind: 4,  rainTomorrow: false, et0mult: 0.92 }, // 31 (overflow)
+  ];
+
+  // Use scenario for zone 0 (any day count pulls from it)
+  var useScenario = (zoneIdx === 0);
+
   var dailyWeather = [];
   for (var dt = 0; dt <= days; dt++) {
-    // Create a recognizable pattern: cool start, hot spike mid-week, cool end
-    var dayPos = dt / Math.max(days - 1, 1);
-    var heatWave = (dayPos > 0.35 && dayPos < 0.65) ? 12 : 0; // mid-week heat
-    var baseHigh = 66 + rng() * 10 + heatWave;
-    var baseLow = baseHigh - 16 - rng() * 6;
-    // Wind: usually calm, gusty on some afternoons
-    var maxWind = 3 + rng() * 5;
-    if (rng() > 0.7) maxWind = 12 + rng() * 8; // 20% chance of windy day (12-20 mph)
-    // Rain forecast: does tomorrow have rain?
-    var rainTomorrow = rng() > 0.8; // 20% chance
-    dailyWeather.push({
-      hi: baseHigh, lo: Math.max(42, baseLow),
-      maxWind: maxWind, rainTomorrow: rainTomorrow,
-      et0mult: 0.85 + rng() * 0.35
-    });
+    if (useScenario && dt < scenario30.length) {
+      dailyWeather.push(scenario30[dt]);
+    } else {
+      var dayPos = dt / Math.max(days - 1, 1);
+      var heatWave = (dayPos > 0.35 && dayPos < 0.65) ? 12 : 0;
+      var baseHigh = 66 + rng() * 10 + heatWave;
+      var baseLow = baseHigh - 16 - rng() * 6;
+      var maxWind = 3 + rng() * 5;
+      if (rng() > 0.7) maxWind = 12 + rng() * 8;
+      dailyWeather.push({
+        hi: baseHigh, lo: Math.max(42, baseLow),
+        maxWind: maxWind, rainTomorrow: rng() > 0.8,
+        et0mult: 0.85 + rng() * 0.35
+      });
+    }
   }
 
-  // ── Pre-bake rain events (ensure at least one visible) ──
+  // ── Rain events (hand-placed for scenario, random for other zones) ──
   var rainEvents = [];
-  var numRain = Math.max(1, Math.round(days / 5 * (0.6 + rng() * 0.6)));
-  for (var r = 0; r < numRain; r++) {
-    var dayOff = Math.floor(rng() * (days - 1)) + 1;
-    var hr = Math.floor(rng() * 8) + 9;  // 9 AM – 5 PM
-    var dur = Math.floor(rng() * 4) + 2;
-    var depth = 0.06 + rng() * 0.14;
-    rainEvents.push({ day: dayOff, hr: hr, dur: dur, depth: depth });
-    // Mark this day + next as having rain (for forecast logic)
-    if (dayOff > 0) dailyWeather[dayOff - 1].rainTomorrow = true;
+  if (useScenario) {
+    rainEvents.push({ day: 2,  hr: 10, dur: 5, depth: 0.20 });  // Week 1 Wed — steady rain
+    rainEvents.push({ day: 6,  hr: 13, dur: 3, depth: 0.10 });  // Week 1 Sun — light drizzle
+    rainEvents.push({ day: 18, hr: 9,  dur: 6, depth: 0.25 });  // Week 3 Fri — heat wave relief
+    rainEvents.push({ day: 24, hr: 11, dur: 4, depth: 0.12 });  // Week 4 Thu — marine layer rain
+  } else {
+    var numRain = Math.max(1, Math.round(days / 5 * (0.6 + rng() * 0.6)));
+    for (var r = 0; r < numRain; r++) {
+      var dayOff = Math.floor(rng() * (days - 1)) + 1;
+      var hr = Math.floor(rng() * 8) + 9;
+      var dur = Math.floor(rng() * 4) + 2;
+      var depth = 0.06 + rng() * 0.14;
+      rainEvents.push({ day: dayOff, hr: hr, dur: dur, depth: depth });
+      if (dayOff > 0 && dailyWeather[dayOff - 1]) dailyWeather[dayOff - 1].rainTomorrow = true;
+    }
   }
 
   // ── Sprinkler state machine ──
@@ -845,7 +906,7 @@ document.querySelectorAll('.range-btns button').forEach(function(btn) {
   });
 });
 
-buildChart(0, 7);
+buildChart(0, 30);
 </script>
 </body>
 </html>

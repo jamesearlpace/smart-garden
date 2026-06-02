@@ -207,7 +207,8 @@ h2 { margin: 0; font-size: 1.05rem; }
     <span class="legend-item"><span style="width:14px;height:0;border-top:2px dashed var(--red);display:inline-block"></span> <b>Stress Limit</b></span>
     <span class="legend-item"><span style="width:14px;height:0;border-top:1px dotted #fb923c;display:inline-block"></span> <b>Temp °F</b></span>
   </div>
-  <div class="legend" style="margin-top:-4px">
+  <!-- Sim-only legend row (hidden in 2026 real-data mode) -->
+  <div class="legend" id="legend-sim" style="margin-top:-4px">
     <span class="legend-item"><span style="color:var(--green);font-size:12px">●</span> <b>Watered</b></span>
     <span class="legend-item"><span style="color:#86efac;font-size:12px">●</span> <b>Catch-up</b></span>
     <span class="legend-item"><span style="color:#60a5fa;font-size:12px">▲</span> <b>Rain Skip</b></span>
@@ -216,7 +217,6 @@ h2 { margin: 0; font-size: 1.05rem; }
     <span class="legend-item"><span style="color:#a78bfa;font-size:12px">▲</span> <b>Hardening</b></span>
     <span class="legend-item"><span style="color:#c084fc;font-size:12px">▣</span> <b>Water (rain)</b></span>
     <span class="legend-item"><span style="color:#f87171;font-size:12px">✕</span> <b>Emergency</b></span>
-    <span class="legend-item"><span style="color:#38bdf8;font-size:12px">▮</span> <b>Actual Run</b> (DB)</span>
   </div>
 
   <!-- Two stacked charts: precip bars on top, moisture line below -->
@@ -478,6 +478,7 @@ function generateRealData2026(zoneId, liveData) {
       var hrIdx = di * 24 + h;
       var tempF = (hrIdx < wx.hourly.temperature_2m.length) ? wx.hourly.temperature_2m[hrIdx] : (hi + lo) / 2;
       var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : 0;
+      var sprinklerBar = null;
 
       var moisture;
       if (bal) {
@@ -509,14 +510,40 @@ function generateRealData2026(zoneId, liveData) {
         }
         moisture = Math.max(0, Math.min(100, moisture));
       } else {
-        // Forecast days: decay from last known balance
+        // Forecast days: decay from last known balance + predicted watering
         var kc = (month >= 3 && month <= 11) ? 0.90 : 0.40;
         var etPctDay = (et0_in / rootDepth) * 100 * kc;
         var etSoFar = 0;
         if (h >= 6 && h <= 20) {
           etSoFar = etPctDay * (1 - Math.cos((h + m/60 - 6) / 14 * Math.PI)) / 2;
         } else if (h > 20) { etSoFar = etPctDay; }
-        moisture = Math.max(0, Math.min(100, lastBalPct - etSoFar));
+
+        // Rain credit from forecast
+        var fcstRainIn = wx.daily.precipitation_sum[di] || 0;
+        var rainPctDay = (fcstRainIn * 0.65 / rootDepth) * 100; // 65% effectiveness
+        var rainFrac = 0;
+        if (h >= 8 && h <= 20) { rainFrac = (h - 8) / 12; } // spread rain 8AM-8PM
+        else if (h > 20) { rainFrac = 1; }
+
+        moisture = lastBalPct - etSoFar + rainPctDay * rainFrac;
+
+        // Predicted auto-watering: if moisture drops below MAD during 4-7AM window
+        if (h >= 4 && h < 7 && moisture < madPct) {
+          // System would water to ~MAD + recovery
+          var waterTarget = Math.min(100, madPct + 20);
+          var waterGain = waterTarget - moisture;
+          // Spread over the 4-7AM window (12 steps)
+          var stepInWindow = (h - 4) * 4 + Math.floor(m / 15);
+          if (stepInWindow < 12) {
+            moisture += waterGain * ((stepInWindow + 1) / 12);
+          } else {
+            moisture = waterTarget;
+          }
+          // Mark as predicted sprinkler for the bar chart
+          sprinklerBar = (zone.precipRate / 4);
+        }
+
+        moisture = Math.max(0, Math.min(100, moisture));
       }
 
       // Rain for bar chart (hourly weather only)
@@ -527,13 +554,19 @@ function generateRealData2026(zoneId, liveData) {
         t: new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000),
         moisture: moisture, tempF: tempF, windMph: windMph,
         madNow: madPct, wiltNow: wiltPct, etDrain: 0,
-        rain: rainBar, sprinkler: null, // NO simulated sprinkler
+        rain: rainBar, sprinkler: sprinklerBar,
         beneficialStress: moisture < madPct && moisture >= wiltPct,
         damageStress: moisture < wiltPct,
         isForecast: isForecast
       });
     }
-    if (bal) lastBalPct = (bal.balance_mm / bal.taw_mm) * 100;
+    // Update lastBalPct at end of day for next forecast day
+    if (bal) {
+      lastBalPct = (bal.balance_mm / bal.taw_mm) * 100;
+    } else if (points.length > 0) {
+      // For forecast days, carry forward the end-of-day moisture
+      lastBalPct = points[points.length - 1].moisture;
+    }
   }
 
   points.decisions = []; // NO fabricated decisions
@@ -865,9 +898,14 @@ function computeStats(data, MAD, actualWaterings) {
     depthIn = cycles.length > 0 ? (totSprPct / 100 * zone.rootDepthIn / cycles.length) : 0;
   }
 
-  // Stress stats (same for both modes — from moisture line)
-  var stressSteps = 0, deepStressSteps = 0;
+  // Stress stats — filter out bogus 0% initialization period (bug #11)
+  // Only count data after moisture first exceeds 10% (the broken period was always 0%)
+  var stressSteps = 0, deepStressSteps = 0, validSteps = 0;
+  var pastInit = false;
   for (var j = 0; j < data.length; j++) {
+    if (!pastInit && data[j].moisture > 10) pastInit = true;
+    if (!pastInit) continue;
+    validSteps++;
     if (data[j].beneficialStress) stressSteps++;
     if (data[j].damageStress) deepStressSteps++;
   }
@@ -1510,6 +1548,9 @@ document.getElementById('btn-reset-zoom').addEventListener('click', function() {
 
 function refresh() {
   var loadMsg = document.getElementById('loading-msg');
+
+  // Toggle legend: hide sim decision markers for real-data mode
+  document.getElementById('legend-sim').style.display = selectedYear === '2026' ? 'none' : 'flex';
 
   if (selectedYear === '2026') {
     loadMsg.style.display = 'inline';

@@ -769,7 +769,7 @@ class IrrigationEngine:
             if prev and prev["date"] != today:
                 balance = prev["balance_mm"]
             elif prev and prev["date"] == today:
-                # Already updated today ΓÇö use yesterday's balance to recompute
+                # Already updated today — use yesterday's balance to recompute
                 yesterday = (date.today() - timedelta(days=1)).isoformat()
                 yprev = None
                 hist = db.get_soil_balance_history(zid, days=2)
@@ -777,9 +777,20 @@ class IrrigationEngine:
                     if h["date"] == yesterday:
                         yprev = h
                         break
-                balance = yprev["balance_mm"] if yprev else taw_mm
+                if yprev:
+                    balance = yprev["balance_mm"]
+                else:
+                    # Can't find yesterday — carry forward today's existing
+                    # balance rather than resetting to TAW (bug #7 fix)
+                    balance = prev["balance_mm"]
+                    log.warning("Zone %d: no yesterday record, carrying forward "
+                                "today's balance %.1fmm (not resetting to TAW)",
+                                zid, balance)
             else:
-                balance = taw_mm  # first entry ΓÇö assume field capacity
+                # True first entry ever — only time we assume field capacity
+                balance = taw_mm
+                log.info("Zone %d: first balance entry, starting at field "
+                         "capacity %.1fmm", zid, taw_mm)
 
             # Crop coefficient for current season
             kc = zone["kc"][season_idx] if season_idx >= 0 else 0

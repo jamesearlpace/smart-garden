@@ -117,12 +117,17 @@
       <option value="7">Zone 8 — Garden (drip)</option>
       <option value="8">Zone 9 — Grapes (drip)</option>
     </select>
-    <div class="range-btns">
-      <button data-days="3">3d</button>
-      <button data-days="7">7d</button>
-      <button data-days="14">14d</button>
-      <button data-days="30" class="active">30d</button>
+    <div class="range-btns" id="range-btns">
+      <button data-days="30">30d</button>
+      <button data-days="60">60d</button>
+      <button data-days="90">90d</button>
+      <button data-days="153" class="active">Full</button>
     </div>
+    <div class="range-btns">
+      <button id="btn-fake" class="">Fake</button>
+      <button id="btn-real" class="active">Real 2025</button>
+    </div>
+    <span id="loading-msg" style="color:#f59e0b; font-size:.75rem; display:none">Loading weather…</span>
   </div>
 
   <div class="legend">
@@ -159,7 +164,9 @@ var ZONES = [
   { name: 'Grapes (drip)', precipRate: 0.4, kc: 0.55, madPct: 45, wiltPct: 30, rootDepthIn: 18 },
 ];
 
-var currentZone = 0, currentDays = 30, chartInstance = null;
+var currentZone = 0, currentDays = 153, chartInstance = null;
+var useRealWeather = true;
+var realWeatherCache = null; // cache fetched data
 
 // ─── Deterministic PRNG ───
 function mkRng(seed) {
@@ -648,9 +655,9 @@ var nowLinePlugin = {
 // ─── Build charts ───
 var precipChart = null, moistureChart = null;
 
-function buildChart(zoneIdx, days) {
+function buildChart(zoneIdx, days, precomputedData) {
   var zone = ZONES[zoneIdx];
-  var data = generateSimData(zoneIdx, days);
+  var data = precomputedData || generateSimData(zoneIdx, days);
   var MAD = zone.madPct;
   var stats = computeStats(data, MAD);
   renderUI(stats, MAD, data.decisions || []);
@@ -909,21 +916,262 @@ function buildChart(zoneIdx, days) {
   });
 }
 
+// ═══════════════════════════════════════
+// Real Weather from Open-Meteo Archive
+// ═══════════════════════════════════════
+function fetchRealWeather() {
+  return new Promise(function(resolve, reject) {
+    if (realWeatherCache) { resolve(realWeatherCache); return; }
+    
+    var lat = 47.7382, lon = -121.9856; // Duvall WA
+    var url = 'https://archive-api.open-meteo.com/v1/archive?' +
+      'latitude=' + lat + '&longitude=' + lon +
+      '&start_date=2025-05-01&end_date=2025-09-30' +
+      '&daily=et0_fao_evapotranspiration,precipitation_sum,temperature_2m_max,temperature_2m_min,wind_speed_10m_max' +
+      '&hourly=temperature_2m,wind_speed_10m,precipitation' +
+      '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
+      '&timezone=America/Los_Angeles';
+    
+    fetch(url).then(function(r) { return r.json(); }).then(function(wx) {
+      if (!wx.daily || !wx.hourly) { reject('API error'); return; }
+      realWeatherCache = wx;
+      resolve(wx);
+    }).catch(reject);
+  });
+}
+
+function generateRealData(zoneIdx, days) {
+  var wx = realWeatherCache;
+  if (!wx) return generateSimData(zoneIdx, days); // fallback
+  
+  var zone = ZONES[zoneIdx];
+  var numDays = Math.min(days, wx.daily.time.length);
+  var MAD_BASE = zone.madPct;
+  var WILT_BASE = zone.wiltPct;
+  var moisture = MAD_BASE + 20;
+  var points = [], decisions = [];
+  
+  // Seasonal Kc
+  var kcSchedule = { 5: 0.55, 6: 0.75, 7: 0.85, 8: 0.85, 9: 0.65 };
+  
+  // Build rain events from hourly data
+  var rainEvents = [];
+  for (var d = 0; d < numDays; d++) {
+    var dayStart = d * 24;
+    var rStart = -1, rDur = 0, rDepth = 0;
+    for (var hh = 0; hh < 24; hh++) {
+      var precip = wx.hourly.precipitation[dayStart + hh] || 0;
+      if (precip > 0.005) {
+        if (rStart < 0) rStart = hh;
+        rDur++; rDepth += precip;
+      } else if (rStart >= 0) {
+        if (rDepth > 0.01) rainEvents.push({ day: d, hr: rStart, dur: rDur * 4, depth: rDepth });
+        rStart = -1; rDur = 0; rDepth = 0;
+      }
+    }
+    if (rStart >= 0 && rDepth > 0.01) rainEvents.push({ day: d, hr: rStart, dur: rDur * 4, depth: rDepth });
+  }
+  
+  // Sprinkler state
+  var armed = false, recovering = false, cycleTarget = 0;
+  var cumulativeStressHrs = 0, lastWateredStep = -999;
+  var decidedToday = false;
+  
+  // Parse dates for display
+  var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
+  
+  for (var di = 0; di < numDays; di++) {
+    var hi = wx.daily.temperature_2m_max[di];
+    var lo = wx.daily.temperature_2m_min[di];
+    var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
+    var maxWind = wx.daily.wind_speed_10m_max[di] || 0;
+    var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) > 0.02);
+    var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) > 0.02);
+    var month = parseInt(wx.daily.time[di].split('-')[1]);
+    var kc = kcSchedule[month] || 0.80;
+    var hiTomorrow = (di + 1 < numDays) ? wx.daily.temperature_2m_max[di + 1] : hi;
+    
+    decidedToday = false;
+    
+    for (var step = 0; step < 96; step++) {
+      var h = Math.floor(step / 4);
+      var m = (step % 4) * 15;
+      var globalStep = di * 96 + step;
+      
+      // Temp from hourly data
+      var hrIdx = di * 24 + h;
+      var tempF = (hrIdx < wx.hourly.temperature_2m.length) ? wx.hourly.temperature_2m[hrIdx] : (hi + lo) / 2;
+      
+      // Wind from hourly
+      var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
+      
+      // Dynamic thresholds
+      var tempDelta = (tempF - 70) / 10;
+      var madNow = Math.max(38, Math.min(62, MAD_BASE + tempDelta * 3));
+      var wiltNow = Math.max(22, Math.min(madNow - 10, WILT_BASE + tempDelta * 2));
+      
+      // ET₀ drain — prorate actual daily ET₀
+      var drain = 0;
+      if (h >= 6 && h <= 20) {
+        var phase = (h + m / 60 - 6) / 14 * Math.PI;
+        var dailyET_pct = (et0_in / zone.rootDepthIn) * 100 * kc;
+        drain = Math.sin(phase) * dailyET_pct / (56 * 0.637);
+      }
+      moisture -= drain;
+      
+      // Rain
+      var rain = 0;
+      var stepInDay = h * 4 + Math.floor(m / 15);
+      for (var ri = 0; ri < rainEvents.length; ri++) {
+        var re = rainEvents[ri];
+        if (di === re.day && stepInDay >= re.hr * 4 && stepInDay < re.hr * 4 + re.dur) {
+          rain = (re.depth / re.dur) * 100 * 0.75; // 75% effective
+        }
+      }
+      
+      // Track stress
+      var inBeneficial = moisture < madNow && moisture >= wiltNow;
+      var inDamage = moisture < wiltNow;
+      if (inBeneficial) cumulativeStressHrs += 0.25;
+      if (inDamage) cumulativeStressHrs += 0.5;
+      
+      // Sprinkler
+      var sprinkler = 0;
+      var decision = null;
+      var dailyDrain_pct = (et0_in / zone.rootDepthIn) * 100 * kc;
+      var armThreshold = madNow + dailyDrain_pct * 1.3;
+      if (!armed && !recovering && moisture <= armThreshold) armed = true;
+      
+      // Pre-emptive
+      if (!armed && !recovering && hiTomorrow > 85 && moisture < armThreshold + 5 && h >= 18) {
+        armed = true;
+        if (!decidedToday) {
+          decision = { step: globalStep, type: 'arm-preemptive', day: di,
+            reason: 'Tomorrow ' + Math.round(hiTomorrow) + '°F — pre-watering' };
+        }
+      }
+      
+      // Water window 4-6 AM
+      if (armed && h >= 4 && h < 6 && !recovering && !decidedToday) {
+        decidedToday = true;
+        
+        if (windMph > 10) {
+          decision = { step: globalStep, type: 'skip-wind', day: di,
+            reason: 'Wind ' + Math.round(windMph) + ' mph at 4 AM' };
+        } else {
+          var rainExpected = false;
+          if (rainTomorrow) rainExpected = true;
+          if (prevRainTomorrow) rainExpected = true;
+          if ((wx.daily.precipitation_sum[di] || 0) > 0.05) rainExpected = true;
+          for (var rci = 0; rci < rainEvents.length; rci++) {
+            if (rainEvents[rci].day === di || rainEvents[rci].day === di + 1) rainExpected = true;
+          }
+          
+          if (rainExpected && moisture > madNow - 3) {
+            decision = { step: globalStep, type: 'skip-rain', day: di,
+              reason: 'Rain expected, moisture ' + Math.round(moisture) + '% can wait' };
+          } else if (rainExpected && moisture <= madNow - 3) {
+            recovering = true;
+            cycleTarget = madNow + 14;
+            decision = { step: globalStep, type: 'water-despite-rain', day: di,
+              reason: 'Too dry (' + Math.round(moisture) + '%) to wait for rain' };
+          } else if (!rainExpected) {
+            recovering = true;
+            var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
+            var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
+            cycleTarget = Math.min(80, madNow + 20 + recoverExtra);
+            decision = { step: globalStep, type: 'water', day: di,
+              reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc };
+          }
+        }
+      }
+      
+      // Emergency
+      if (!recovering && moisture <= wiltNow + 2 && h >= 3) {
+        recovering = true;
+        cycleTarget = madNow + 15;
+        decision = { step: globalStep, type: 'water-emergency', day: di,
+          reason: 'EMERGENCY: ' + Math.round(moisture) + '% near wilt ' + Math.round(wiltNow) + '%' };
+      }
+      
+      if (recovering) {
+        if (moisture < cycleTarget) {
+          sprinkler = (zone.precipRate / 4) * (100 / zone.rootDepthIn);
+          if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
+        }
+        if (moisture + sprinkler >= cycleTarget || h >= 6) {
+          recovering = false; armed = false;
+          cumulativeStressHrs = 0; lastWateredStep = globalStep;
+        }
+      }
+      
+      if (decision) decisions.push(decision);
+      moisture = Math.min(100, Math.max(0, moisture + rain + sprinkler));
+      
+      // Create date for this timestep
+      var ptDate = new Date(startDate.getTime() + (di * 86400000) + (h * 3600000) + (m * 60000));
+      
+      points.push({
+        t: ptDate, moisture: moisture, tempF: tempF, windMph: windMph,
+        madNow: madNow, wiltNow: wiltNow, etDrain: drain,
+        rain: rain > 0.1 ? rain : null,
+        sprinkler: sprinkler > 0.1 ? sprinkler : null,
+        beneficialStress: moisture < madNow && moisture >= wiltNow,
+        damageStress: moisture < wiltNow
+      });
+    }
+  }
+  
+  points.decisions = decisions;
+  return points;
+}
+
 // ─── Controls ───
 document.getElementById('zone-select').addEventListener('change', function() {
   currentZone = parseInt(this.value);
-  buildChart(currentZone, currentDays);
+  refresh();
 });
-document.querySelectorAll('.range-btns button').forEach(function(btn) {
+document.querySelectorAll('#range-btns button').forEach(function(btn) {
   btn.addEventListener('click', function() {
-    document.querySelectorAll('.range-btns button').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('#range-btns button').forEach(function(b) { b.classList.remove('active'); });
     btn.classList.add('active');
     currentDays = parseInt(btn.dataset.days);
-    buildChart(currentZone, currentDays);
+    refresh();
   });
 });
+document.getElementById('btn-fake').addEventListener('click', function() {
+  useRealWeather = false;
+  this.classList.add('active');
+  document.getElementById('btn-real').classList.remove('active');
+  refresh();
+});
+document.getElementById('btn-real').addEventListener('click', function() {
+  useRealWeather = true;
+  this.classList.add('active');
+  document.getElementById('btn-fake').classList.remove('active');
+  refresh();
+});
 
-buildChart(0, 30);
+function refresh() {
+  if (useRealWeather && !realWeatherCache) {
+    document.getElementById('loading-msg').style.display = 'inline';
+    fetchRealWeather().then(function() {
+      document.getElementById('loading-msg').style.display = 'none';
+      var data = generateRealData(currentZone, currentDays);
+      buildChart(currentZone, currentDays, data);
+    }).catch(function(err) {
+      document.getElementById('loading-msg').textContent = 'Weather fetch failed: ' + err;
+    });
+  } else if (useRealWeather) {
+    var data = generateRealData(currentZone, currentDays);
+    buildChart(currentZone, currentDays, data);
+  } else {
+    buildChart(currentZone, currentDays);
+  }
+}
+
+// Initial load — fetch real weather
+refresh();
 </script>
 </body>
 </html>

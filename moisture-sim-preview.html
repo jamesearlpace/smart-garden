@@ -1207,8 +1207,11 @@ function generateRealData(zoneIdx, days, year) {
               if (expectedGain < 3) {
                 // Rain was a bust — less than 3% moisture gain. Catch up now.
                 catchUpNeeded = true;
-                decision = { step: globalStep, type: 'water', day: di,
-                  reason: 'CATCH-UP: Rain skip day ' + (skippedForRainDay+1) + ' only delivered ' + rainSinceSkip.toFixed(2) + '" (' + expectedGain.toFixed(0) + '%) — compensating. ' + Math.round(moisture) + '% → ' };
+                recovering = true;
+                var avgHi3c = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
+                cycleTarget = Math.min(80, madNow + seasonalRecover + Math.max(0, (avgHi3c - 70)) * 0.04);
+                decision = { step: globalStep, type: 'catch-up', day: di,
+                  reason: 'Rain skip day ' + (skippedForRainDay+1) + ' only delivered ' + rainSinceSkip.toFixed(2) + '" (' + expectedGain.toFixed(0) + '%). Compensating → ' + Math.round(cycleTarget) + '%' };
               }
               skippedForRainDay = -1; // reset
             }

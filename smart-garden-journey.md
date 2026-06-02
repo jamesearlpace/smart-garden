@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Decisions driven by weather API. Water budget chart deployed. Precip rates calibrated per zone. Next: hourly moisture simulation chart.
+**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Irrigation brain mockup complete with real weather backtesting (2021-2025). FAO-56 audited. Next: deploy to real server dashboard with live 2026 data + forecast.
 **Last Updated:** 2026-06-01
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -747,3 +747,81 @@ When `setupWiFi()` fails after 40 attempts (20s), it switches to `WIFI_AP` mode.
 - [ ] Flash firmware via USB: `cd C:\MyCode\smart-garden && pio run -e esp32 --target upload --upload-port COM5`
 - [ ] Monitor battery voltage — 10.99V is concerning, check solar panel positioning and Renogy charge controller LEDs
 - [ ] Consider adding a low-voltage cutoff (e.g., don't attempt WiFi below 11.0V, just deep sleep and wait for solar)
+
+---
+
+## Session Log: 2026-06-01 (Irrigation Brain Mockup + FAO-56 Audit)
+
+### What was built
+
+Complete tier-5 irrigation brain mockup in `moisture-sim-preview.html` with:
+- **Two-chart layout:** inverted precip bars (rain/sprinkler in inches) on top, moisture line below
+- **Real weather integration:** fetches actual 2021-2025 Duvall data from Open-Meteo archive API
+- **Year selector dropdown:** compare behavior across 5 years of real weather
+- **8 decision types** verified firing across all years: water, catch-up, rain-skip, wind-skip, pre-emptive, water-despite-rain, hardening, emergency
+- **Decision markers on chart:** colored shapes at each decision point, hover for reason
+- **Checkbook tooltip:** hover any point to see ET loss, rain/sprinkler gains, temp, wind, MAD
+- **Decision log with type-count badges:** debug summary of all decisions
+- **Drag-to-zoom + scroll-to-pan** with synced precip/moisture charts
+
+### FAO-56 Audit (IRRIGATION-AUDIT.md)
+
+Found and fixed critical parameter errors:
+- **Kc was 0.40-0.85 seasonal → fixed to 0.90 constant** (FAO-56 Table 12: cool-season turf = 0.90-0.95)
+- **Removed seasonal Kc schedule** — ET0 handles seasonality naturally via solar radiation/temp
+- **Added seasonal root depth** (4" spring → 8" summer → 6" fall) as the real source of seasonal variation
+- **Rain skip threshold** 0.02" → 0.20" (PNW golf course standard — drizzle doesn't penetrate thatch)
+- **Wind skip** > 10 → >= 10 mph (uses daily max forecast, not 4AM reading)
+- **Hardening** fixed from multi-day vineyard-style to single-cycle turf-appropriate skip
+- **Sliding rain effectiveness** by intensity (40% for drizzle, 65% medium, 80% heavy)
+- **Heat guard on hardening:** blocked when 5-day avg > 85°F
+
+### Key files created
+| File | Purpose |
+|------|---------|
+| `moisture-sim-preview.html` | Full interactive mockup (1400+ lines) |
+| `IRRIGATION-BRAIN.md` | Design document — algorithm, rules, data sources |
+| `IRRIGATION-AUDIT.md` | FAO-56 comparison, parameter fixes, confidence levels |
+| `irrigation-logic.svg` | Decision flowchart SVG |
+| `sim-real-weather.js` | Node.js 5-month real-weather simulator |
+| `sim-90day.js` | Synthetic 90-day PNW weather simulator |
+| `tune-sim.js` | Parameter sweep tool |
+| `check-decisions.js` | Verify all decision types fire across years |
+
+### Confidence assessment
+- **HIGH confidence:** ET0 from Open-Meteo, checkbook method, Kc=0.90, wind/rain skip, 4-6AM window
+- **MEDIUM confidence:** Root depth schedule, recovery targets, single-cycle hardening
+- **LOW confidence:** Temperature-dynamic MAD, exact soil AWC (need USDA Web Soil Survey)
+- **User action needed:** Look up soil type on websoilsurvey.sc.egov.usda.gov, consider King County Conservation District free audit
+
+### NEXT: Deploy to real server dashboard
+
+The mockup is validated. The next session should:
+1. **Read these files first:** `smart-garden-journey.md`, `IRRIGATION-BRAIN.md`, `IRRIGATION-AUDIT.md`
+2. **Read the server code:** `~/smart-garden-server/dashboard.py`, `irrigation.py`, `weather.py`, `database.py`
+3. **Add new page to server:** `templates/moisture_sim.html` — port the mockup's JS to the real dashboard
+4. **Wire to live data sources:**
+   - Open-Meteo FORECAST API (not just archive) for current 2026 + 7-day prediction
+   - Open-Meteo ARCHIVE API for historical 2026 data (Jan 1 to yesterday)
+   - Server SQLite DB for actual sprinkler run history (`watering_log` table)
+   - Server SQLite DB for `forecast_snapshot` table (existing, created 2026-05-26)
+5. **Show three data layers on the chart:**
+   - Green moisture line: model prediction (checkbook balance)
+   - Blue markers: actual sprinkler events from DB
+   - Dashed future line: 7-day forecast prediction with expected watering decisions
+6. **Show next expected watering:** "Based on forecast, next watering in ~2.3 days (Thu 4 AM)"
+7. **Conservative mode first:** Checkbook + rain skip + wind skip only. Add hardening after first full summer.
+8. **Do NOT remove the mockup** — keep `moisture-sim-preview.html` as the backtesting/validation tool
+
+### 25+ commits this session
+`306fd73` Fix hardening: single-cycle skip, turf-appropriate
+`4c168ca` Rain skip threshold 0.20" (golf course standard)
+`8f6fd99` Wind >=10, hardening heat guard 85F
+`1346404` Apply audit fixes: Kc=0.90, seasonal root depth
+`ca9522f` Audit document
+`5db5b31` Brain design document
+`d756a6f` Real weather integration
+`4bf9bd3` Decision markers on chart
+`f5139b1` Year selector 2021-2025
+`2b03f87` Drag-to-zoom + scroll-to-pan
+(and 15+ more — see `git log`)

@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moisture Simulation — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0;
+        --text2: #94a3b8; --green: #22c55e; --blue: #3b82f6; --amber: #f59e0b;
+        --red: #ef4444; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: var(--bg); color: var(--text); padding: 16px; }
+
+.nav { margin-bottom: 16px; font-size: .85rem; }
+.nav a { color: var(--blue); text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+
+.header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+h2 { margin: 0; font-size: 1.05rem; }
+.subtitle { color: var(--text2); font-size: .73rem; margin-bottom: 14px; }
+.current-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
+  padding: 4px 14px 4px 10px; font-size: .82rem; font-weight: 600;
+}
+.current-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.controls select {
+  background: var(--bg); color: var(--text); border: 1px solid #475569; border-radius: 6px;
+  padding: 5px 10px; font-size: .8rem; cursor: pointer; outline: none;
+}
+.controls select:hover { border-color: var(--green); }
+.range-btns { display: flex; gap: 0; }
+.range-btns button {
+  background: var(--bg); color: var(--text2); border: 1px solid #475569;
+  padding: 5px 12px; font-size: .75rem; cursor: pointer; transition: all .15s;
+}
+.range-btns button:first-child { border-radius: 6px 0 0 6px; }
+.range-btns button:last-child { border-radius: 0 6px 6px 0; }
+.range-btns button:not(:first-child) { border-left: none; }
+.range-btns button.active { background: #22c55e22; color: var(--green); border-color: var(--green); }
+.range-btns button:hover:not(.active) { color: var(--text); }
+
+.legend { display: flex; gap: 14px; font-size: .72rem; color: var(--text2); margin-bottom: 8px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.legend-bar { width: 4px; height: 14px; border-radius: 1px; }
+.legend-line { width: 14px; height: 0; border-top: 2px dashed var(--amber); }
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+.stat { background: var(--bg); border-radius: 8px; padding: 12px; text-align: center; }
+.stat-value { font-size: 1.3rem; font-weight: 700; }
+.stat-label { font-size: .7rem; color: var(--text2); margin-top: 4px; }
+.stat-hint { font-size: .6rem; color: #64748b; margin-top: 2px; }
+.stat-good { color: var(--green); }
+.stat-warn { color: var(--amber); }
+.stat-bad { color: var(--red); }
+
+.summary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.summary-card { background: var(--bg); border-radius: 8px; padding: 14px 16px; }
+.summary-card h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
+.summary-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: .78rem; border-bottom: 1px solid var(--card); }
+.summary-line:last-child { border-bottom: none; }
+.summary-label { color: var(--text2); }
+.summary-val { color: var(--text); font-weight: 500; }
+.summary-val.good { color: var(--green); }
+.summary-val.warn { color: var(--amber); }
+
+.next-water-banner {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px;
+  margin-bottom: 14px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.next-water-banner .nw-icon { font-size: 1.5rem; }
+.next-water-banner .nw-main { flex: 1; min-width: 200px; }
+.next-water-banner .nw-title { font-size: .82rem; color: var(--text2); }
+.next-water-banner .nw-value { font-size: 1.2rem; font-weight: 700; }
+.next-water-banner .nw-detail { font-size: .72rem; color: var(--text2); margin-top: 2px; }
+
+.decision-log { margin-top: 12px; }
+.decision-log h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
+.decision-entry { display: flex; gap: 10px; padding: 6px 0; font-size: .75rem; border-bottom: 1px solid var(--card); }
+.decision-entry:last-child { border-bottom: none; }
+.decision-icon { font-size: 1rem; flex-shrink: 0; width: 22px; text-align: center; }
+.decision-time { color: #64748b; white-space: nowrap; min-width: 70px; }
+.decision-reason { color: #cbd5e1; }
+.decision-type-water .decision-reason { color: var(--green); }
+.decision-type-skip-wind .decision-reason { color: var(--text2); }
+.decision-type-skip-rain .decision-reason { color: var(--blue); }
+.decision-type-arm-preemptive .decision-reason { color: #fb923c; }
+.decision-type-water-emergency .decision-reason { color: var(--red); }
+.decision-type-water-despite-rain .decision-reason { color: #a78bfa; }
+
+.actual-events { margin-top: 12px; }
+.actual-events h3 { margin: 0 0 8px; font-size: .85rem; }
+.event-row { display: flex; gap: 10px; padding: 4px 0; font-size: .75rem; border-bottom: 1px solid var(--card); }
+.event-row:last-child { border-bottom: none; }
+
+@media (max-width: 700px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .summary-row { grid-template-columns: 1fr; }
+  .controls { gap: 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/">← Dashboard</a> · <a href="/forecast">Forecast</a> · <b>Moisture Sim</b>
+</div>
+
+<!-- Next watering prediction banner -->
+<div class="next-water-banner" id="next-water-banner" style="display:none">
+  <span class="nw-icon">🌧️</span>
+  <div class="nw-main">
+    <div class="nw-title">Next Expected Watering</div>
+    <div class="nw-value" id="nw-value">—</div>
+    <div class="nw-detail" id="nw-detail"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="header-row">
+    <h2>💧 Soil Moisture Simulation</h2>
+    <div class="current-badge" id="current-badge">
+      <span class="dot" style="background:var(--green)"></span>
+      <span id="current-pct">—%</span>
+    </div>
+  </div>
+  <div class="subtitle">Checkbook moisture balance — ET₀ evaporation, rainfall, and irrigation (FAO-56)</div>
+
+  <div class="controls">
+    <select id="zone-select">
+      {% for z in zones %}
+      <option value="{{ z.id }}">Zone {{ z.id + 1 }} — {{ z.name }}</option>
+      {% endfor %}
+    </select>
+    <div class="range-btns" id="range-btns">
+      <button data-days="30">30d</button>
+      <button data-days="60">60d</button>
+      <button data-days="90">90d</button>
+      <button data-days="153" class="active">Full Season</button>
+    </div>
+    <select id="year-select">
+      <option value="2026" selected>2026 (Live)</option>
+      <option value="2025">2025</option>
+      <option value="2024">2024</option>
+      <option value="2023">2023</option>
+      <option value="2022">2022</option>
+      <option value="2021">2021 (Heat Dome)</option>
+    </select>
+    <button id="btn-reset-zoom" style="background:var(--bg); color:var(--text2); border:1px solid #475569; border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer">Reset Zoom</button>
+    <span style="color:#475569; font-size:.65rem">Drag to zoom · Scroll to pan</span>
+    <span id="loading-msg" style="color:var(--amber); font-size:.75rem; display:none">Loading…</span>
+  </div>
+
+  <div class="legend">
+    <span class="legend-item"><span class="legend-swatch" style="background:var(--green)"></span> <b>Moisture %</b></span>
+    <span class="legend-item"><span class="legend-bar" style="background:rgba(59,130,246,0.6)"></span> <b>Rain</b> (in)</span>
+    <span class="legend-item"><span class="legend-bar" style="background:rgba(16,185,129,0.6)"></span> <b>Sprinkler</b> (in)</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(245,158,11,0.25)"></span> <b>Beneficial Stress</b></span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(239,68,68,0.35)"></span> <b>Deep Stress</b></span>
+    <span class="legend-item"><span class="legend-line"></span> <b>MAD</b></span>
+    <span class="legend-item"><span style="width:14px;height:0;border-top:2px dashed var(--red);display:inline-block"></span> <b>Stress Limit</b></span>
+    <span class="legend-item"><span style="width:14px;height:0;border-top:1px dotted #fb923c;display:inline-block"></span> <b>Temp °F</b></span>
+  </div>
+  <div class="legend" style="margin-top:-4px">
+    <span class="legend-item"><span style="color:var(--green);font-size:12px">●</span> <b>Watered</b></span>
+    <span class="legend-item"><span style="color:#86efac;font-size:12px">●</span> <b>Catch-up</b></span>
+    <span class="legend-item"><span style="color:#60a5fa;font-size:12px">▲</span> <b>Rain Skip</b></span>
+    <span class="legend-item"><span style="color:#e2e8f0;font-size:12px">◆</span> <b>Wind Skip</b></span>
+    <span class="legend-item"><span style="color:#fb923c;font-size:12px">★</span> <b>Pre-emptive</b></span>
+    <span class="legend-item"><span style="color:#a78bfa;font-size:12px">▲</span> <b>Hardening</b></span>
+    <span class="legend-item"><span style="color:#c084fc;font-size:12px">▣</span> <b>Water (rain)</b></span>
+    <span class="legend-item"><span style="color:#f87171;font-size:12px">✕</span> <b>Emergency</b></span>
+    <span class="legend-item"><span style="color:#38bdf8;font-size:12px">▮</span> <b>Actual Run</b> (DB)</span>
+  </div>
+
+  <!-- Two stacked charts: precip bars on top, moisture line below -->
+  <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
+  <div style="height:280px; position:relative; margin-top:-6px"><canvas id="moisture-chart"></canvas></div>
+
+  <div class="stats" id="stats-row"></div>
+  <div class="summary-row" id="summary-row"></div>
+  <div class="decision-log" id="decision-log"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════
+// CONFIG & STATE
+// ═══════════════════════════════════
+var ZONES = {{ zones | tojson }};
+var currentZoneId = ZONES.length > 0 ? ZONES[0].id : 0;
+var currentDays = 153;
+var selectedYear = '2026';
+var weatherCache = {};
+var liveDataCache = {};
+var precipChart = null, moistureChart = null;
+
+// Map zone config from server to the format the brain expects
+function getZoneBrainConfig(zoneId) {
+  var z = null;
+  for (var i = 0; i < ZONES.length; i++) {
+    if (ZONES[i].id === zoneId) { z = ZONES[i]; break; }
+  }
+  if (!z) return { precipRate: 1.3, madPct: 50, wiltPct: 35, rootDepthIn: 6 };
+  return {
+    precipRate: z.precip_rate_iph || 1.3,
+    madPct: z.mad_pct || 50,
+    wiltPct: Math.max(20, (z.mad_pct || 50) - 15),
+    rootDepthIn: z.root_depth_in || 6,
+    name: z.name
+  };
+}
+
+// ═══════════════════════════════════
+// OPEN-METEO ARCHIVE (historical)
+// ═══════════════════════════════════
+function fetchArchiveWeather(year) {
+  return new Promise(function(resolve, reject) {
+    if (weatherCache[year]) { resolve(weatherCache[year]); return; }
+    var lat = 47.7382, lon = -121.9856;
+    var url = 'https://archive-api.open-meteo.com/v1/archive?' +
+      'latitude=' + lat + '&longitude=' + lon +
+      '&start_date=' + year + '-03-01&end_date=' + year + '-09-30' +
+      '&daily=et0_fao_evapotranspiration,precipitation_sum,temperature_2m_max,temperature_2m_min,wind_speed_10m_max' +
+      '&hourly=temperature_2m,wind_speed_10m,precipitation' +
+      '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
+      '&timezone=America/Los_Angeles';
+    fetch(url).then(function(r) { return r.json(); }).then(function(wx) {
+      if (!wx.daily || !wx.hourly) { reject('Archive API error'); return; }
+      weatherCache[year] = wx;
+      resolve(wx);
+    }).catch(reject);
+  });
+}
+
+// ═══════════════════════════════════
+// OPEN-METEO 2026: Archive (past) + Forecast (future)
+// ═══════════════════════════════════
+function fetch2026Weather() {
+  return new Promise(function(resolve, reject) {
+    if (weatherCache['2026']) { resolve(weatherCache['2026']); return; }
+
+    var lat = 47.7382, lon = -121.9856;
+    var today = new Date();
+    // Yesterday for archive end
+    var yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+    var archiveEnd = yesterday.toISOString().slice(0, 10);
+
+    // Fetch archive (Jan 1 to yesterday) + forecast (today + 7 days) in parallel
+    var archiveUrl = 'https://archive-api.open-meteo.com/v1/archive?' +
+      'latitude=' + lat + '&longitude=' + lon +
+      '&start_date=2026-03-01&end_date=' + archiveEnd +
+      '&daily=et0_fao_evapotranspiration,precipitation_sum,temperature_2m_max,temperature_2m_min,wind_speed_10m_max' +
+      '&hourly=temperature_2m,wind_speed_10m,precipitation' +
+      '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
+      '&timezone=America/Los_Angeles';
+
+    var forecastUrl = 'https://api.open-meteo.com/v1/forecast?' +
+      'latitude=' + lat + '&longitude=' + lon +
+      '&daily=et0_fao_evapotranspiration,precipitation_sum,temperature_2m_max,temperature_2m_min,wind_speed_10m_max' +
+      '&hourly=temperature_2m,wind_speed_10m,precipitation' +
+      '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
+      '&timezone=America/Los_Angeles' +
+      '&past_days=1&forecast_days=7';
+
+    Promise.all([
+      fetch(archiveUrl).then(function(r) { return r.json(); }),
+      fetch(forecastUrl).then(function(r) { return r.json(); })
+    ]).then(function(results) {
+      var arch = results[0], fcst = results[1];
+      if (!arch.daily || !arch.hourly) { reject('Archive API error'); return; }
+      if (!fcst.daily || !fcst.hourly) { reject('Forecast API error'); return; }
+
+      // Merge: archive data + forecast data (skip overlapping dates from forecast)
+      var lastArchDate = arch.daily.time[arch.daily.time.length - 1];
+      var merged = { daily: {}, hourly: {}, isForecast: [] };
+
+      // Copy all daily keys
+      var dailyKeys = Object.keys(arch.daily);
+      dailyKeys.forEach(function(k) { merged.daily[k] = arch.daily[k].slice(); });
+
+      // Append forecast daily (skip dates already in archive)
+      for (var di = 0; di < fcst.daily.time.length; di++) {
+        if (fcst.daily.time[di] > lastArchDate) {
+          dailyKeys.forEach(function(k) { merged.daily[k].push(fcst.daily[k][di]); });
+          merged.isForecast.push(merged.daily.time.length - 1);
+        }
+      }
+
+      // Copy all hourly keys
+      var hourlyKeys = Object.keys(arch.hourly);
+      hourlyKeys.forEach(function(k) { merged.hourly[k] = arch.hourly[k].slice(); });
+
+      // Append forecast hourly (skip times already in archive)
+      var lastArchHour = arch.hourly.time[arch.hourly.time.length - 1];
+      for (var hi = 0; hi < fcst.hourly.time.length; hi++) {
+        if (fcst.hourly.time[hi] > lastArchHour) {
+          hourlyKeys.forEach(function(k) { merged.hourly[k].push(fcst.hourly[k][hi]); });
+        }
+      }
+
+      // Mark which daily indices are forecast (for dashed line rendering)
+      weatherCache['2026'] = merged;
+      resolve(merged);
+    }).catch(reject);
+  });
+}
+
+// ═══════════════════════════════════
+// LIVE DATA FROM SERVER (2026 only)
+// ═══════════════════════════════════
+function fetchLiveData(zoneId) {
+  return new Promise(function(resolve, reject) {
+    var cacheKey = 'z' + zoneId;
+    if (liveDataCache[cacheKey]) { resolve(liveDataCache[cacheKey]); return; }
+    fetch('/api/moisture-data?zone_id=' + zoneId + '&days=365')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        liveDataCache[cacheKey] = data;
+        resolve(data);
+      }).catch(reject);
+  });
+}
+
+// ═══════════════════════════════════
+// IRRIGATION BRAIN (FAO-56 audited)
+// ═══════════════════════════════════
+function generateBrainData(zoneId, days, year) {
+  var wx = weatherCache[year];
+  if (!wx) return null;
+
+  var zone = getZoneBrainConfig(zoneId);
+  var numDays = Math.min(days, wx.daily.time.length);
+  var MAD_BASE = zone.madPct;
+  var WILT_BASE = zone.wiltPct;
+  var moisture = MAD_BASE + 20;
+  var points = [], decisions = [];
+
+  // FAO-56 compliant: Kc = 0.90 constant for cool-season turf
+  var KC_ACTIVE = 0.90;
+  var KC_DORMANT = 0.40;
+
+  // Seasonal root depth (inches)
+  var rootDepthSchedule = { 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 };
+  var MAD_BASE_CONST = zone.madPct;
+  var recoverSchedule = { 3: 12, 4: 12, 5: 15, 6: 18, 7: 20, 8: 20, 9: 15, 10: 12 };
+  var hardenMonths = { 6: true, 7: true, 8: true };
+
+  // Build rain events from hourly data
+  var rainEvents = [];
+  for (var d = 0; d < numDays; d++) {
+    var dayStart = d * 24;
+    var rStart = -1, rDur = 0, rDepth = 0;
+    for (var hh = 0; hh < 24; hh++) {
+      var precip = wx.hourly.precipitation[dayStart + hh] || 0;
+      if (precip > 0.005) {
+        if (rStart < 0) rStart = hh;
+        rDur++; rDepth += precip;
+      } else if (rStart >= 0) {
+        if (rDepth > 0.01) rainEvents.push({ day: d, hr: rStart, dur: rDur * 4, depth: rDepth });
+        rStart = -1; rDur = 0; rDepth = 0;
+      }
+    }
+    if (rStart >= 0 && rDepth > 0.01) rainEvents.push({ day: d, hr: rStart, dur: rDur * 4, depth: rDepth });
+  }
+
+  var armed = false, recovering = false, cycleTarget = 0;
+  var cumulativeStressHrs = 0, lastWateredStep = -999;
+  var decidedToday = false;
+  var skippedForRainDay = -1, moistureAtRainSkip = 0;
+  var lastHardenDay = -21, HARDEN_INTERVAL = 21, inHardeningMode = false;
+  var RAIN_SKIP_THRESHOLD = 0.20;
+
+  var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
+
+  for (var di = 0; di < numDays; di++) {
+    var hi = wx.daily.temperature_2m_max[di];
+    var lo = wx.daily.temperature_2m_min[di];
+    var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
+    var maxWind = wx.daily.wind_speed_10m_max[di] || 0;
+    var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) >= RAIN_SKIP_THRESHOLD);
+    var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) >= RAIN_SKIP_THRESHOLD);
+    var month = parseInt(wx.daily.time[di].split('-')[1]);
+    var kc = (month >= 3 && month <= 11) ? KC_ACTIVE : KC_DORMANT;
+    var rootDepth = rootDepthSchedule[month] || zone.rootDepthIn;
+    var seasonalRecover = recoverSchedule[month] || 20;
+
+    var canHarden = !!(hardenMonths[month]);
+    if (canHarden) {
+      var avg5hi = 0, cnt5 = 0;
+      for (var fd = di; fd < Math.min(di + 5, numDays); fd++) {
+        avg5hi += wx.daily.temperature_2m_max[fd]; cnt5++;
+      }
+      avg5hi = cnt5 > 0 ? avg5hi / cnt5 : 999;
+      if (avg5hi > 85) canHarden = false;
+    }
+
+    var hiTomorrow = (di + 1 < numDays) ? wx.daily.temperature_2m_max[di + 1] : hi;
+    decidedToday = false;
+
+    for (var step = 0; step < 96; step++) {
+      var h = Math.floor(step / 4);
+      var m = (step % 4) * 15;
+      var globalStep = di * 96 + step;
+      var hrIdx = di * 24 + h;
+      var tempF = (hrIdx < wx.hourly.temperature_2m.length) ? wx.hourly.temperature_2m[hrIdx] : (hi + lo) / 2;
+      var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
+
+      var tempDelta = (tempF - 70) / 10;
+      var madNow = Math.max(38, Math.min(62, MAD_BASE_CONST + tempDelta * 3));
+      var wiltNow = Math.max(22, Math.min(madNow - 10, WILT_BASE + tempDelta * 2));
+
+      var drain = 0;
+      if (h >= 6 && h <= 20) {
+        var phase = (h + m / 60 - 6) / 14 * Math.PI;
+        var dailyET_pct = (et0_in / rootDepth) * 100 * kc;
+        drain = Math.sin(phase) * dailyET_pct / (56 * 0.637);
+      }
+      moisture -= drain;
+
+      var rain = 0;
+      var stepInDay = h * 4 + Math.floor(m / 15);
+      for (var ri = 0; ri < rainEvents.length; ri++) {
+        var re = rainEvents[ri];
+        if (di === re.day && stepInDay >= re.hr * 4 && stepInDay < re.hr * 4 + re.dur) {
+          var rawRain = (re.depth / re.dur) * 100;
+          var eff = re.depth < 0.1 ? 0.40 : re.depth < 0.3 ? 0.65 : 0.80;
+          rain = rawRain * eff;
+        }
+      }
+
+      var inBeneficial = moisture < madNow && moisture >= wiltNow;
+      var inDamage = moisture < wiltNow;
+      if (inBeneficial) cumulativeStressHrs += 0.25;
+      if (inDamage) cumulativeStressHrs += 0.5;
+
+      var sprinkler = 0, decision = null;
+      var dailyDrain_pct = (et0_in / rootDepth) * 100 * kc;
+      var armThreshold = madNow + dailyDrain_pct * 1.3;
+      if (!armed && !recovering && moisture <= armThreshold) armed = true;
+
+      if (!armed && !recovering && hiTomorrow > 85 && moisture < armThreshold + 5 && h >= 18) {
+        armed = true;
+        if (!decidedToday) {
+          decision = { step: globalStep, type: 'arm-preemptive', day: di,
+            reason: 'Tomorrow ' + Math.round(hiTomorrow) + '°F — pre-watering' };
+        }
+      }
+
+      if (armed && h >= 4 && h < 6 && !recovering && !decidedToday) {
+        decidedToday = true;
+
+        if (maxWind >= 10) {
+          decision = { step: globalStep, type: 'skip-wind', day: di,
+            reason: 'Today max wind ' + Math.round(maxWind) + ' mph — drift risk' };
+        } else {
+          var rainExpected = false;
+          if (rainTomorrow) rainExpected = true;
+          if (prevRainTomorrow) rainExpected = true;
+          if ((wx.daily.precipitation_sum[di] || 0) >= RAIN_SKIP_THRESHOLD) rainExpected = true;
+          for (var rci = 0; rci < rainEvents.length; rci++) {
+            if (rainEvents[rci].day === di || rainEvents[rci].day === di + 1) rainExpected = true;
+          }
+
+          if (rainExpected && moisture > madNow - 3) {
+            skippedForRainDay = di; moistureAtRainSkip = moisture;
+            decision = { step: globalStep, type: 'skip-rain', day: di,
+              reason: 'Rain expected, moisture ' + Math.round(moisture) + '% can wait' };
+          } else if (rainExpected && moisture <= madNow - 3) {
+            recovering = true; cycleTarget = madNow + 14;
+            decision = { step: globalStep, type: 'water-despite-rain', day: di,
+              reason: 'Too dry (' + Math.round(moisture) + '%) to wait for rain' };
+          } else {
+            var catchUpNeeded = false;
+            if (skippedForRainDay >= 0 && di - skippedForRainDay <= 2) {
+              var rainSinceSkip = 0;
+              for (var rk = skippedForRainDay; rk <= di; rk++) {
+                rainSinceSkip += (wx.daily.precipitation_sum[rk] || 0);
+              }
+              var expectedGain = (rainSinceSkip * 0.65 / rootDepth) * 100;
+              if (expectedGain < 3) {
+                catchUpNeeded = true; recovering = true;
+                var avgHi3c = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
+                cycleTarget = Math.min(80, madNow + seasonalRecover + Math.max(0, (avgHi3c - 70)) * 0.04);
+                decision = { step: globalStep, type: 'catch-up', day: di,
+                  reason: 'Rain skip day ' + (skippedForRainDay+1) + ' only ' + rainSinceSkip.toFixed(2) + '" (' + expectedGain.toFixed(0) + '%). → ' + Math.round(cycleTarget) + '%' };
+              }
+              skippedForRainDay = -1;
+            }
+
+            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 8 && moisture > madNow - 3) {
+              var estDrop = dailyDrain_pct;
+              if (moisture - estDrop > madNow - 5) {
+                inHardeningMode = true;
+                decision = { step: globalStep, type: 'skip-harden', day: di,
+                  reason: 'HARDENING: Skip cycle. ' + Math.round(moisture) + '% → est. ' + Math.round(moisture - estDrop) + '% tomorrow' };
+              }
+            } else if (inHardeningMode) {
+              inHardeningMode = false; lastHardenDay = di;
+              recovering = true; cycleTarget = Math.min(82, madNow + 22);
+              decision = { step: globalStep, type: 'water', day: di,
+                reason: 'END HARDENING: Deep water to ' + Math.round(cycleTarget) + '% at ' + Math.round(moisture) + '%' };
+            } else if (!catchUpNeeded) {
+              recovering = true;
+              var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
+              var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
+              cycleTarget = Math.min(80, madNow + seasonalRecover + recoverExtra);
+              if (!decision) decision = { step: globalStep, type: 'water', day: di,
+                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, roots=' + rootDepth + '"' };
+            }
+          }
+        }
+      }
+
+      if (!recovering && moisture <= wiltNow + 2 && h >= 3) {
+        recovering = true; cycleTarget = madNow + 15;
+        decision = { step: globalStep, type: 'water-emergency', day: di,
+          reason: 'EMERGENCY: ' + Math.round(moisture) + '% near wilt ' + Math.round(wiltNow) + '%' };
+      }
+
+      if (recovering) {
+        if (moisture < cycleTarget) {
+          sprinkler = (zone.precipRate / 4) * (100 / rootDepth);
+          if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
+        }
+        if (moisture + sprinkler >= cycleTarget || h >= 6) {
+          recovering = false; armed = false;
+          cumulativeStressHrs = 0; lastWateredStep = globalStep;
+        }
+      }
+
+      if (decision) decisions.push(decision);
+      moisture = Math.min(100, Math.max(0, moisture + rain + sprinkler));
+
+      var ptDate = new Date(startDate.getTime() + (di * 86400000) + (h * 3600000) + (m * 60000));
+      // Mark forecast points
+      var isForecast = wx.isForecast && wx.isForecast.indexOf(di) >= 0;
+
+      points.push({
+        t: ptDate, moisture: moisture, tempF: tempF, windMph: windMph,
+        madNow: madNow, wiltNow: wiltNow, etDrain: drain,
+        rain: rain > 0.1 ? rain : null,
+        sprinkler: sprinkler > 0.1 ? sprinkler : null,
+        beneficialStress: moisture < madNow && moisture >= wiltNow,
+        damageStress: moisture < wiltNow,
+        isForecast: isForecast
+      });
+    }
+  }
+
+  points.decisions = decisions;
+  return points;
+}
+
+// ═══════════════════════════════════
+// STATS + UI RENDERING
+// ═══════════════════════════════════
+function computeStats(data, MAD) {
+  var cycles = [], cur = null;
+  for (var i = 0; i < data.length; i++) {
+    if (data[i].sprinkler > 0) {
+      if (!cur) cur = { s: i, e: i };
+      else if (i - cur.e <= 8) cur.e = i;
+      else { cycles.push(cur); cur = { s: i, e: i }; }
+    }
+  }
+  if (cur) cycles.push(cur);
+
+  var cycleDays = 0;
+  if (cycles.length > 1) {
+    var tot = 0;
+    for (var c = 1; c < cycles.length; c++) tot += (data[cycles[c].s].t - data[cycles[c-1].s].t) / 86400000;
+    cycleDays = tot / (cycles.length - 1);
+  }
+
+  var stressSteps = 0, deepStressSteps = 0, decSteps = 0, totSprPct = 0;
+  for (var j = 0; j < data.length; j++) {
+    if (data[j].beneficialStress) stressSteps++;
+    if (data[j].damageStress) deepStressSteps++;
+    if (j > 0 && data[j].moisture < data[j-1].moisture) decSteps++;
+    totSprPct += (data[j].sprinkler || 0);
+  }
+
+  var rootD = getZoneBrainConfig(currentZoneId).rootDepthIn;
+  var depthIn = cycles.length > 0 ? (totSprPct / 100 * rootD / cycles.length) : 0;
+  var totalStressHrs = stressSteps * 0.25;
+  var totalDeepStressHrs = deepStressSteps * 0.25;
+  var stressPerCycle = cycles.length > 0 ? (totalStressHrs / cycles.length).toFixed(1) : '0.0';
+  var deepStressPerCycle = cycles.length > 0 ? (totalDeepStressHrs / cycles.length).toFixed(1) : '0.0';
+
+  var lastWatered = '—', nextEst = '—';
+  for (var lw = data.length - 1; lw >= 0; lw--) {
+    if (data[lw].sprinkler > 0) {
+      var agoH = (Date.now() - data[lw].t.getTime()) / 3600000;
+      lastWatered = agoH < 24 ? Math.round(agoH) + 'h ago' : (agoH / 24).toFixed(1) + 'd ago';
+      if (cycleDays > 0) {
+        var nextH = (data[lw].t.getTime() + cycleDays * 86400000 - Date.now()) / 3600000;
+        nextEst = nextH <= 0 ? 'overdue' : nextH < 24 ? Math.round(nextH) + 'h' : (nextH / 24).toFixed(1) + 'd';
+      }
+      break;
+    }
+  }
+
+  return {
+    cycleDays: cycleDays > 0 ? cycleDays.toFixed(1) : '—',
+    stressPerCycle: stressPerCycle, deepStressPerCycle: deepStressPerCycle,
+    depthIn: depthIn > 0 ? depthIn.toFixed(2) : '—',
+    cycles: cycles.length, lastWatered: lastWatered, nextEst: nextEst,
+    curMoisture: (data.length > 0 ? data[data.length - 1].moisture : 0).toFixed(1)
+  };
+}
+
+function renderUI(stats, MAD, decisions, zoneCfg) {
+  var pct = parseFloat(stats.curMoisture);
+  var dot = document.querySelector('#current-badge .dot');
+  var badgeColor = pct > MAD + 10 ? '#22c55e' : pct > MAD ? '#f59e0b' : '#ef4444';
+  dot.style.background = badgeColor;
+  document.getElementById('current-pct').textContent = stats.curMoisture + '%';
+  document.getElementById('current-pct').style.color = badgeColor;
+
+  function cls(ok, warn) { return ok ? 'stat-good' : warn ? 'stat-warn' : 'stat-bad'; }
+  var cd = parseFloat(stats.cycleDays);
+  var sh = parseFloat(stats.stressPerCycle);
+  var dsh = parseFloat(stats.deepStressPerCycle);
+  var di = parseFloat(stats.depthIn);
+
+  document.getElementById('stats-row').innerHTML =
+    '<div class="stat"><div class="stat-value ' + cls(cd>=2&&cd<=4, cd>0) + '">' + stats.cycleDays + ' days</div><div class="stat-label">Avg Cycle Length</div><div class="stat-hint">Target: 2–4 days</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(sh>=2&&sh<=8, sh<12) + '">' + stats.stressPerCycle + ' hrs</div><div class="stat-label">Stress / Cycle</div><div class="stat-hint">Sweet spot: 2–8 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(dsh==0, dsh<=1) + '">' + stats.deepStressPerCycle + ' hrs</div><div class="stat-label">Deep Stress / Cycle</div><div class="stat-hint">Target: 0 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(di>=0.4&&di<=0.8, di>0) + '">' + stats.depthIn + '"</div><div class="stat-label">Depth Per Cycle</div><div class="stat-hint">Target: 0.5–0.75"</div></div>';
+
+  var z = zoneCfg || getZoneBrainConfig(currentZoneId);
+  document.getElementById('summary-row').innerHTML =
+    '<div class="summary-card"><h3>📅 Watering</h3>' +
+      '<div class="summary-line"><span class="summary-label">Cycles in period</span><span class="summary-val">' + stats.cycles + '</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Last watered</span><span class="summary-val">' + stats.lastWatered + '</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Est. next</span><span class="summary-val good">' + stats.nextEst + '</span></div>' +
+    '</div>' +
+    '<div class="summary-card"><h3>🌱 Zone: ' + (z.name || '?') + '</h3>' +
+      '<div class="summary-line"><span class="summary-label">Precip rate</span><span class="summary-val">' + z.precipRate + ' iph</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Kc</span><span class="summary-val">0.90 (active)</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Root depth</span><span class="summary-val">' + z.rootDepthIn + '"</span></div>' +
+      '<div class="summary-line"><span class="summary-label">MAD trigger</span><span class="summary-val warn">' + z.madPct + '%</span></div>' +
+    '</div>';
+
+  // Decision log
+  var icons = {
+    'water': '💧', 'water-emergency': '🚨', 'water-despite-rain': '⚠️',
+    'skip-wind': '💨', 'skip-rain': '🌧️', 'arm-preemptive': '🌡️',
+    'catch-up': '💧', 'skip-harden': '🌿'
+  };
+  var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  var typeCounts = {};
+  if (decisions) decisions.forEach(function(dec) { typeCounts[dec.type] = (typeCounts[dec.type]||0) + 1; });
+
+  var allTypes = ['water','catch-up','skip-rain','skip-wind','arm-preemptive','water-despite-rain','skip-harden','water-emergency'];
+  var badgeColors = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#e2e8f0','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
+
+  var logHtml = '<h3>🧠 Decision Log (' + (decisions ? decisions.length : 0) + ' decisions)</h3>';
+  logHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
+  allTypes.forEach(function(t) {
+    var cnt = typeCounts[t] || 0;
+    var col = badgeColors[t] || '#94a3b8';
+    logHtml += '<span style="font-size:.65rem;padding:2px 6px;border-radius:4px;background:' + col + '22;color:' + col + ';border:1px solid ' + col + '44">' + (icons[t]||'') + ' ' + t + ': ' + cnt + '</span>';
+  });
+  logHtml += '</div>';
+
+  if (decisions && decisions.length > 0) {
+    decisions.forEach(function(dec) {
+      var icon = icons[dec.type] || '📋';
+      // Use actual date from data if available
+      var dayLabel = 'Day ' + (dec.day + 1);
+      logHtml += '<div class="decision-entry decision-type-' + dec.type + '">' +
+        '<span class="decision-icon">' + icon + '</span>' +
+        '<span class="decision-time">' + dayLabel + '</span>' +
+        '<span class="decision-reason">' + dec.reason + '</span>' +
+      '</div>';
+    });
+  } else {
+    logHtml += '<div style="font-size:.75rem;color:#64748b">No decisions recorded</div>';
+  }
+  document.getElementById('decision-log').innerHTML = logHtml;
+}
+
+// ═══════════════════════════════════
+// CHART PLUGINS
+// ═══════════════════════════════════
+var stressZonesPlugin = {
+  id: 'stressZones',
+  beforeDraw: function(chart) {
+    var ctx = chart.ctx, yA = chart.scales.y, xA = chart.scales.x;
+    var madDs = null, wiltDs = null;
+    chart.data.datasets.forEach(function(ds, i) {
+      if (ds.label === 'MAD') madDs = chart.getDatasetMeta(i);
+      if (ds.label === 'Stress Limit') wiltDs = chart.getDatasetMeta(i);
+    });
+    if (!madDs || !wiltDs) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.06)';
+    ctx.beginPath();
+    for (var i = 0; i < madDs.data.length; i++) {
+      var mp = madDs.data[i]; if (i === 0) ctx.moveTo(mp.x, mp.y); else ctx.lineTo(mp.x, mp.y);
+    }
+    for (var j = wiltDs.data.length - 1; j >= 0; j--) ctx.lineTo(wiltDs.data[j].x, wiltDs.data[j].y);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.07)';
+    ctx.beginPath();
+    for (var k = 0; k < wiltDs.data.length; k++) {
+      var wp = wiltDs.data[k]; if (k === 0) ctx.moveTo(wp.x, wp.y); else ctx.lineTo(wp.x, wp.y);
+    }
+    ctx.lineTo(xA.right, yA.getPixelForValue(yA.min));
+    ctx.lineTo(xA.left, yA.getPixelForValue(yA.min));
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+};
+
+var nowLinePlugin = {
+  id: 'nowLine',
+  afterDraw: function(chart) {
+    var xA = chart.scales.x, yA = chart.scales.y;
+    var nowPx = xA.getPixelForValue(Date.now());
+    if (nowPx < xA.left || nowPx > xA.right) return;
+    var ctx = chart.ctx;
+    ctx.save();
+    ctx.strokeStyle = '#94a3b844'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(nowPx, yA.top); ctx.lineTo(nowPx, yA.bottom); ctx.stroke();
+    ctx.fillStyle = '#94a3b8'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Now', nowPx, yA.top - 4);
+    ctx.restore();
+  }
+};
+
+// Forecast zone shading (dashed future region)
+var forecastZonePlugin = {
+  id: 'forecastZone',
+  beforeDraw: function(chart) {
+    if (!chart._forecastStart) return;
+    var xA = chart.scales.x, yA = chart.scales.y;
+    var startPx = xA.getPixelForValue(chart._forecastStart);
+    if (startPx > xA.right) return;
+    startPx = Math.max(startPx, xA.left);
+    var ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.04)';
+    ctx.fillRect(startPx, yA.top, xA.right - startPx, yA.bottom - yA.top);
+    // "Forecast" label
+    ctx.fillStyle = '#3b82f644'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('Forecast →', startPx + 4, yA.top + 12);
+    ctx.restore();
+  }
+};
+
+// ═══════════════════════════════════
+// CHART BUILDER
+// ═══════════════════════════════════
+function buildChart(zoneId, days, data, actualWaterings) {
+  var zone = getZoneBrainConfig(zoneId);
+  var MAD = zone.madPct;
+  var stats = computeStats(data, MAD);
+  renderUI(stats, MAD, data.decisions || [], zone);
+
+  var tMin = data[0].t.getTime();
+  var tMax = data[data.length - 1].t.getTime();
+
+  // Find forecast start for shading
+  var forecastStart = null;
+  for (var fi = 0; fi < data.length; fi++) {
+    if (data[fi].isForecast) { forecastStart = data[fi].t.getTime(); break; }
+  }
+
+  var moistureData = data.map(function(p) { return { x: p.t, y: p.moisture }; });
+  var madData = data.map(function(p) { return { x: p.t, y: p.madNow }; });
+  var wiltData = data.map(function(p) { return { x: p.t, y: p.wiltNow }; });
+  var beneficialData = data.map(function(p) { return { x: p.t, y: p.beneficialStress ? p.moisture : null }; });
+  var damageData = data.map(function(p) { return { x: p.t, y: p.damageStress ? p.moisture : null }; });
+  var tempData = data.map(function(p) { return { x: p.t, y: p.tempF }; });
+
+  var rd = zone.rootDepthIn;
+  var rainBarData = data.filter(function(p) { return p.rain !== null; }).map(function(p) {
+    return { x: p.t, y: p.rain * rd / 100 };
+  });
+  var sprinklerBarData = data.filter(function(p) { return p.sprinkler !== null; }).map(function(p) {
+    return { x: p.t, y: p.sprinkler * rd / 100 };
+  });
+
+  // Actual watering events from DB (2026 only)
+  var actualBarData = [];
+  if (actualWaterings && actualWaterings.length > 0) {
+    actualWaterings.forEach(function(w) {
+      if (w.duration_sec > 0 && w.start_ts) {
+        var t = new Date(w.start_ts);
+        var precipRate = zone.precipRate;
+        var inches = precipRate * (w.duration_sec / 3600);
+        actualBarData.push({ x: t, y: inches, duration: w.duration_sec, reason: w.trigger_reason || '?' });
+      }
+    });
+  }
+
+  var maxBar = 0.1;
+  rainBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+  sprinklerBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+  actualBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+  var y2Max = Math.ceil(maxBar * 5) / 5;
+  if (y2Max < 0.2) y2Max = 0.2;
+
+  // ── TOP: Precip bars ──
+  var ctxP = document.getElementById('precip-chart').getContext('2d');
+  if (precipChart) precipChart.destroy();
+
+  var precipDatasets = [
+    { label: '🌧️ Rain', data: rainBarData,
+      backgroundColor: 'rgba(59,130,246,0.60)', borderColor: 'rgba(59,130,246,0.9)',
+      borderWidth: 1, barThickness: 5, maxBarThickness: 8 },
+    { label: '💧 Sim Sprinkler', data: sprinklerBarData,
+      backgroundColor: 'rgba(16,185,129,0.60)', borderColor: 'rgba(16,185,129,0.9)',
+      borderWidth: 1, barThickness: 5, maxBarThickness: 8 }
+  ];
+  if (actualBarData.length > 0) {
+    precipDatasets.push({
+      label: '▮ Actual Run', data: actualBarData,
+      backgroundColor: 'rgba(56,189,248,0.70)', borderColor: 'rgba(56,189,248,0.95)',
+      borderWidth: 1, barThickness: 7, maxBarThickness: 10
+    });
+  }
+
+  precipChart = new Chart(ctxP, {
+    type: 'bar',
+    data: { datasets: precipDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 300 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
+          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 8, displayColors: true,
+          callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              var d = new Date(items[0].parsed.x);
+              var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              var h = d.getHours() % 12 || 12;
+              var ap = d.getHours() >= 12 ? 'PM' : 'AM';
+              return dn[d.getDay()] + ' ' + h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+            },
+            label: function(ctx) {
+              if (ctx.parsed.y > 0) {
+                var lbl = ctx.dataset.label + ' ' + ctx.parsed.y.toFixed(2) + '"';
+                if (ctx.raw && ctx.raw.duration) lbl += ' (' + Math.round(ctx.raw.duration / 60) + ' min)';
+                return lbl;
+              }
+              return null;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { type: 'time', min: tMin, max: tMax, display: false },
+        y: {
+          reverse: true, min: 0, max: y2Max, position: 'right',
+          ticks: { callback: function(v) { return v.toFixed(1) + '"'; }, font: { size: 9 }, color: '#64748b88', maxTicksLimit: 3, padding: 2 },
+          grid: { color: '#1e293b22' },
+          afterFit: function(axis) { axis.width = 35; }
+        },
+        yDummy: { position: 'left', display: true,
+          ticks: { display: false }, grid: { drawOnChartArea: false, drawTicks: false, drawBorder: false },
+          afterFit: function(axis) { axis.width = 50; }
+        }
+      }
+    }
+  });
+
+  // ── BOTTOM: Moisture line ──
+  var ctxM = document.getElementById('moisture-chart').getContext('2d');
+  if (moistureChart) moistureChart.destroy();
+
+  var grad = ctxM.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, 'rgba(34,197,94,0.12)');
+  grad.addColorStop(0.6, 'rgba(34,197,94,0.03)');
+  grad.addColorStop(1, 'rgba(34,197,94,0)');
+
+  // Decision markers
+  var decisionMarkers = {};
+  var decs = data.decisions || [];
+  decs.forEach(function(dec) {
+    var pt = data[dec.step]; if (!pt) return;
+    if (!decisionMarkers[dec.type]) decisionMarkers[dec.type] = [];
+    decisionMarkers[dec.type].push({ x: pt.t, y: pt.moisture, reason: dec.reason });
+  });
+
+  var markerConfig = {
+    'water':              { color: '#22c55e', shape: 'circle',      size: 8,  label: '💧 Watered' },
+    'catch-up':           { color: '#86efac', shape: 'circle',      size: 8,  label: '💧 Catch-up' },
+    'skip-rain':          { color: '#60a5fa', shape: 'triangle',    size: 9,  label: '🌧️ Rain Skip' },
+    'skip-wind':          { color: '#e2e8f0', shape: 'rectRot',     size: 8,  label: '💨 Wind Skip' },
+    'arm-preemptive':     { color: '#fb923c', shape: 'star',        size: 10, label: '🌡️ Pre-emptive' },
+    'water-despite-rain': { color: '#c084fc', shape: 'rectRounded', size: 8,  label: '⚠️ Water (rain)' },
+    'water-emergency':    { color: '#f87171', shape: 'crossRot',    size: 11, label: '🚨 Emergency' },
+    'skip-harden':        { color: '#a78bfa', shape: 'triangle',    size: 9,  label: '🌿 Hardening' },
+  };
+  var markerDatasets = [];
+  Object.keys(markerConfig).forEach(function(type) {
+    var pts = decisionMarkers[type];
+    if (!pts || pts.length === 0) return;
+    var mc = markerConfig[type];
+    markerDatasets.push({
+      type: 'scatter', label: mc.label, data: pts,
+      backgroundColor: mc.color, borderColor: mc.color,
+      pointStyle: mc.shape, pointRadius: mc.size,
+      showLine: false, order: 0, yAxisID: 'y'
+    });
+  });
+
+  // Actual watering markers on moisture chart (if 2026)
+  if (actualBarData.length > 0) {
+    // Find the closest moisture data point for each actual watering event
+    var actualMoistureMarkers = [];
+    actualBarData.forEach(function(ab) {
+      var closest = null, closestDist = Infinity;
+      for (var ai = 0; ai < data.length; ai++) {
+        var dist = Math.abs(data[ai].t.getTime() - ab.x.getTime());
+        if (dist < closestDist) { closestDist = dist; closest = data[ai]; }
+      }
+      if (closest) {
+        actualMoistureMarkers.push({
+          x: ab.x, y: closest.moisture,
+          reason: 'Actual run: ' + Math.round(ab.duration / 60) + ' min (' + ab.reason + ')'
+        });
+      }
+    });
+    if (actualMoistureMarkers.length > 0) {
+      markerDatasets.push({
+        type: 'scatter', label: '▮ Actual Run', data: actualMoistureMarkers,
+        backgroundColor: '#38bdf8', borderColor: '#38bdf8',
+        pointStyle: 'rect', pointRadius: 6,
+        showLine: false, order: -1, yAxisID: 'y'
+      });
+    }
+  }
+
+  moistureChart = new Chart(ctxM, {
+    type: 'line',
+    plugins: [stressZonesPlugin, nowLinePlugin, forecastZonePlugin],
+    data: {
+      datasets: [
+        { label: 'Soil Moisture %', data: moistureData,
+          borderColor: '#22c55e', backgroundColor: grad,
+          borderWidth: 2, pointRadius: 0, pointHitRadius: 6,
+          fill: true, tension: 0.05, order: 3 },
+        { label: 'Beneficial Stress', data: beneficialData,
+          borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.15)',
+          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.05,
+          spanGaps: false, order: 2 },
+        { label: 'Deep Stress', data: damageData,
+          borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.22)',
+          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.05,
+          spanGaps: false, order: 1 },
+        { label: 'MAD', data: madData,
+          borderColor: '#f59e0b88', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, fill: false, order: 4 },
+        { label: 'Stress Limit', data: wiltData,
+          borderColor: '#ef444488', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, fill: false, order: 4 },
+        { label: 'Temp', data: tempData,
+          borderColor: '#fb923c55', backgroundColor: 'transparent',
+          borderWidth: 1, pointRadius: 0, tension: 0.3,
+          borderDash: [2, 2], fill: false, order: 5, yAxisID: 'yTemp' }
+      ].concat(markerDatasets)
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      _forecastStart: forecastStart,
+      animation: { duration: 400, easing: 'easeOutQuart' },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        zoom: {
+          pan: { enabled: true, mode: 'x',
+            onPan: function(ctx) {
+              if (precipChart) {
+                precipChart.options.scales.x.min = ctx.chart.scales.x.min;
+                precipChart.options.scales.x.max = ctx.chart.scales.x.max;
+                precipChart.update('none');
+              }
+            }
+          },
+          zoom: {
+            drag: { enabled: true, backgroundColor: 'rgba(34,197,94,0.1)', borderColor: '#22c55e44', borderWidth: 1 },
+            mode: 'x',
+            onZoom: function(ctx) {
+              if (precipChart) {
+                precipChart.options.scales.x.min = ctx.chart.scales.x.min;
+                precipChart.options.scales.x.max = ctx.chart.scales.x.max;
+                precipChart.update('none');
+              }
+            }
+          }
+        },
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
+          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 12, displayColors: false,
+          titleFont: { size: 12 }, bodyFont: { size: 11 },
+          filter: function(item) {
+            var l = item.dataset.label || '';
+            return l === 'Soil Moisture %' || l.indexOf('Skip') >= 0 || l.indexOf('Watered') >= 0 ||
+              l.indexOf('Emergency') >= 0 || l.indexOf('Pre-emptive') >= 0 || l.indexOf('Water') >= 0 ||
+              l.indexOf('Actual') >= 0 || l.indexOf('Catch') >= 0 || l.indexOf('Harden') >= 0;
+          },
+          callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              var d = new Date(items[0].parsed.x);
+              var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+              var ap = d.getHours() >= 12 ? 'PM' : 'AM', h = d.getHours() % 12 || 12;
+              var mm = d.getMinutes();
+              return dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + (mm<10?'0':'') + mm + ' ' + ap;
+            },
+            label: function(ctx) {
+              if (ctx.dataset.label === 'Soil Moisture %') return '🌱 Moisture: ' + ctx.parsed.y.toFixed(1) + '%';
+              if (ctx.raw && ctx.raw.reason) return ctx.dataset.label + ': ' + ctx.raw.reason;
+              return ctx.dataset.label;
+            },
+            afterBody: function(items) {
+              if (!items.length) return [];
+              var idx = items[0].dataIndex;
+              var pt = data[idx]; if (!pt) return [];
+              var lines = ['', '── Checkbook ──',
+                'ET loss:    -' + (pt.etDrain * 100 / 100).toFixed(2) + '% (15 min)'];
+              if (pt.rain) lines.push('Rain:       +' + pt.rain.toFixed(1) + '%');
+              if (pt.sprinkler) lines.push('Sprinkler:  +' + pt.sprinkler.toFixed(1) + '%');
+              lines.push('', '── Conditions ──',
+                '🌡️ ' + pt.tempF.toFixed(0) + '°F   💨 ' + pt.windMph.toFixed(0) + ' mph',
+                'MAD: ' + pt.madNow.toFixed(0) + '%  Stress Limit: ' + pt.wiltNow.toFixed(0) + '%');
+              if (pt.isForecast) lines.push('📊 FORECAST DATA');
+              if (pt.beneficialStress) lines.push('🌱 In beneficial stress zone');
+              if (pt.damageStress) lines.push('🚨 IN DAMAGE ZONE');
+              return lines;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time', min: tMin, max: tMax,
+          time: { tooltipFormat: 'EEE MMM d, h:mm a', displayFormats: { hour: 'EEE ha', day: 'EEE MMM d' } },
+          ticks: { maxTicksLimit: days <= 7 ? 14 : 20, font: { size: 10 }, color: '#64748b' },
+          grid: { color: '#1e293b33' }
+        },
+        y: {
+          min: (function() { var lo = 100; moistureData.forEach(function(p) { if (p.y < lo) lo = p.y; }); return Math.max(0, Math.floor((lo - 10) / 10) * 10); })(),
+          max: (function() { var hi = 0; moistureData.forEach(function(p) { if (p.y > hi) hi = p.y; }); return Math.min(100, Math.ceil((hi + 10) / 10) * 10); })(),
+          ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, color: '#64748b', stepSize: 10 },
+          grid: { color: '#1e293b22' },
+          title: { display: true, text: 'Soil Moisture %', font: { size: 11 }, color: '#94a3b8' },
+          afterFit: function(axis) { axis.width = 50; }
+        },
+        yTemp: {
+          position: 'right',
+          min: (function() { var lo = 120; tempData.forEach(function(p) { if (p.y < lo) lo = p.y; }); return Math.floor((lo - 5) / 5) * 5; })(),
+          max: (function() { var hi = 0; tempData.forEach(function(p) { if (p.y > hi) hi = p.y; }); return Math.ceil((hi + 5) / 5) * 5; })(),
+          ticks: { callback: function(v) { return v + '\u00b0'; }, font: { size: 9 }, color: '#fb923c66', stepSize: 10 },
+          grid: { drawOnChartArea: false },
+          afterFit: function(axis) { axis.width = 35; }
+        }
+      }
+    }
+  });
+
+  // Store forecast start for plugin
+  moistureChart._forecastStart = forecastStart;
+
+  // Update "Next Watering" banner
+  updateNextWateringBanner(data);
+}
+
+// ═══════════════════════════════════
+// NEXT WATERING PREDICTION
+// ═══════════════════════════════════
+function updateNextWateringBanner(data) {
+  var banner = document.getElementById('next-water-banner');
+  var now = Date.now();
+  // Find next watering decision in the future
+  var decs = data.decisions || [];
+  var nextDec = null;
+  for (var i = 0; i < decs.length; i++) {
+    var pt = data[decs[i].step];
+    if (pt && pt.t.getTime() > now && (decs[i].type === 'water' || decs[i].type === 'catch-up' || decs[i].type === 'water-despite-rain' || decs[i].type === 'water-emergency')) {
+      nextDec = { dec: decs[i], pt: pt };
+      break;
+    }
+  }
+
+  if (nextDec && selectedYear === '2026') {
+    banner.style.display = 'flex';
+    var d = nextDec.pt.t;
+    var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var hoursAway = (d.getTime() - now) / 3600000;
+    var timeStr;
+    if (hoursAway < 1) timeStr = Math.round(hoursAway * 60) + ' minutes';
+    else if (hoursAway < 24) timeStr = hoursAway.toFixed(1) + ' hours';
+    else timeStr = (hoursAway / 24).toFixed(1) + ' days';
+
+    var ap = d.getHours() >= 12 ? 'PM' : 'AM';
+    var hh = d.getHours() % 12 || 12;
+    document.getElementById('nw-value').textContent = dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ' at ' + hh + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+    document.getElementById('nw-value').style.color = hoursAway < 24 ? '#f59e0b' : '#22c55e';
+    document.getElementById('nw-detail').textContent = '~' + timeStr + ' from now · ' + nextDec.dec.reason;
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// ═══════════════════════════════════
+// CONTROLS & REFRESH
+// ═══════════════════════════════════
+document.getElementById('zone-select').addEventListener('change', function() {
+  currentZoneId = parseInt(this.value);
+  liveDataCache = {}; // clear live cache on zone change
+  refresh();
+});
+document.querySelectorAll('#range-btns button').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('#range-btns button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentDays = parseInt(btn.dataset.days);
+    refresh();
+  });
+});
+document.getElementById('year-select').addEventListener('change', function() {
+  selectedYear = this.value;
+  refresh();
+});
+document.getElementById('btn-reset-zoom').addEventListener('click', function() {
+  if (moistureChart) moistureChart.resetZoom();
+  if (precipChart) precipChart.resetZoom();
+});
+
+function refresh() {
+  var loadMsg = document.getElementById('loading-msg');
+
+  if (selectedYear === '2026') {
+    loadMsg.style.display = 'inline';
+    loadMsg.textContent = 'Loading 2026 live data…';
+
+    Promise.all([
+      fetch2026Weather(),
+      fetchLiveData(currentZoneId)
+    ]).then(function(results) {
+      loadMsg.style.display = 'none';
+      var liveData = results[1];
+      var data = generateBrainData(currentZoneId, currentDays, '2026');
+      if (data) {
+        buildChart(currentZoneId, currentDays, data, liveData.waterings || []);
+      }
+    }).catch(function(err) {
+      loadMsg.textContent = 'Error: ' + err;
+      console.error('Refresh error:', err);
+    });
+  } else {
+    var year = selectedYear;
+    loadMsg.style.display = 'inline';
+    loadMsg.textContent = 'Loading ' + year + ' weather…';
+
+    fetchArchiveWeather(year).then(function() {
+      loadMsg.style.display = 'none';
+      var data = generateBrainData(currentZoneId, currentDays, year);
+      if (data) buildChart(currentZoneId, currentDays, data, []);
+    }).catch(function(err) {
+      loadMsg.textContent = 'Error: ' + err;
+      console.error('Refresh error:', err);
+    });
+  }
+}
+
+// Initial load
+refresh();
+</script>
+</body>
+</html>

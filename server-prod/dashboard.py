@@ -396,6 +396,68 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
 
+    @app.route("/api/moisture-data")
+    def api_moisture_data():
+        """Data for the moisture simulation chart.
+
+        Returns soil balance history, watering events, zone config, and
+        7-day forecast for the requested zone.
+        """
+        zone_id = query_int("zone_id", 0, min_value=0, max_value=8)
+        days = query_int("days", 90, min_value=7, max_value=365)
+
+        zone_cfg = None
+        for z in config["zones"]:
+            if z["id"] == zone_id:
+                zone_cfg = z
+                break
+        if not zone_cfg:
+            return jsonify({"error": "Zone not found"}), 404
+
+        # Soil balance history (daily checkbook values)
+        balances = db.get_soil_balance_history(zone_id, days=days)
+
+        # Watering events (actual sprinkler runs)
+        waterings = db.get_watering_history(days=days)
+        zone_waterings = [w for w in waterings if w["zone_id"] == zone_id]
+
+        # Skip events
+        skips = db.get_skip_history(days=days)
+        zone_skips = [s for s in skips if s["zone_id"] == zone_id]
+
+        # 7-day forecast from weather client
+        forecast = weather.get_7day_forecast(allow_fetch=False)
+
+        # Current weather
+        current_wx = weather.get_current(allow_fetch=False)
+
+        # Today's ET0
+        et0_today = weather.get_today_et0(allow_fetch=False)
+
+        return jsonify({
+            "zone": {
+                "id": zone_cfg["id"],
+                "name": zone_cfg["name"],
+                "installed": zone_cfg.get("installed", False),
+                "precip_rate_iph": zone_cfg.get("precip_rate_iph", 1.0),
+                "kc": zone_cfg.get("kc", [0.90, 0.90, 0.90, 0.90]),
+                "root_depth_in": zone_cfg.get("root_depth_in", 6),
+                "taw_in": zone_cfg.get("taw_in", 1.2),
+                "mad_pct": zone_cfg.get("mad_pct", 50),
+            },
+            "balances": balances,
+            "waterings": zone_waterings,
+            "skips": zone_skips,
+            "forecast_7day": forecast,
+            "current_weather": current_wx,
+            "et0_today": et0_today,
+        })
+
+    @app.route("/moisture-sim")
+    def moisture_sim_page():
+        """Moisture simulation chart — historical, live 2026, and forecast."""
+        zones = [z for z in config["zones"] if z.get("installed", False)]
+        return render_template("moisture_sim.html", zones=zones)
 
     # ── Pages ──
 

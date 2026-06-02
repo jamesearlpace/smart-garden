@@ -381,11 +381,11 @@ function generateSimData(zoneIdx, days) {
     if (armed && h >= 4 && h < 6 && !recovering) {
       // ── Decision checks before firing ──
 
-      // Check 1: Wind too high? (>10 mph = drift loss, skip)
-      if (windMph > 10) {
+      // Check 1: Wind too high? Use today's max wind forecast, not 4 AM reading
+      if (wx.maxWind > 10) {
         // Don't fire, stay armed for next window
         if (!decision) decision = { step: stepIdx, type: 'skip-wind', day: di,
-          reason: 'Wind ' + windMph.toFixed(0) + ' mph — skipping to avoid drift (>10 mph threshold)' };
+          reason: 'Today max wind ' + wx.maxWind.toFixed(0) + ' mph — drift risk (>10 mph)' };
       }
       // Check 2: Rain expected today or tomorrow?
       // Look at: (a) yesterday's "rainTomorrow" flag (forecast), (b) actual rain events today/tomorrow
@@ -1114,9 +1114,11 @@ function generateRealData(zoneIdx, days, year) {
       if (armed && h >= 4 && h < 6 && !recovering && !decidedToday) {
         decidedToday = true;
         
-        if (windMph > 10) {
+        // Wind check: use today's FORECAST max wind, not 4 AM reading
+        // Sprinklers run 30-60 min — if wind picks up by 7 AM, drift wastes water
+        if (maxWind > 10) {
           decision = { step: globalStep, type: 'skip-wind', day: di,
-            reason: 'Wind ' + Math.round(windMph) + ' mph at 4 AM' };
+            reason: 'Today max wind ' + Math.round(maxWind) + ' mph — drift risk' };
         } else {
           var rainExpected = false;
           if (rainTomorrow) rainExpected = true;

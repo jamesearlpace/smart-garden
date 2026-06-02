@@ -123,10 +123,14 @@
       <button data-days="90">90d</button>
       <button data-days="153" class="active">Full</button>
     </div>
-    <div class="range-btns">
-      <button id="btn-fake" class="">Fake</button>
-      <button id="btn-real" class="active">Real 2025</button>
-    </div>
+    <select id="year-select">
+      <option value="fake">Fake Data</option>
+      <option value="2025" selected>2025</option>
+      <option value="2024">2024</option>
+      <option value="2023">2023</option>
+      <option value="2022">2022</option>
+      <option value="2021">2021 (Heat Dome)</option>
+    </select>
     <span id="loading-msg" style="color:#f59e0b; font-size:.75rem; display:none">Loading weather…</span>
   </div>
 
@@ -173,8 +177,8 @@ var ZONES = [
 ];
 
 var currentZone = 0, currentDays = 153, chartInstance = null;
-var useRealWeather = true;
-var realWeatherCache = null; // cache fetched data
+var selectedYear = '2025';
+var weatherCache = {}; // keyed by year
 
 // ─── Deterministic PRNG ───
 function mkRng(seed) {
@@ -974,14 +978,14 @@ function buildChart(zoneIdx, days, precomputedData) {
 // ═══════════════════════════════════════
 // Real Weather from Open-Meteo Archive
 // ═══════════════════════════════════════
-function fetchRealWeather() {
+function fetchRealWeather(year) {
   return new Promise(function(resolve, reject) {
-    if (realWeatherCache) { resolve(realWeatherCache); return; }
+    if (weatherCache[year]) { resolve(weatherCache[year]); return; }
     
     var lat = 47.7382, lon = -121.9856; // Duvall WA
     var url = 'https://archive-api.open-meteo.com/v1/archive?' +
       'latitude=' + lat + '&longitude=' + lon +
-      '&start_date=2025-05-01&end_date=2025-09-30' +
+      '&start_date=' + year + '-05-01&end_date=' + year + '-09-30' +
       '&daily=et0_fao_evapotranspiration,precipitation_sum,temperature_2m_max,temperature_2m_min,wind_speed_10m_max' +
       '&hourly=temperature_2m,wind_speed_10m,precipitation' +
       '&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch' +
@@ -989,14 +993,14 @@ function fetchRealWeather() {
     
     fetch(url).then(function(r) { return r.json(); }).then(function(wx) {
       if (!wx.daily || !wx.hourly) { reject('API error'); return; }
-      realWeatherCache = wx;
+      weatherCache[year] = wx;
       resolve(wx);
     }).catch(reject);
   });
 }
 
-function generateRealData(zoneIdx, days) {
-  var wx = realWeatherCache;
+function generateRealData(zoneIdx, days, year) {
+  var wx = weatherCache[year];
   if (!wx) return generateSimData(zoneIdx, days); // fallback
   
   var zone = ZONES[zoneIdx];
@@ -1194,38 +1198,34 @@ document.querySelectorAll('#range-btns button').forEach(function(btn) {
     refresh();
   });
 });
-document.getElementById('btn-fake').addEventListener('click', function() {
-  useRealWeather = false;
-  this.classList.add('active');
-  document.getElementById('btn-real').classList.remove('active');
-  refresh();
-});
-document.getElementById('btn-real').addEventListener('click', function() {
-  useRealWeather = true;
-  this.classList.add('active');
-  document.getElementById('btn-fake').classList.remove('active');
+document.getElementById('year-select').addEventListener('change', function() {
+  selectedYear = this.value;
   refresh();
 });
 
 function refresh() {
-  if (useRealWeather && !realWeatherCache) {
-    document.getElementById('loading-msg').style.display = 'inline';
-    fetchRealWeather().then(function() {
-      document.getElementById('loading-msg').style.display = 'none';
-      var data = generateRealData(currentZone, currentDays);
-      buildChart(currentZone, currentDays, data);
-    }).catch(function(err) {
-      document.getElementById('loading-msg').textContent = 'Weather fetch failed: ' + err;
-    });
-  } else if (useRealWeather) {
-    var data = generateRealData(currentZone, currentDays);
-    buildChart(currentZone, currentDays, data);
-  } else {
+  if (selectedYear === 'fake') {
     buildChart(currentZone, currentDays);
+  } else {
+    var year = selectedYear;
+    if (!weatherCache[year]) {
+      document.getElementById('loading-msg').style.display = 'inline';
+      document.getElementById('loading-msg').textContent = 'Loading ' + year + ' weather…';
+      fetchRealWeather(year).then(function() {
+        document.getElementById('loading-msg').style.display = 'none';
+        var data = generateRealData(currentZone, currentDays, year);
+        buildChart(currentZone, currentDays, data);
+      }).catch(function(err) {
+        document.getElementById('loading-msg').textContent = 'Failed: ' + err;
+      });
+    } else {
+      var data = generateRealData(currentZone, currentDays, year);
+      buildChart(currentZone, currentDays, data);
+    }
   }
 }
 
-// Initial load — fetch real weather
+// Initial load
 refresh();
 </script>
 </body>

@@ -1013,17 +1013,28 @@ function generateRealData(zoneIdx, days, year) {
   var moisture = MAD_BASE + 20;
   var points = [], decisions = [];
   
-  // Seasonal Kc + growth stage
-  var kcSchedule = { 3: 0.40, 4: 0.40, 5: 0.65, 6: 0.80, 7: 0.85, 8: 0.85, 9: 0.65, 10: 0.40 };
+  // ═══ AUDIT FIX: FAO-56 compliant parameters ═══
   
-  // Seasonal MAD — shallow spring roots can't handle deep deficit
-  var madSchedule = { 3: 60, 4: 60, 5: 55, 6: 50, 7: 50, 8: 50, 9: 55, 10: 60 };
+  // Kc = 0.90 constant (FAO-56 Table 12: cool-season turf = 0.90-0.95)
+  // 0.85 with deficit management. ET₀ handles seasonal variation naturally.
+  // Only exception: winter dormancy (Dec-Feb) when grass is brown.
+  var KC_ACTIVE = 0.90;  // May-Nov (active growth)
+  var KC_DORMANT = 0.40; // Dec-Feb (dormant)
   
-  // Seasonal recovery target above MAD — spring: light & frequent, summer: deep & infrequent
-  var recoverSchedule = { 3: 12, 4: 12, 5: 16, 6: 20, 7: 20, 8: 20, 9: 16, 10: 12 };
+  // Seasonal root depth (inches) — the REAL source of seasonal variation
+  // Spring: shallow new roots. Summer: deep established. Fall: maintained.
+  var rootDepthSchedule = { 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 };
   
-  // Hardening only allowed Jun-Aug (established roots)
-  var hardenAllowed = { 3: false, 4: false, 5: false, 6: true, 7: true, 8: true, 9: false, 10: false };
+  // MAD stays at 50% (deficit irrigation) — consistent year-round
+  // Temperature-based dynamic adjustment handles the rest
+  var MAD_BASE_CONST = zone.madPct; // 50%
+  
+  // Recovery varies with root depth — deeper roots = bigger bucket = deeper refill
+  // recovery_pct = roughly 2.5 days of ET at peak
+  var recoverSchedule = { 3: 12, 4: 12, 5: 15, 6: 18, 7: 20, 8: 20, 9: 15, 10: 12 };
+  
+  // Hardening only in Jun-Aug AND only when 5-day forecast avg < 80°F
+  var hardenMonths = { 6: true, 7: true, 8: true };
   
   // Build rain events from hourly data
   var rainEvents = [];
@@ -1068,10 +1079,21 @@ function generateRealData(zoneIdx, days, year) {
     var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) > 0.02);
     var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) > 0.02);
     var month = parseInt(wx.daily.time[di].split('-')[1]);
-    var kc = kcSchedule[month] || 0.80;
-    var seasonalMAD = madSchedule[month] || 50;
+    var kc = (month >= 3 && month <= 11) ? KC_ACTIVE : KC_DORMANT;
+    var rootDepth = rootDepthSchedule[month] || zone.rootDepthIn;
     var seasonalRecover = recoverSchedule[month] || 20;
-    var canHarden = hardenAllowed[month] || false;
+    
+    // Hardening: allowed in summer AND only if 5-day avg high < 80°F
+    var canHarden = !!(hardenMonths[month]);
+    if (canHarden) {
+      var avg5hi = 0, cnt5 = 0;
+      for (var fd = di; fd < Math.min(di + 5, numDays); fd++) {
+        avg5hi += wx.daily.temperature_2m_max[fd]; cnt5++;
+      }
+      avg5hi = cnt5 > 0 ? avg5hi / cnt5 : 999;
+      if (avg5hi > 80) canHarden = false; // too hot — heat is doing the hardening already
+    }
+    
     var hiTomorrow = (di + 1 < numDays) ? wx.daily.temperature_2m_max[di + 1] : hi;
     
     decidedToday = false;
@@ -1088,27 +1110,30 @@ function generateRealData(zoneIdx, days, year) {
       // Wind from hourly
       var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
       
-      // Dynamic thresholds — use seasonal MAD as base
+      // Dynamic thresholds — constant MAD base, temperature-adjusted
       var tempDelta = (tempF - 70) / 10;
-      var madNow = Math.max(38, Math.min(62, seasonalMAD + tempDelta * 3));
+      var madNow = Math.max(38, Math.min(62, MAD_BASE_CONST + tempDelta * 3));
       var wiltNow = Math.max(22, Math.min(madNow - 10, WILT_BASE + tempDelta * 2));
       
-      // ET₀ drain — prorate actual daily ET₀
+      // ET₀ drain — use seasonal root depth for bucket sizing
       var drain = 0;
       if (h >= 6 && h <= 20) {
         var phase = (h + m / 60 - 6) / 14 * Math.PI;
-        var dailyET_pct = (et0_in / zone.rootDepthIn) * 100 * kc;
+        var dailyET_pct = (et0_in / rootDepth) * 100 * kc;
         drain = Math.sin(phase) * dailyET_pct / (56 * 0.637);
       }
       moisture -= drain;
       
-      // Rain
+      // Rain — sliding effectiveness based on intensity (USDA-NRCS)
       var rain = 0;
       var stepInDay = h * 4 + Math.floor(m / 15);
       for (var ri = 0; ri < rainEvents.length; ri++) {
         var re = rainEvents[ri];
         if (di === re.day && stepInDay >= re.hr * 4 && stepInDay < re.hr * 4 + re.dur) {
-          rain = (re.depth / re.dur) * 100 * 0.75; // 75% effective
+          var rawRain = (re.depth / re.dur) * 100;
+          // Effectiveness: light (<0.1") = 40%, medium (0.1-0.3") = 65%, heavy (>0.3") = 80%
+          var eff = re.depth < 0.1 ? 0.40 : re.depth < 0.3 ? 0.65 : 0.80;
+          rain = rawRain * eff;
         }
       }
       
@@ -1121,7 +1146,7 @@ function generateRealData(zoneIdx, days, year) {
       // Sprinkler
       var sprinkler = 0;
       var decision = null;
-      var dailyDrain_pct = (et0_in / zone.rootDepthIn) * 100 * kc;
+      var dailyDrain_pct = (et0_in / rootDepth) * 100 * kc;
       var armThreshold = madNow + dailyDrain_pct * 1.3;
       if (!armed && !recovering && moisture <= armThreshold) armed = true;
       
@@ -1171,7 +1196,7 @@ function generateRealData(zoneIdx, days, year) {
               for (var rk = skippedForRainDay; rk <= di; rk++) {
                 rainSinceSkip += (wx.daily.precipitation_sum[rk] || 0);
               }
-              var expectedGain = (rainSinceSkip * 0.75 / zone.rootDepthIn) * 100; // effective rain as %
+              var expectedGain = (rainSinceSkip * 0.65 / rootDepth) * 100; // effective rain as %
               if (expectedGain < 3) {
                 // Rain was a bust — less than 3% moisture gain. Catch up now.
                 catchUpNeeded = true;
@@ -1200,14 +1225,13 @@ function generateRealData(zoneIdx, days, year) {
               decision = { step: globalStep, type: 'skip-harden', day: di,
                 reason: 'HARDENING day ' + (di - lastHardenDay + HARDEN_INTERVAL) + ': moisture ' + Math.round(moisture) + '%, wilt at ' + Math.round(wiltNow) + '%' };
             } else {
-              // Normal watering — depth varies by season
+              // Normal watering — depth varies by root depth (seasonal bucket size)
               recovering = true;
               var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
               var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
               cycleTarget = Math.min(80, madNow + seasonalRecover + recoverExtra);
-              var stageName = ['','','','spring','spring','growing','peak','peak','peak','fall','dormancy'][month] || '';
               if (!decision) decision = { step: globalStep, type: 'water', day: di,
-                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc + (stageName ? ' (' + stageName + ')' : '') };
+                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, roots=' + rootDepth + '"' };
               if (catchUpNeeded) {
                 decision.reason += Math.round(cycleTarget) + '%';
               }
@@ -1226,7 +1250,7 @@ function generateRealData(zoneIdx, days, year) {
       
       if (recovering) {
         if (moisture < cycleTarget) {
-          sprinkler = (zone.precipRate / 4) * (100 / zone.rootDepthIn);
+          sprinkler = (zone.precipRate / 4) * (100 / rootDepth);
           if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
         }
         if (moisture + sprinkler >= cycleTarget || h >= 6) {

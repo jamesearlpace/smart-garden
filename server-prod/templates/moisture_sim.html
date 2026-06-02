@@ -1223,6 +1223,30 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       borderWidth: 1, barThickness: 7, maxBarThickness: 10
     });
   }
+  // Forecast predicted sprinkler bars (real-data mode only)
+  if (isReal) {
+    var forecastSprinklerBars = data.filter(function(p) {
+      return p.isForecast && p.sprinkler !== null && p.sprinkler > 0;
+    }).map(function(p) {
+      return { x: p.t, y: p.sprinkler * rd / 100 };
+    });
+    if (forecastSprinklerBars.length > 0) {
+      forecastSprinklerBars.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+      precipDatasets.push({
+        label: '💧 Predicted', data: forecastSprinklerBars,
+        backgroundColor: 'rgba(16,185,129,0.35)', borderColor: 'rgba(16,185,129,0.55)',
+        borderWidth: 1, borderDash: [3, 3], barThickness: 5, maxBarThickness: 8
+      });
+    }
+  }
+
+  // Recalculate y-axis max after all datasets
+  var maxBarFinal = 0.1;
+  precipDatasets.forEach(function(ds) {
+    ds.data.forEach(function(p) { if (p.y > maxBarFinal) maxBarFinal = p.y; });
+  });
+  var y2Max = Math.ceil(maxBarFinal * 5) / 5;
+  if (y2Max < 0.2) y2Max = 0.2;
 
   precipChart = new Chart(ctxP, {
     type: 'bar',

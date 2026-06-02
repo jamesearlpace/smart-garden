@@ -937,12 +937,19 @@ function computeStats(data, MAD, actualWaterings) {
     }
   }
 
+  // Current moisture = last non-forecast point (not end of forecast prediction)
+  var curMoisture = 0;
+  for (var cm = data.length - 1; cm >= 0; cm--) {
+    if (!data[cm].isForecast) { curMoisture = data[cm].moisture; break; }
+  }
+  if (curMoisture === 0 && data.length > 0) curMoisture = data[data.length - 1].moisture;
+
   return {
     cycleDays: cycleDays > 0 ? cycleDays.toFixed(1) : '—',
     stressPerCycle: stressPerCycle, deepStressPerCycle: deepStressPerCycle,
     depthIn: depthIn > 0 ? depthIn.toFixed(2) : '—',
     cycles: cycles.length, lastWatered: lastWatered, nextEst: nextEst,
-    curMoisture: (data.length > 0 ? data[data.length - 1].moisture : 0).toFixed(1)
+    curMoisture: curMoisture.toFixed(1)
   };
 }
 

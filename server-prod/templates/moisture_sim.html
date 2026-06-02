@@ -863,7 +863,7 @@ function computeStats(data, MAD, actualWaterings) {
       var sorted = actualWaterings.slice().sort(function(a,b) { return a.start_ts < b.start_ts ? -1 : 1; });
       var curCycle = null;
       sorted.forEach(function(w) {
-        if (!w.start_ts || !w.duration_sec || w.duration_sec <= 5) return;
+        if (!w.start_ts || !w.duration_sec || w.duration_sec <= 60) return;
         var t = new Date(w.start_ts).getTime();
         if (!curCycle) { curCycle = { start: t, end: t, totalSec: w.duration_sec }; }
         else if (t - curCycle.end < 7200000) { curCycle.end = t; curCycle.totalSec += w.duration_sec; }
@@ -902,12 +902,13 @@ function computeStats(data, MAD, actualWaterings) {
     depthIn = cycles.length > 0 ? (totSprPct / 100 * zone.rootDepthIn / cycles.length) : 0;
   }
 
-  // Stress stats — historical data only (exclude forecast), skip bogus 0% init period
+  // Stress stats — historical data only (exclude forecast), skip bogus init period
+  // Start counting only after moisture first exceeds MAD (broken period never reached it)
   var stressSteps = 0, deepStressSteps = 0, validSteps = 0;
   var pastInit = false;
   for (var j = 0; j < data.length; j++) {
-    if (data[j].isForecast) continue; // don't count forecast predictions in stress
-    if (!pastInit && data[j].moisture > 10) pastInit = true;
+    if (data[j].isForecast) continue;
+    if (!pastInit && data[j].moisture > MAD) pastInit = true;
     if (!pastInit) continue;
     validSteps++;
     if (data[j].beneficialStress) stressSteps++;

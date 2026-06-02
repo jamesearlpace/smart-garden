@@ -81,6 +81,8 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 | 9 | "Actual Run (DB)" in legend with no data | 6,7,8 | Legend shows "Actual Run" marker for zones that have never been watered | Static legend item always shown | ✅ Fixed: removed from static legend, bars self-label via Chart.js tooltips |
 | 10 | Forecast line shows only ET decay, no predicted watering | ALL | After "Now" the moisture line just drops | Forecast path only subtracts ET | ✅ Fixed: forecast now predicts watering when moisture crosses MAD during 4-7AM window, shows recovery + sprinkler bars + rain credit |
 | 11 | Stats contaminated by bogus 0% initialization period | ALL | "56.4 hrs Deep Stress / Cycle" from weeks of broken data | Stats include bogus 0% period | ✅ Fixed: stats skip data until moisture first exceeds 10% |
+| 12 | Stats use sim sprinkler counting in real-data mode | 6,7,8 (0 actual events) | "177 hrs Stress/Cycle" — zone never watered shows huge stress | `actualWaterings.length > 0` is false for unwatered zones → falls through to sim path → finds forecast predicted sprinklers → divides stress by 1-2 phantom cycles | ✅ Fixed: real-data mode uses `actualWaterings !== null` gate, never falls through to sim path |
+| 13 | Stats include forecast data in stress count | ALL | Stress hours inflated by forecast predictions | Stress loop counts all data points including `isForecast=true` | ✅ Fixed: `if (data[j].isForecast) continue` in stress loop |
 
 ### Resolved
 

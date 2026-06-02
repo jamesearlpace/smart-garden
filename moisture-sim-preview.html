@@ -367,6 +367,7 @@ function generateSimData(zoneIdx, days) {
     points.push({
       t: d, moisture: moisture, tempF: tempF, windMph: windMph,
       madNow: madNow, wiltNow: wiltNow,
+      etDrain: drain,   // how much ET withdrew this step
       rain: rain > 0.1 ? rain : null,
       sprinkler: sprinkler > 0.1 ? sprinkler : null,
       beneficialStress: moisture < madNow && moisture >= wiltNow,
@@ -743,8 +744,9 @@ function buildChart(zoneIdx, days) {
         legend: { display: false },
         tooltip: {
           backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
-          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 10, displayColors: true,
-          filter: function(item) { var l = item.dataset.label; return l === 'Soil Moisture %' || l === 'Temp'; },
+          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 12, displayColors: false,
+          titleFont: { size: 12 }, bodyFont: { size: 11 },
+          filter: function(item) { var l = item.dataset.label; return l === 'Soil Moisture %'; },
           callbacks: {
             title: function(items) {
               if (!items.length) return '';
@@ -756,21 +758,26 @@ function buildChart(zoneIdx, days) {
               return dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + (m<10?'0':'') + m + ' ' + ap;
             },
             label: function(ctx) {
-              if (ctx.dataset.label === 'Soil Moisture %') return '\ud83c\udf31 ' + ctx.parsed.y.toFixed(1) + '%';
-              if (ctx.dataset.label === 'Temp') return '\ud83c\udf21\ufe0f ' + ctx.parsed.y.toFixed(0) + '\u00b0F';
-              return null;
+              return '🌱 Moisture: ' + ctx.parsed.y.toFixed(1) + '%';
             },
             afterBody: function(items) {
-              // Show current MAD/wilt in tooltip
-              if (!items.length) return '';
+              if (!items.length) return [];
               var idx = items[0].dataIndex;
-              var ds = items[0].chart.data.datasets;
-              var madDs = ds.find(function(d) { return d.label === 'MAD'; });
-              var wiltDs = ds.find(function(d) { return d.label === 'Stress Limit'; });
-              if (!madDs || !wiltDs) return '';
-              var madVal = madDs.data[idx] ? madDs.data[idx].y.toFixed(0) : '?';
-              var wiltVal = wiltDs.data[idx] ? wiltDs.data[idx].y.toFixed(0) : '?';
-              return 'MAD: ' + madVal + '%  Stress Limit: ' + wiltVal + '%';
+              var pt = data[idx];
+              if (!pt) return [];
+              var lines = [];
+              lines.push('');
+              lines.push('── Checkbook ──');
+              lines.push('ET loss:    -' + (pt.etDrain * 100 / 100).toFixed(2) + '% (15 min)');
+              if (pt.rain) lines.push('Rain:       +' + pt.rain.toFixed(1) + '%');
+              if (pt.sprinkler) lines.push('Sprinkler:  +' + pt.sprinkler.toFixed(1) + '%');
+              lines.push('');
+              lines.push('── Conditions ──');
+              lines.push('🌡️ ' + pt.tempF.toFixed(0) + '°F   💨 ' + pt.windMph.toFixed(0) + ' mph');
+              lines.push('MAD: ' + pt.madNow.toFixed(0) + '%  Stress Limit: ' + pt.wiltNow.toFixed(0) + '%');
+              if (pt.beneficialStress) lines.push('🌱 In beneficial stress zone');
+              if (pt.damageStress) lines.push('🚨 IN DAMAGE ZONE');
+              return lines;
             }
           }
         }

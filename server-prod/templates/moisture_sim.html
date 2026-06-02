@@ -1227,19 +1227,29 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       borderWidth: 1, barThickness: 7, maxBarThickness: 10
     });
   }
-  // Forecast predicted sprinkler bars (real-data mode only)
+  // Forecast predicted sprinkler bars — ONE bar per watering day at 4 AM (bug #30 fix)
   if (isReal) {
-    var forecastSprinklerBars = data.filter(function(p) {
-      return p.isForecast && p.sprinkler !== null && p.sprinkler > 0;
-    }).map(function(p) {
-      return { x: p.t, y: p.sprinkler * rd / 100 };
+    var fcstSprinklerByDay = {};
+    data.forEach(function(p) {
+      if (p.isForecast && p.sprinkler !== null && p.sprinkler > 0) {
+        var dayKey = p.t.toISOString().slice(0, 10);
+        if (!fcstSprinklerByDay[dayKey]) {
+          fcstSprinklerByDay[dayKey] = { totalIn: 0, date: new Date(dayKey + 'T04:00:00') };
+        }
+        fcstSprinklerByDay[dayKey].totalIn += p.sprinkler * rd / 100;
+      }
+    });
+    var forecastSprinklerBars = [];
+    Object.keys(fcstSprinklerByDay).forEach(function(day) {
+      var d = fcstSprinklerByDay[day];
+      forecastSprinklerBars.push({ x: d.date, y: parseFloat(d.totalIn.toFixed(3)) });
     });
     if (forecastSprinklerBars.length > 0) {
       forecastSprinklerBars.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
       precipDatasets.push({
-        label: '� Predicted Sprinkler', data: forecastSprinklerBars,
+        label: 'Predicted Sprinkler', data: forecastSprinklerBars,
         backgroundColor: 'rgba(16,185,129,0.35)', borderColor: 'rgba(16,185,129,0.55)',
-        borderWidth: 1, borderDash: [3, 3], barThickness: 5, maxBarThickness: 8
+        borderWidth: 1, barThickness: 8, maxBarThickness: 12
       });
     }
   }

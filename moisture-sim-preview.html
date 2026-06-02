@@ -399,8 +399,8 @@ function generateSimData(zoneIdx, days) {
         else if (!rainExpected) {
           recovering = true;
         var extraDepth = Math.max(0, (tempF - 65)) * 0.06;
-        cycleTarget = madNow + 13 + extraDepth + rng() * 3;
-        cycleTarget = Math.min(80, cycleTarget);
+        cycleTarget = madNow + 20 + extraDepth + rng() * 3;
+        cycleTarget = Math.min(85, cycleTarget);
           decision = { step: stepIdx, type: 'water', day: di,
             reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
                     tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };

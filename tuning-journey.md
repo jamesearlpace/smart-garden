@@ -96,6 +96,7 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 | 24 | Banner renders above viewport — user never sees it | ALL | Banner div was outside the card, above the fold. Page auto-scrolled to card on load. | Banner HTML was between nav and card divs. On page load, the card filled the viewport and the banner was above it. Every fix from #17-#23 was correct JS that set `display:flex` successfully — but the element was scrolled out of view. | ✅ Fixed: moved banner inside the card, after the subtitle |
 | 25 | Forecast predicted sprinkler bars not shown in precip chart | ALL | Predicted watering shows in moisture line (recovery bumps) but no green bars in precip chart | `buildChart` had `if (!isReal)` gate on sprinkler bar dataset — real-data mode filtered out ALL sprinkler bars including forecast predictions. Forecast bars were generated in `data[].sprinkler` but never rendered. | ✅ Fixed: added separate dataset for forecast sprinkler bars (faded green, 35% opacity) |
 | 26 | Forecast watering fires every day — way too aggressive | ALL | Predicted sprinkler bars appear daily in 7-day forecast, moisture oscillates 45-55% | Forecast recalculated `moisture = lastBalPct - etSoFar` from scratch at every 15-min step. Watering at 4 AM raised moisture to 70%, but the next step recalculated from the same `lastBalPct` (43%), discarding the watering. By end of day, moisture was back to ~43% because ET was subtracted from the un-watered base. Next day: same 43% start → water again. **Root cause:** No running accumulator — each step was stateless. | ✅ Fixed: switched to running balance that carries forward across steps. Watering, ET drain, and rain all accumulate. `lastBalPct` only sets the initial value at step 0 of each forecast day. |
+| 27 | May 26 phantom spike to 100% visible on chart | 6 (all zones affected) | Moisture jumps from 0% to 100% on May 26 with no rain or irrigation bars to explain it | Historical DB data corruption from bug #7 (phantom TAW reset). The 11 PM balance job on May 26 correctly computed 0.3mm. Then 13 server restarts between 23:13-00:35 triggered re-runs of `update_daily_balances`. On one restart, `get_soil_balance_history(zid, days=2)` returned empty (likely DB contention during WAL checkpoint), causing the `yprev = None → balance = taw_mm` fallback. This overwrote the correct 0.3mm with 22.9mm (100%). All fields except balance are zero — the signature of a TAW reset. **Bug #7 prevents this going forward**, but the historical DB row remains corrupt. | Open — needs manual DB correction or chart-side filtering |
 
 ### Verified Correct (not bugs)
 
@@ -234,6 +235,56 @@ Two branches:
 - `lastMoisture > madPct`: Walk forward through ET forecast to find crossing day (original logic, fixed moisture source)
 
 ---
+
+## RCA: May 26 Phantom 100% Spike (Bug #27)
+
+**Severity:** Low (cosmetic — historical data only, prevents future occurrence via bug #7 fix)
+
+### Summary
+On May 26, all zones' soil balance jumped from 0% to 100% (TAW) in the DB with zero rain, zero irrigation, zero ET₀, and zero Kc. This creates a visually jarring spike on the moisture chart with no corresponding rain or sprinkler bar to explain it.
+
+### Evidence
+
+**DB data for Zone 6:**
+```
+Date        bal   rain  irrig  et0   kc
+2026-05-25  0.0   1.4   0.0    2.38  0.6   ← correct: nearly empty
+2026-05-26  22.9  0.0   0.0    0.0   0.0   ← WRONG: all zeros except balance=TAW
+2026-05-27  20.1  0.0   0.0    4.6   0.6   ← correct: normal ET drain from 22.9
+```
+
+**All 10 zones** show the same pattern on May 26: `balance = TAW`, all other fields = 0.
+
+**Server log on May 26:**
+- 23:00:00 — `update_daily_balances` runs normally → Zone 6 = **0.3mm** (with real ET₀=2.04, rain=1.5)
+- 23:13:34 — server restart #1
+- 23:17:02 — server restart #2
+- 23:23:24 — server restart #3
+- ... (13 total restarts between 23:13 and 00:35)
+
+### Root cause
+
+The 11 PM balance job ran correctly and wrote 0.3mm. Then **13 server restarts** in 80 minutes triggered `update_daily_balances` again via APScheduler. On one of these restarts:
+
+1. `prev = db.get_soil_balance(zid)` → found today's row (May 26, balance=0.3mm)
+2. `prev["date"] == today` → entered the "already updated today" branch
+3. `db.get_soil_balance_history(zid, days=2)` → returned **empty** (DB contention during WAL checkpoint or restart race condition)
+4. `yprev = None` → **fallback: `balance = taw_mm`** (22.9mm for spray zones)
+5. `upsert_soil_balance(... balance=22.9, et0=0, kc=0, etc=0, rain=0, irrig=0)` → **overwrote** the correct 0.3mm
+
+The weather cache was cold after restart, so `et0 = 0` and `rain = 0`. The upsert wrote all zeros plus TAW balance.
+
+### Why all zones were affected
+The `update_daily_balances` loop processes ALL zones in a single call. When the DB query returned empty for one zone, it returned empty for all zones (same DB connection issue during the restart).
+
+### Prevention
+- **Bug #7 fix** (deployed Jun 2): The `yprev = None` fallback now carries forward `prev["balance_mm"]` instead of resetting to `taw_mm`. If this scenario recurs, the balance would stay at its current value (0.3mm), not jump to 100%.
+- **Historical data remains corrupt**: The May 26 row still has the bad 22.9mm value. This is a one-time artifact that will scroll off the chart as time passes.
+
+### Options to fix the historical data
+1. **Manual DB correction**: Set May 26 balance to 0.3mm for all spray zones (what the job calculated) — changes the chart retroactively
+2. **Leave it**: The spike will scroll off the 30d/60d views within weeks. Full Season view will always show it as a reminder of the system's early instability
+3. **Chart-side filter**: Detect and suppress spikes where `balance_mm == taw_mm AND et0_mm == 0 AND rain_mm == 0 AND irrigation_mm == 0` — marks as "initialization artifact" and interpolates
 
 ## Calibration TODO
 

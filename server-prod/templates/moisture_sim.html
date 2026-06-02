@@ -147,7 +147,8 @@ h2 { margin: 0; font-size: 1.05rem; }
       <button data-days="30">30d</button>
       <button data-days="60">60d</button>
       <button data-days="90">90d</button>
-      <button data-days="153" class="active">Full Season</button>
+      <button data-days="153">153d</button>
+      <button data-days="9999" class="active">Full Season</button>
     </div>
     <select id="year-select">
       <option value="2026" selected>2026 (Live)</option>
@@ -340,7 +341,7 @@ function generateBrainData(zoneId, days, year) {
   if (!wx) return null;
 
   var zone = getZoneBrainConfig(zoneId);
-  var numDays = Math.min(days, wx.daily.time.length);
+  var numDays = wx.daily.time.length; // always simulate full season
   var MAD_BASE = zone.madPct;
   var WILT_BASE = zone.wiltPct;
   var moisture = MAD_BASE + 20;
@@ -770,11 +771,19 @@ var forecastZonePlugin = {
 function buildChart(zoneId, days, data, actualWaterings) {
   var zone = getZoneBrainConfig(zoneId);
   var MAD = zone.madPct;
-  var stats = computeStats(data, MAD);
-  renderUI(stats, MAD, data.decisions || [], zone);
 
-  var tMin = data[0].t.getTime();
+  // Show last N days (days param), but data contains full season
   var tMax = data[data.length - 1].t.getTime();
+  var tMin = days < 999 ? tMax - days * 86400000 : data[0].t.getTime();
+  if (tMin < data[0].t.getTime()) tMin = data[0].t.getTime();
+
+  // Filter data/decisions to visible window for stats
+  var visibleData = data.filter(function(p) { return p.t.getTime() >= tMin; });
+  var visibleDecisions = (data.decisions || []).filter(function(d) {
+    var pt = data[d.step]; return pt && pt.t.getTime() >= tMin;
+  });
+  var stats = computeStats(visibleData, MAD);
+  renderUI(stats, MAD, visibleDecisions, zone);
 
   // Find forecast start for shading
   var forecastStart = null;
@@ -1164,7 +1173,7 @@ function refresh() {
     ]).then(function(results) {
       loadMsg.style.display = 'none';
       var liveData = results[1];
-      var data = generateBrainData(currentZoneId, currentDays, '2026');
+      var data = generateBrainData(currentZoneId, 9999, '2026');
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || []);
       }
@@ -1179,7 +1188,7 @@ function refresh() {
 
     fetchArchiveWeather(year).then(function() {
       loadMsg.style.display = 'none';
-      var data = generateBrainData(currentZoneId, currentDays, year);
+      var data = generateBrainData(currentZoneId, 9999, year);
       if (data) buildChart(currentZoneId, currentDays, data, []);
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;

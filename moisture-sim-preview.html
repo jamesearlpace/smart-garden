@@ -341,7 +341,7 @@ function generateSimData(zoneIdx, days) {
     var decision = null;
 
     // Arm logic: arm early enough to water BEFORE hitting MAD
-    var shouldArm = !armed && !recovering && moisture <= madNow + 8;
+    var shouldArm = !armed && !recovering && moisture <= madNow + 10;
 
     // Pre-emptive arm: if tomorrow is forecast hot (>82°F) and we're below madNow+8
     var wxTomorrow = dailyWeather[di + 1] || wx;
@@ -383,7 +383,7 @@ function generateSimData(zoneIdx, days) {
       }
       // Check 3: Beneficial stress not yet reached? (intentional delay for root growth)
       // Only delay if we still have plenty of buffer above wilt point
-      else if (cumulativeStressHrs < 1.5 && moisture > madNow && (stepIdx - lastWateredStep) < 96 * 3) {
+      else if (cumulativeStressHrs < 1 && moisture > madNow + 1 && (stepIdx - lastWateredStep) < 96 * 3) {
         if (!decision) decision = { step: stepIdx, type: 'skip-stress-target', day: di,
           reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress — soil at ' + moisture.toFixed(0) + '%, letting roots reach for water' };
         // Stay armed, let it stress a bit more
@@ -392,9 +392,9 @@ function generateSimData(zoneIdx, days) {
       else {
         recovering = true;
         // Depth adapts to conditions: more on hot days, less on cool
-        var extraDepth = Math.max(0, (tempF - 65)) * 0.12;
-        cycleTarget = madNow + 18 + extraDepth + rng() * 4;
-        cycleTarget = Math.min(90, cycleTarget);
+        var extraDepth = Math.max(0, (tempF - 65)) * 0.08;
+        cycleTarget = madNow + 15 + extraDepth + rng() * 3;
+        cycleTarget = Math.min(85, cycleTarget);
         decision = { step: stepIdx, type: 'water', day: di,
           reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
                   tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };

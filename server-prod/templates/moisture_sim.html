@@ -1207,11 +1207,11 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     return { x: p.t, y: p.sprinkler * rd / 100 };
   });
 
-  // Actual watering events from DB (2026 only)
+  // Actual watering events from DB (2026 only) — exclude test blips < 60s
   var actualBarData = [];
   if (actualWaterings && actualWaterings.length > 0) {
     actualWaterings.forEach(function(w) {
-      if (w.duration_sec > 0 && w.start_ts) {
+      if (w.duration_sec >= 60 && w.start_ts) {
         var t = new Date(w.start_ts);
         var precipRate = zone.precipRate;
         var inches = precipRate * (w.duration_sec / 3600);

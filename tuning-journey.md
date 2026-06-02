@@ -83,6 +83,12 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 | 11 | Stats contaminated by bogus 0% initialization period | ALL | "56.4 hrs Deep Stress / Cycle" from weeks of broken data | Stats include bogus 0% period | ✅ Fixed: stats skip data until moisture first exceeds 10% |
 | 12 | Stats use sim sprinkler counting in real-data mode | 6,7,8 (0 actual events) | "177 hrs Stress/Cycle" — zone never watered shows huge stress | `actualWaterings.length > 0` is false for unwatered zones → falls through to sim path → finds forecast predicted sprinklers → divides stress by 1-2 phantom cycles | ✅ Fixed: real-data mode uses `actualWaterings !== null` gate, never falls through to sim path |
 | 13 | Stats include forecast data in stress count | ALL | Stress hours inflated by forecast predictions | Stress loop counts all data points including `isForecast=true` | ✅ Fixed: `if (data[j].isForecast) continue` in stress loop |
+| 14 | 6-second valve tests create phantom watering cycles | 6 | Stats show "0.8 days" cycle length for zone with no real watering | `computeStats` filtered events at `> 5` seconds; 6-second manual relay test blips passed the filter and created 2 phantom "cycles" | ✅ Fixed: raised minimum to 60 seconds |
+| 15 | Init period filter at 10% starts too early | 6 | "275.8 hrs Deep Stress" — PNW rain briefly pushed moisture above 10% mid-May, filter started counting, moisture fell back to 0% for 9 more days | Threshold too low — rain spike on May 16 pushed moisture above 10% but the system was still broken (no auto-watering). All subsequent 0% days counted as deep stress. | ✅ Fixed: raised threshold from 10% to MAD (50%) — system wasn't real until moisture exceeded the watering trigger |
+| 16 | Current moisture badge reads end of forecast | ALL | Badge shows 76.9% when actual moisture is ~36% | `curMoisture` in `computeStats` used `data[data.length - 1]` which is the last point of the 7-day forecast after predicted watering cycles have been applied, not the actual current moisture | ✅ Fixed: walks backward from end to find last non-forecast point |
+| 17 | No "Next Watering" banner when moisture already below MAD | 6 | Zone at 43% (below MAD 50%), server logging "will water at next window", but no banner shown | `updateNextWateringBanner` had `if (lastMoisture > madPct)` — only showed banner when moisture was ABOVE MAD (estimating future crossing). When already below MAD, the condition was false and banner was hidden. | ✅ Fixed: added `if (lastMoisture <= madPct)` branch that shows "needs water now — next 4 AM window" |
+| 18 | Stress stats misleading when 0 watering cycles | 6,7,8 | Shows "0.0 hrs Stress/Cycle" even though zone has real stress | `stressHours / cycles.length` — with 0 cycles, the ternary returned `'0.0'`. There IS stress (zone is below MAD for days), it just can't be expressed per-cycle because there are no cycles. | ✅ Fixed: when cycles=0, shows total stress hours instead of per-cycle (e.g. "142 total") or "—" if no stress at all |
+| 19 | Depth stat shows "—"" (em-dash + quote) | ALL | Visual artifact when no watering data | `computeStats` returns `'—'` for depthIn, stat card HTML appends `"` for inches unit → displays as `—"` | Cosmetic — acceptable for now. Would fix by suppressing the unit when value is "—" |
 
 ### Resolved
 
@@ -134,6 +140,76 @@ The refactor intended to enable water-balance mode for sensorless zones. The old
 1. ✅ Added `=== Decision cycle complete ===` log line (was already there but unreachable due to crash)
 2. ✅ Added ntfy alert if run_cycle hasn't succeeded in >15 minutes
 3. ✅ Added `last_successful_cycle_ts` to system health
+
+---
+
+## RCA: Stats Engine Cascade Failure (Bugs #11-16)
+
+**Severity:** Medium — misleading data, no operational impact.
+
+### Summary
+The stats engine (`computeStats`) had 6 interacting bugs that produced garbage numbers. Each fix revealed the next bug because the underlying data has two pathological characteristics: (a) weeks of 0% moisture from when auto-watering was broken (bug #5), and (b) forecast predictions that generate synthetic future data.
+
+### Root cause chain
+
+```
+Bug #5 (auto-watering broken)
+  → Zones drain to 0% for weeks with no irrigation
+  → Bug #6: historical data looks wrong (actually correct for broken system)
+  → Bug #11: stats count those 0% weeks as stress
+    → Fix: skip data before moisture > 10%
+    → Bug #15: rain spike on May 16 briefly exceeds 10%, filter starts too early
+      → Fix: raise to MAD (50%)
+
+Bug #10 (add forecast watering prediction)
+  → Forecast injects synthetic sprinkler bars into data[].sprinkler
+  → Bug #12: real-data mode with 0 actual events falls to sim path, finds forecast sprinklers
+    → Fix: gate on actualWaterings !== null
+  → Bug #13: stress loop counts forecast predictions
+    → Fix: skip isForecast points
+  → Bug #16: curMoisture reads end of forecast (after predicted watering)
+    → Fix: walk backward to last non-forecast point
+
+Bug #14: 6-second valve test events
+  → Relay toggle tests create watering_event rows with duration_sec = 1-6
+  → Filter was > 5 seconds, allowing 6s events through
+  → Creates phantom "cycles" that stress gets divided by
+  → Fix: raise to > 60 seconds
+```
+
+### Lesson learned
+The stats engine was designed for the brain simulation (which generates clean, self-consistent data with sprinkler events). When it was repurposed for real DB data, it inherited assumptions that don't hold:
+- Real data has initialization artifacts (0% periods)
+- Real data has test/accidental events (6-second relay toggles)
+- Forecast predictions create synthetic future data that looks like real events
+- The `data[]` array mixes historical truth with future predictions
+
+**Defensive fix pattern applied:** Every loop in `computeStats` now has explicit guards:
+- `if (data[j].isForecast) continue` — skip predictions
+- `if (!pastInit && data[j].moisture > MAD) pastInit = true` — skip broken initialization
+- `duration_sec <= 60` — skip test blips
+- `curMoisture` walks backward to last real point
+
+---
+
+## RCA: Next Watering Banner Missing (Bug #17)
+
+**Severity:** Medium — key user-facing prediction not shown when most needed.
+
+### Root cause
+`updateNextWateringBanner` had the condition `if (forecast.length > 0 && lastMoisture > madPct)`. This only shows the banner when moisture is **above** MAD — meaning "you don't need water yet, here's when you will." When moisture is **already below** MAD (the zone needs water NOW), the condition is false and the banner disappears.
+
+Additionally, `lastMoisture` was reading `data[data.length - 1]` — the end of the 7-day forecast, not the current actual moisture. So even when the banner did show, it used the wrong moisture value.
+
+### Why this happened
+The banner was written for the happy-path case (zone is fine, estimate when it won't be). The unhappy-path case (zone already needs water) was never considered because:
+1. During development, the mockup used simulated data where zones always get watered before crossing MAD
+2. Bug #5 (auto-watering broken) meant real zones frequently crossed below MAD — a condition the banner code never anticipated
+
+### Fix
+Two branches:
+- `lastMoisture <= madPct`: "Needs water now — next 4 AM window" with amber color
+- `lastMoisture > madPct`: Walk forward through ET forecast to find crossing day (original logic, fixed moisture source)
 
 ---
 

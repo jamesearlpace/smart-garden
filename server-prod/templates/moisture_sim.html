@@ -916,8 +916,18 @@ function computeStats(data, MAD, actualWaterings) {
   }
   var totalStressHrs = stressSteps * 0.25;
   var totalDeepStressHrs = deepStressSteps * 0.25;
-  var stressPerCycle = cycles.length > 0 ? (totalStressHrs / cycles.length).toFixed(1) : '0.0';
-  var deepStressPerCycle = cycles.length > 0 ? (totalDeepStressHrs / cycles.length).toFixed(1) : '0.0';
+  // Show per-cycle if cycles exist, otherwise show total hours (not misleading "0.0")
+  var stressPerCycle, deepStressPerCycle;
+  if (cycles.length > 0) {
+    stressPerCycle = (totalStressHrs / cycles.length).toFixed(1);
+    deepStressPerCycle = (totalDeepStressHrs / cycles.length).toFixed(1);
+  } else if (totalStressHrs > 0 || totalDeepStressHrs > 0) {
+    stressPerCycle = totalStressHrs.toFixed(0) + ' total';
+    deepStressPerCycle = totalDeepStressHrs.toFixed(0) + ' total';
+  } else {
+    stressPerCycle = '—';
+    deepStressPerCycle = '—';
+  }
 
   // Last watered / next estimate
   var lastWatered = '—', nextEst = '—';
@@ -1467,30 +1477,21 @@ function updateNextWateringBanner(data, liveData) {
 
   if (selectedYear === '2026' && data.isRealData) {
     // Real data mode: estimate from current moisture and ET forecast
-    var lastMoisture = data.length > 0 ? data[data.length - 1].moisture : 50;
-    var madPct = data.length > 0 ? data[data.length - 1].madNow : 50;
+    // Use last non-forecast point for current moisture (bug #16/#20 fix)
+    var lastMoisture = 50, madPct = 50;
+    for (var lm = data.length - 1; lm >= 0; lm--) {
+      if (!data[lm].isForecast) { lastMoisture = data[lm].moisture; madPct = data[lm].madNow; break; }
+    }
     var zone = getZoneBrainConfig(currentZoneId);
 
     // Use forecast_7day from API if available
     var forecast = (liveData && liveData.forecast_7day) || [];
-    if (forecast.length > 0 && lastMoisture > madPct) {
-      // Walk forward through forecast days, subtract ET, see when we hit MAD
-      var m = lastMoisture;
-      var rootD = zone.rootDepthIn;
-      var hitDay = null;
-      for (var fi = 0; fi < forecast.length; fi++) {
-        var dayEt0 = forecast[fi].et0 || 0; // inches
-        var dayRain = forecast[fi].rain || 0; // inches
-        var kc = 0.90;
-        var etPct = (dayEt0 * kc / rootD) * 100;
-        var rainPct = (dayRain * 0.65 / rootD) * 100; // 65% effectiveness
-        m = m - etPct + rainPct;
-        if (m <= madPct) { hitDay = fi; break; }
-      }
-      if (hitDay !== null) {
+    if (forecast.length > 0) {
+      if (lastMoisture <= madPct) {
+        // Already below MAD — needs water at next 4 AM window
         var estDate = new Date();
-        estDate.setDate(estDate.getDate() + hitDay);
-        estDate.setHours(4, 0, 0, 0); // 4 AM watering window
+        if (estDate.getHours() >= 7) estDate.setDate(estDate.getDate() + 1); // past today's window
+        estDate.setHours(4, 0, 0, 0);
         var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         var hoursAway = (estDate.getTime() - now) / 3600000;
@@ -1498,8 +1499,36 @@ function updateNextWateringBanner(data, liveData) {
 
         banner.style.display = 'flex';
         document.getElementById('nw-value').textContent = dn[estDate.getDay()] + ' ' + mn[estDate.getMonth()] + ' ' + estDate.getDate() + ' ~4 AM';
-        document.getElementById('nw-value').style.color = hoursAway < 24 ? '#f59e0b' : '#22c55e';
-        document.getElementById('nw-detail').textContent = '~' + timeStr + ' · moisture ' + Math.round(lastMoisture) + '% → MAD ' + Math.round(madPct) + '% (ET forecast)';
+        document.getElementById('nw-value').style.color = '#f59e0b';
+        document.getElementById('nw-detail').textContent = '~' + timeStr + ' · moisture ' + Math.round(lastMoisture) + '% below MAD ' + Math.round(madPct) + '% — needs water now';
+        return;
+      }
+      // Above MAD — walk forward through forecast to find when it crosses
+      var m = lastMoisture;
+      var rootD = zone.rootDepthIn;
+      var hitDay = null;
+      for (var fi = 0; fi < forecast.length; fi++) {
+        var dayEt0 = forecast[fi].et0 || 0;
+        var dayRain = forecast[fi].rain || 0;
+        var kc = 0.90;
+        var etPct = (dayEt0 * kc / rootD) * 100;
+        var rainPct = (dayRain * 0.65 / rootD) * 100;
+        m = m - etPct + rainPct;
+        if (m <= madPct) { hitDay = fi; break; }
+      }
+      if (hitDay !== null) {
+        var estDate2 = new Date();
+        estDate2.setDate(estDate2.getDate() + hitDay);
+        estDate2.setHours(4, 0, 0, 0);
+        var dn2 = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        var mn2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var hoursAway2 = (estDate2.getTime() - now) / 3600000;
+        var timeStr2 = hoursAway2 < 1 ? 'now' : hoursAway2 < 24 ? hoursAway2.toFixed(0) + ' hours' : (hoursAway2 / 24).toFixed(1) + ' days';
+
+        banner.style.display = 'flex';
+        document.getElementById('nw-value').textContent = dn2[estDate2.getDay()] + ' ' + mn2[estDate2.getMonth()] + ' ' + estDate2.getDate() + ' ~4 AM';
+        document.getElementById('nw-value').style.color = hoursAway2 < 24 ? '#f59e0b' : '#22c55e';
+        document.getElementById('nw-detail').textContent = '~' + timeStr2 + ' · moisture ' + Math.round(lastMoisture) + '% → MAD ' + Math.round(madPct) + '% (ET forecast)';
         return;
       }
     }

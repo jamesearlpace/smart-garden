@@ -582,10 +582,27 @@ function renderUI(stats, MAD, decisions) {
   var icons = {
     'water': '💧', 'water-emergency': '🚨', 'water-despite-rain': '⚠️',
     'skip-wind': '💨', 'skip-rain': '🌧️', 'skip-stress-target': '🌱',
-    'arm-preemptive': '🌡️'
+    'arm-preemptive': '🌡️', 'catch-up': '💧', 'skip-harden': '🌿',
+    'water-despite-rain': '⚠️', 'water-emergency': '🚨'
   };
   var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  var logHtml = '<h3>🧠 Decision Log</h3>';
+  
+  // Count decisions by type for debug summary
+  var typeCounts = {};
+  if (decisions) decisions.forEach(function(dec) { typeCounts[dec.type] = (typeCounts[dec.type]||0) + 1; });
+  
+  var logHtml = '<h3>🧠 Decision Log (' + (decisions ? decisions.length : 0) + ' decisions)</h3>';
+  // Type summary badges
+  var allTypes = ['water','catch-up','skip-rain','skip-wind','arm-preemptive','water-despite-rain','skip-harden','water-emergency'];
+  var badgeColors = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#e2e8f0','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
+  logHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
+  allTypes.forEach(function(t) {
+    var cnt = typeCounts[t] || 0;
+    var col = badgeColors[t] || '#94a3b8';
+    logHtml += '<span style="font-size:.65rem;padding:2px 6px;border-radius:4px;background:' + col + '22;color:' + col + ';border:1px solid ' + col + '44">' + (icons[t]||'') + ' ' + t + ': ' + cnt + '</span>';
+  });
+  logHtml += '</div>';
+  
   if (decisions && decisions.length > 0) {
     decisions.forEach(function(dec) {
       var icon = icons[dec.type] || '📋';

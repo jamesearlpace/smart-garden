@@ -510,36 +510,37 @@ function generateRealData2026(zoneId, liveData) {
         }
         moisture = Math.max(0, Math.min(100, moisture));
       } else {
-        // Forecast days: decay from last known balance + predicted watering
+        // Forecast days: running balance (not recalculated from lastBalPct each step)
+        // On first step of a forecast day, initialize from lastBalPct
+        // Then accumulate ET drain, rain, and watering across steps
+        if (step === 0) {
+          moisture = lastBalPct;
+        }
+
         var kc = (month >= 3 && month <= 11) ? 0.90 : 0.40;
         var etPctDay = (et0_in / rootDepth) * 100 * kc;
-        var etSoFar = 0;
+
+        // ET drain per 15-min step (sine curve during daylight 6AM-8PM)
+        var etStep = 0;
         if (h >= 6 && h <= 20) {
-          etSoFar = etPctDay * (1 - Math.cos((h + m/60 - 6) / 14 * Math.PI)) / 2;
-        } else if (h > 20) { etSoFar = etPctDay; }
+          var phase = (h + m/60 - 6) / 14 * Math.PI;
+          etStep = Math.sin(phase) * etPctDay / (56 * 0.637);
+        }
+        moisture -= etStep;
 
-        // Rain credit from forecast
+        // Rain credit per step (spread 8AM-8PM)
         var fcstRainIn = wx.daily.precipitation_sum[di] || 0;
-        var rainPctDay = (fcstRainIn * 0.65 / rootDepth) * 100; // 65% effectiveness
-        var rainFrac = 0;
-        if (h >= 8 && h <= 20) { rainFrac = (h - 8) / 12; } // spread rain 8AM-8PM
-        else if (h > 20) { rainFrac = 1; }
+        if (fcstRainIn > 0 && h >= 8 && h <= 20) {
+          var rainPctDay = (fcstRainIn * 0.65 / rootDepth) * 100;
+          moisture += rainPctDay / 48; // 48 steps in 8AM-8PM window
+        }
 
-        moisture = lastBalPct - etSoFar + rainPctDay * rainFrac;
-
-        // Predicted auto-watering: if moisture drops below MAD during 4-7AM window
+        // Predicted auto-watering: if below MAD during 4-7AM window
         if (h >= 4 && h < 7 && moisture < madPct) {
-          // System would water to ~MAD + recovery
           var waterTarget = Math.min(100, madPct + 20);
-          var waterGain = waterTarget - moisture;
-          // Spread over the 4-7AM window (12 steps)
-          var stepInWindow = (h - 4) * 4 + Math.floor(m / 15);
-          if (stepInWindow < 12) {
-            moisture += waterGain * ((stepInWindow + 1) / 12);
-          } else {
-            moisture = waterTarget;
-          }
-          // Mark as predicted sprinkler for the bar chart
+          var waterPerStep = (zone.precipRate / 4) * (100 / rootDepth);
+          if (moisture + waterPerStep > waterTarget) waterPerStep = waterTarget - moisture;
+          moisture += waterPerStep;
           sprinklerBar = (zone.precipRate / 4);
         }
 

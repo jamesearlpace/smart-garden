@@ -336,7 +336,7 @@ function fetchLiveData(zoneId) {
 // ═══════════════════════════════════
 // IRRIGATION BRAIN (FAO-56 audited)
 // ═══════════════════════════════════
-function generateBrainData(zoneId, days, year) {
+function generateBrainData(zoneId, days, year, actualWaterings) {
   var wx = weatherCache[year];
   if (!wx) return null;
 
@@ -346,6 +346,37 @@ function generateBrainData(zoneId, days, year) {
   var WILT_BASE = zone.wiltPct;
   var moisture = MAD_BASE + 20;
   var points = [], decisions = [];
+
+  // Build lookup of actual irrigation by 15-min slot (for 2026 live mode)
+  // Convert actual watering events into moisture % credit per timestep
+  var actualIrrigMap = {}; // key: globalStep -> moisture % to add
+  var startDate0 = new Date(wx.daily.time[0] + 'T00:00:00');
+  if (actualWaterings && actualWaterings.length > 0) {
+    actualWaterings.forEach(function(w) {
+      if (!w.start_ts || !w.duration_sec || w.duration_sec <= 0) return;
+      var wStart = new Date(w.start_ts);
+      var wDurSteps = Math.max(1, Math.round(w.duration_sec / 900)); // 15-min steps
+      var rootD = zone.rootDepthIn;
+      // Moisture % per step = (precipRate * 0.25hr) / rootDepth * 100
+      var pctPerStep = (zone.precipRate / 4) * (100 / rootD);
+      for (var si = 0; si < wDurSteps; si++) {
+        var stepTime = new Date(wStart.getTime() + si * 900000);
+        var dayOff = Math.floor((stepTime.getTime() - startDate0.getTime()) / 86400000);
+        var h = stepTime.getHours();
+        var m = stepTime.getMinutes();
+        var stepInDay = Math.floor((h * 60 + m) / 15);
+        var gs = dayOff * 96 + stepInDay;
+        if (gs >= 0) actualIrrigMap[gs] = (actualIrrigMap[gs] || 0) + pctPerStep;
+      }
+    });
+  }
+  var hasActualData = Object.keys(actualIrrigMap).length > 0;
+  var lastActualStep = 0;
+  if (hasActualData) {
+    Object.keys(actualIrrigMap).forEach(function(k) {
+      var n = parseInt(k); if (n > lastActualStep) lastActualStep = n;
+    });
+  }
 
   // FAO-56 compliant: Kc = 0.90 constant for cool-season turf
   var KC_ACTIVE = 0.90;
@@ -529,10 +560,23 @@ function generateBrainData(zoneId, days, year) {
           reason: 'EMERGENCY: ' + Math.round(moisture) + '% near wilt ' + Math.round(wiltNow) + '%' };
       }
 
-      if (recovering) {
+      // Apply irrigation: actual DB data (if available) overrides brain simulation
+      var actualIrrig = actualIrrigMap[globalStep] || 0;
+      if (actualIrrig > 0) {
+        // Real watering happened — use actual data, skip brain's sim sprinkler
+        sprinkler = actualIrrig;
+        // If brain was recovering, finish recovery since real system handled it
+        if (recovering && moisture + sprinkler >= cycleTarget) {
+          recovering = false; armed = false;
+          cumulativeStressHrs = 0; lastWateredStep = globalStep;
+        }
+      } else if (recovering) {
         if (moisture < cycleTarget) {
-          sprinkler = (zone.precipRate / 4) * (100 / rootDepth);
-          if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
+          // Only simulate sprinkler if we have no actual data for this period
+          if (!hasActualData || globalStep > lastActualStep) {
+            sprinkler = (zone.precipRate / 4) * (100 / rootDepth);
+            if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
+          }
         }
         if (moisture + sprinkler >= cycleTarget || h >= 6) {
           recovering = false; armed = false;
@@ -1173,7 +1217,7 @@ function refresh() {
     ]).then(function(results) {
       loadMsg.style.display = 'none';
       var liveData = results[1];
-      var data = generateBrainData(currentZoneId, 9999, '2026');
+      var data = generateBrainData(currentZoneId, 9999, '2026', liveData.waterings || []);
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || []);
       }

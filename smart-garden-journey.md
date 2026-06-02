@@ -241,18 +241,29 @@ Cam page auto-refreshes JPEG every 5s when visible, stops when you switch tabs. 
 
 **Goal:** A live chart on the Home page showing estimated soil moisture % dropping in real-time as ET₀ evaporates water, spiking up when rain falls or sprinklers run, with a clear "needs water" threshold line.
 
+**Preview mockup:** `moisture-sim-preview.html` — renders in browser with fake data. Confirmed design works.
+
+**Design feedback from preview:**
+- Rain and sprinkler events need to be **vertical bars behind the moisture line** (not small markers on the line — too hard to see)
+- Rain = blue bars, Sprinkler = green bars — clearly distinct
+- Moisture line should show **sharp jumps** when water is added (reduce `tension` to 0 for step-like transitions)
+- Red stress shading below MAD works well
+- Stats cards at bottom (cycle length, dry-down ratio, stress hours, depth per cycle) are useful
+
 **Key metrics to track:**
 - Moisture % (continuous line, updated every 5 min with prorated hourly ET₀)
 - Cycle length (days between waterings — target 2-4 days for PNW grass)
 - Dry-down ratio (% of cycle spent drying vs wet — target 50-70%)
 - Stress hours (time below MAD before water arrives — target < 6 hrs)
+- Depth per cycle (inches applied — target 0.5-0.75" for grass)
 
 **Implementation needs:**
-1. Hourly ET₀ proration (more drain midday, none at night)
+1. Hourly ET₀ proration (bell curve: peaks 1-2 PM, near zero at night)
 2. New DB table: `moisture_sim` with 5-min resolution data points
-3. Real-time rain and irrigation event integration
-4. Chart.js line chart with rain/irrigation event markers
+3. Real-time rain and irrigation event integration (vertical bars, not markers)
+4. Chart.js mixed chart: line (moisture) + bars (rain blue, sprinkler green)
 5. Cycle health summary card (avg cycle length, stress hours, dry-down ratio)
+6. Wetting-drying cycle optimization: brief deep watering > constant dampness
 
 ---
 

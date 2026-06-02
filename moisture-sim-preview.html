@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Soil Moisture Simulation — Preview</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  body { background: #0f1923; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  h2 { margin: 0 0 4px; font-size: 1rem; }
+  .subtitle { color: #94a3b8; font-size: .75rem; margin-bottom: 12px; }
+  .legend { display: flex; gap: 16px; font-size: .72rem; color: #94a3b8; margin-bottom: 10px; flex-wrap: wrap; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+  .stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; }
+  .stat-value { font-size: 1.3rem; font-weight: 700; }
+  .stat-label { font-size: .7rem; color: #94a3b8; margin-top: 4px; }
+  .stat-good { color: #22c55e; }
+  .stat-warn { color: #f59e0b; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>💧 Soil Moisture Simulation — Front Yard A (Zone 1)</h2>
+  <div class="subtitle">Estimated moisture based on ET₀ evaporation, rainfall, and irrigation events</div>
+  <div class="legend">
+    <span>🟢 <b>Moisture %</b> (simulated)</span>
+    <span>🔵 <b>Rain</b> events</span>
+    <span>🟩 <b>Sprinkler</b> events</span>
+    <span>🔴 <b>Stress zone</b> (below MAD)</span>
+    <span>━━ <b>MAD</b> threshold (needs water)</span>
+  </div>
+  <div style="height:350px"><canvas id="moisture-sim"></canvas></div>
+  
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value stat-good">3.1 days</div>
+      <div class="stat-label">Avg Cycle Length</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value stat-good">62%</div>
+      <div class="stat-label">Dry-Down Ratio</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value stat-good">1.8 hrs</div>
+      <div class="stat-label">Avg Stress Duration</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value stat-warn">0.67"</div>
+      <div class="stat-label">Avg Depth Per Cycle</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Generate realistic 7-day moisture simulation data
+function generateSimData() {
+  var now = new Date();
+  var start = new Date(now.getTime() - 7 * 24 * 3600000);
+  var points = [];
+  var moisture = 85; // Start at 85%
+  var TAW = 100;
+  var MAD = 50;
+  
+  // Simulate every 15 minutes for 7 days
+  for (var t = start.getTime(); t <= now.getTime(); t += 15 * 60000) {
+    var d = new Date(t);
+    var hour = d.getHours();
+    var dayOfWeek = d.getDay();
+    
+    // ET₀ drain — bell curve peaking at 1 PM, near zero at night
+    var etDrain = 0;
+    if (hour >= 6 && hour <= 20) {
+      // Sine curve from 6 AM to 8 PM
+      var phase = (hour - 6) / 14 * Math.PI;
+      var baseRate = Math.sin(phase) * 0.35; // max ~0.35% per 15 min
+      
+      // Hotter days drain faster (vary by day)
+      var dayHeat = [0.8, 1.0, 1.2, 1.1, 0.9, 1.3, 1.0][dayOfWeek];
+      etDrain = baseRate * dayHeat;
+    }
+    
+    moisture -= etDrain;
+    
+    // Rain events
+    var rain = 0;
+    // Day 2 afternoon: light rain
+    var dayIdx = Math.floor((t - start.getTime()) / 86400000);
+    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 0) {
+      rain = 12; // Moderate rain — adds 12%
+    }
+    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 15) {
+      rain = 8;
+    }
+    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 30) {
+      rain = 5;
+    }
+    
+    // Sprinkler events (triggered when moisture drops below MAD)
+    var sprinkler = 0;
+    if (moisture <= MAD - 2) {
+      // Only water in the morning window (4-6 AM)
+      if (hour >= 4 && hour <= 5) {
+        sprinkler = 8; // Each 15-min interval adds 8%
+      }
+    }
+    
+    moisture += rain + sprinkler;
+    moisture = Math.max(0, Math.min(TAW, moisture));
+    
+    points.push({
+      t: new Date(t),
+      moisture: moisture,
+      rain: rain > 0 ? rain : null,
+      sprinkler: sprinkler > 0 ? sprinkler : null,
+      stressed: moisture < MAD
+    });
+  }
+  return points;
+}
+
+var data = generateSimData();
+var MAD_LINE = 50;
+
+// Build datasets
+var moistureData = data.map(function(p) { return {x: p.t, y: p.moisture}; });
+var madData = data.map(function(p) { return {x: p.t, y: MAD_LINE}; });
+
+// Stress zones — moisture below MAD
+var stressData = data.map(function(p) { 
+  return {x: p.t, y: p.stressed ? p.moisture : null}; 
+});
+
+// Rain event markers
+var rainData = data.filter(function(p) { return p.rain; }).map(function(p) {
+  return {x: p.t, y: p.moisture};
+});
+
+// Sprinkler event markers
+var sprinklerData = data.filter(function(p) { return p.sprinkler; }).map(function(p) {
+  return {x: p.t, y: p.moisture};
+});
+
+var ctx = document.getElementById('moisture-sim').getContext('2d');
+
+// Custom plugin to shade stress zones
+var stressShadePlugin = {
+  id: 'stressShade',
+  beforeDraw: function(chart) {
+    var ctx = chart.ctx;
+    var yAxis = chart.scales.y;
+    var xAxis = chart.scales.x;
+    var madPixel = yAxis.getPixelForValue(MAD_LINE);
+    var bottomPixel = yAxis.getPixelForValue(0);
+    
+    ctx.save();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+    ctx.fillRect(xAxis.left, madPixel, xAxis.right - xAxis.left, bottomPixel - madPixel);
+    ctx.restore();
+  }
+};
+
+new Chart(ctx, {
+  type: 'line',
+  plugins: [stressShadePlugin],
+  data: {
+    datasets: [
+      {
+        label: 'Soil Moisture %',
+        data: moistureData,
+        borderColor: '#22c55e',
+        backgroundColor: '#22c55e18',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+        order: 2
+      },
+      {
+        label: 'Stress (below MAD)',
+        data: stressData,
+        borderColor: '#ef4444',
+        backgroundColor: '#ef444435',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+        order: 1
+      },
+      {
+        label: 'MAD — Needs Water',
+        data: madData,
+        borderColor: '#f59e0b',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [8, 4],
+        pointRadius: 0,
+        fill: false,
+        order: 3
+      },
+      {
+        label: '🌧️ Rain',
+        data: rainData,
+        borderColor: '#3b82f6',
+        backgroundColor: '#3b82f6',
+        pointRadius: 8,
+        pointStyle: 'triangle',
+        showLine: false,
+        order: 0
+      },
+      {
+        label: '🚿 Sprinkler',
+        data: sprinklerData,
+        borderColor: '#10b981',
+        backgroundColor: '#10b981',
+        pointRadius: 8,
+        pointStyle: 'rectRot',
+        showLine: false,
+        order: 0
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: true,
+        position: 'top',
+        labels: { boxWidth: 12, font: { size: 11 }, padding: 8, color: '#94a3b8' }
+      },
+      tooltip: {
+        callbacks: {
+          label: function(ctx) {
+            if (ctx.dataset.label.includes('Rain')) return '🌧️ Rain: +' + data.find(function(p) { return p.t.getTime() === ctx.parsed.x; }).rain + '%';
+            if (ctx.dataset.label.includes('Sprinkler')) return '🚿 Sprinkler: +' + data.find(function(p) { return p.t.getTime() === ctx.parsed.x; }).sprinkler + '%';
+            if (ctx.dataset.label.includes('MAD')) return 'MAD Trigger: ' + ctx.parsed.y + '%';
+            return ctx.parsed.y.toFixed(1) + '% moisture';
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        type: 'time',
+        time: { tooltipFormat: 'EEE MMM d, h:mm a', displayFormats: { hour: 'EEE ha', day: 'MMM d' } },
+        ticks: { maxTicksLimit: 14, font: { size: 10 }, color: '#64748b' },
+        grid: { color: '#1e293b' }
+      },
+      y: {
+        min: 0,
+        max: 100,
+        ticks: { 
+          callback: function(v) { return v + '%'; },
+          font: { size: 10 },
+          color: '#64748b'
+        },
+        grid: { color: '#1e293b22' },
+        title: { display: true, text: 'Soil Moisture %', font: { size: 11 }, color: '#94a3b8' }
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>

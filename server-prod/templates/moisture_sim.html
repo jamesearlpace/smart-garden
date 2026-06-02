@@ -337,51 +337,34 @@ function fetchLiveData(zoneId) {
 // 2026 REAL DATA (no simulation)
 // ═══════════════════════════════════
 function generateRealData2026(zoneId, liveData) {
-  // Build chart data from DB soil_balance + Open-Meteo weather + actual watering events.
-  // NO brain simulation. What the DB says is what you see.
+  // Pure DB data — NO brain simulation, NO fabricated decisions.
+  // Moisture line = soil_balance table. Bars = watering_event table + weather.
   var wx = weatherCache['2026'];
   if (!wx) return null;
 
   var zone = getZoneBrainConfig(zoneId);
   var balances = liveData.balances || [];
-  var waterings = liveData.waterings || [];
   if (balances.length === 0) return null;
 
-  // Build a date→balance lookup
+  // Date → balance lookup
   var balMap = {};
   balances.forEach(function(b) { balMap[b.date] = b; });
 
-  // Build a date→watering lookup (total irrigation_mm per day)
-  var waterMap = {};
-  waterings.forEach(function(w) {
-    if (!w.start_ts || !w.duration_sec || w.duration_sec <= 0) return;
-    var day = w.start_ts.slice(0, 10);
-    if (!waterMap[day]) waterMap[day] = [];
-    waterMap[day].push(w);
-  });
-
-  var points = [], decisions = [];
-
-  // Walk through weather days, use DB balance where available
+  var points = [];
   var numDays = wx.daily.time.length;
   var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
-
-  // Track last known balance for interpolation within a day
-  var lastBalPct = 70; // default start
+  var lastBalPct = 70;
 
   for (var di = 0; di < numDays; di++) {
     var dateStr = wx.daily.time[di];
     var hi = wx.daily.temperature_2m_max[di];
     var lo = wx.daily.temperature_2m_min[di];
     var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
-    var maxWind = wx.daily.wind_speed_10m_max[di] || 0;
     var month = parseInt(dateStr.split('-')[1]);
     var rootDepth = ({ 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 })[month] || zone.rootDepthIn;
     var isForecast = wx.isForecast && wx.isForecast.indexOf(di) >= 0;
 
-    // Get DB balance for this day (end-of-day value)
     var bal = balMap[dateStr];
-    var balPct = bal ? (bal.balance_mm / bal.taw_mm * 100) : null;
     var tawMm = bal ? bal.taw_mm : 22.86;
     var madMm = bal ? bal.mad_mm : tawMm * 0.5;
     var madPct = madMm / tawMm * 100;
@@ -390,142 +373,76 @@ function generateRealData2026(zoneId, liveData) {
     var rainMm = bal ? bal.rain_mm : 0;
     var irrigMm = bal ? bal.irrigation_mm : 0;
 
-    // Get previous day's balance for start-of-day
     var prevDateStr = di > 0 ? wx.daily.time[di - 1] : null;
     var prevBal = prevDateStr ? balMap[prevDateStr] : null;
     var startPct = prevBal ? (prevBal.balance_mm / prevBal.taw_mm * 100) : lastBalPct;
-    var endPct = balPct !== null ? balPct : startPct;
 
-    // Daily rain from Open-Meteo hourly (for bar chart granularity)
-    var dailyRainIn = wx.daily.precipitation_sum[di] || 0;
-
-    // Actual watering events for this day
-    var dayWaterings = waterMap[dateStr] || [];
-    var totalIrrigSec = 0;
-    dayWaterings.forEach(function(w) { totalIrrigSec += w.duration_sec; });
-    var irrigIn = zone.precipRate * (totalIrrigSec / 3600);
-
-    // Log decisions based on what actually happened
-    if (irrigMm > 0.5 || totalIrrigSec > 60) {
-      decisions.push({ step: di * 96 + 16, type: 'water', day: di,
-        reason: 'Actual: ' + Math.round(totalIrrigSec / 60) + ' min, ' + (irrigMm / 25.4).toFixed(2) + '" applied' });
-    }
-    if (dailyRainIn >= 0.20 && irrigMm < 0.5) {
-      decisions.push({ step: di * 96 + 32, type: 'skip-rain', day: di,
-        reason: 'Rain ' + dailyRainIn.toFixed(2) + '" — no irrigation' });
-    }
-
-    // Interpolate moisture through the day (96 steps = 15-min intervals)
-    // ET follows a sine curve during daylight, rain/irrigation happen at recorded times
     for (var step = 0; step < 96; step++) {
       var h = Math.floor(step / 4);
       var m = (step % 4) * 15;
-      var globalStep = di * 96 + step;
-
-      // Temperature from hourly data
       var hrIdx = di * 24 + h;
       var tempF = (hrIdx < wx.hourly.temperature_2m.length) ? wx.hourly.temperature_2m[hrIdx] : (hi + lo) / 2;
-      var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
+      var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : 0;
 
-      // Interpolate moisture within the day
-      // Morning: start at previous day's closing balance
-      // During day: ET draws down with sine curve
-      // Rain/irrigation: applied at recorded times or spread proportionally
-      var dayFrac = step / 96;
       var moisture;
-      if (balPct !== null) {
-        // We have DB data: interpolate from start to end using ET curve shape
-        var etFrac = 0; // fraction of daily ET consumed by this point
+      if (bal) {
+        // Interpolate within day using ET sine curve
+        var etFrac = 0;
         if (h >= 6 && h <= 20) {
-          // Integrate sine from 6AM to current hour
-          var t1 = Math.max(0, (h + m/60 - 6));
-          var period = 14;
-          etFrac = (1 - Math.cos(t1 / period * Math.PI)) / 2;
-        } else if (h > 20) {
-          etFrac = 1;
-        }
+          etFrac = (1 - Math.cos(Math.max(0, h + m/60 - 6) / 14 * Math.PI)) / 2;
+        } else if (h > 20) { etFrac = 1; }
 
-        // Daily moisture change = endPct - startPct (includes ET, rain, irrigation)
-        // ET portion drawn during daylight, gains applied when they happened
         var etDailyPct = (etcMm / tawMm) * 100;
         var rainDailyPct = (rainMm / tawMm) * 100;
         var irrigDailyPct = (irrigMm / tawMm) * 100;
 
-        // Start with morning balance, subtract ET curve, add rain/irrigation
         moisture = startPct - etDailyPct * etFrac;
 
-        // Add rain proportionally through the day (from hourly data)
-        var rainSoFar = 0;
-        for (var rhi = di * 24; rhi < di * 24 + h; rhi++) {
-          if (rhi < wx.hourly.precipitation.length) {
-            rainSoFar += (wx.hourly.precipitation[rhi] || 0);
-          }
+        // Rain proportional to hourly weather
+        var rainSoFar = 0, totalHourlyRain = 0;
+        for (var rh = di * 24; rh < di * 24 + 24; rh++) {
+          var p = (rh < wx.hourly.precipitation.length) ? (wx.hourly.precipitation[rh] || 0) : 0;
+          totalHourlyRain += p;
+          if (rh < di * 24 + h) rainSoFar += p;
         }
-        var totalHourlyRain = 0;
-        for (var rha = di * 24; rha < di * 24 + 24; rha++) {
-          if (rha < wx.hourly.precipitation.length) {
-            totalHourlyRain += (wx.hourly.precipitation[rha] || 0);
-          }
-        }
-        if (totalHourlyRain > 0) {
-          moisture += rainDailyPct * (rainSoFar / totalHourlyRain);
-        }
+        if (totalHourlyRain > 0) moisture += rainDailyPct * (rainSoFar / totalHourlyRain);
 
-        // Add irrigation (assume it happens 4-6AM)
-        if (irrigDailyPct > 0 && h >= 6) {
-          moisture += irrigDailyPct;
-        } else if (irrigDailyPct > 0 && h >= 4) {
-          moisture += irrigDailyPct * ((h - 4) / 2);
+        // Irrigation (assume 4-6AM window)
+        if (irrigDailyPct > 0) {
+          if (h >= 6) moisture += irrigDailyPct;
+          else if (h >= 4) moisture += irrigDailyPct * ((h - 4) / 2);
         }
-
         moisture = Math.max(0, Math.min(100, moisture));
       } else {
-        // No DB data (forecast days): use last known balance with ET decay
+        // Forecast days: decay from last known balance
         var kc = (month >= 3 && month <= 11) ? 0.90 : 0.40;
         var etPctDay = (et0_in / rootDepth) * 100 * kc;
         var etSoFar = 0;
         if (h >= 6 && h <= 20) {
-          var t2 = (h + m/60 - 6);
-          etSoFar = etPctDay * (1 - Math.cos(t2 / 14 * Math.PI)) / 2;
-        } else if (h > 20) {
-          etSoFar = etPctDay;
-        }
+          etSoFar = etPctDay * (1 - Math.cos((h + m/60 - 6) / 14 * Math.PI)) / 2;
+        } else if (h > 20) { etSoFar = etPctDay; }
         moisture = Math.max(0, Math.min(100, lastBalPct - etSoFar));
       }
 
-      // Rain for bar chart (from hourly weather)
+      // Rain for bar chart (hourly weather only)
       var hourlyPrecip = (hrIdx < wx.hourly.precipitation.length) ? wx.hourly.precipitation[hrIdx] : 0;
-      var rainBar = hourlyPrecip > 0.005 ? hourlyPrecip / 4 : null; // spread hour across 4 steps
-
-      // Sprinkler bar (from actual events only)
-      var sprinklerBar = null;
-      dayWaterings.forEach(function(w) {
-        var wStart = new Date(w.start_ts);
-        var wEnd = new Date(wStart.getTime() + w.duration_sec * 1000);
-        var stepTime = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
-        if (stepTime >= wStart && stepTime < wEnd) {
-          sprinklerBar = (zone.precipRate / 4); // inches per 15-min step
-        }
-      });
-
-      var ptDate = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
+      var rainBar = hourlyPrecip > 0.005 ? hourlyPrecip / 4 : null;
 
       points.push({
-        t: ptDate, moisture: moisture, tempF: tempF, windMph: windMph,
+        t: new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000),
+        moisture: moisture, tempF: tempF, windMph: windMph,
         madNow: madPct, wiltNow: wiltPct, etDrain: 0,
-        rain: rainBar,
-        sprinkler: sprinklerBar,
+        rain: rainBar, sprinkler: null, // NO simulated sprinkler
         beneficialStress: moisture < madPct && moisture >= wiltPct,
         damageStress: moisture < wiltPct,
         isForecast: isForecast
       });
     }
-
-    // Update last known balance for next day
-    if (balPct !== null) lastBalPct = balPct;
+    if (bal) lastBalPct = (bal.balance_mm / bal.taw_mm) * 100;
   }
 
-  points.decisions = decisions;
+  points.decisions = []; // NO fabricated decisions
+  points.isRealData = true; // flag for buildChart
   return points;
 }
 
@@ -806,49 +723,79 @@ function generateBrainData(zoneId, days, year, actualWaterings) {
 // ═══════════════════════════════════
 // STATS + UI RENDERING
 // ═══════════════════════════════════
-function computeStats(data, MAD) {
-  var cycles = [], cur = null;
-  for (var i = 0; i < data.length; i++) {
-    if (data[i].sprinkler > 0) {
-      if (!cur) cur = { s: i, e: i };
-      else if (i - cur.e <= 8) cur.e = i;
-      else { cycles.push(cur); cur = { s: i, e: i }; }
+function computeStats(data, MAD, actualWaterings) {
+  // For real data mode: compute from actual watering events, not simulated sprinkler field
+  var cycles = [], cycleDays = 0, depthIn = 0;
+  var zone = getZoneBrainConfig(currentZoneId);
+
+  if (actualWaterings && actualWaterings.length > 0) {
+    // Group actual waterings into cycles (events within 2 hours = same cycle)
+    var sorted = actualWaterings.slice().sort(function(a,b) { return a.start_ts < b.start_ts ? -1 : 1; });
+    var curCycle = null;
+    sorted.forEach(function(w) {
+      if (!w.start_ts || !w.duration_sec || w.duration_sec <= 5) return;
+      var t = new Date(w.start_ts).getTime();
+      if (!curCycle) { curCycle = { start: t, end: t, totalSec: w.duration_sec }; }
+      else if (t - curCycle.end < 7200000) { curCycle.end = t; curCycle.totalSec += w.duration_sec; }
+      else { cycles.push(curCycle); curCycle = { start: t, end: t, totalSec: w.duration_sec }; }
+    });
+    if (curCycle) cycles.push(curCycle);
+
+    if (cycles.length > 1) {
+      var tot = 0;
+      for (var c = 1; c < cycles.length; c++) tot += (cycles[c].start - cycles[c-1].start) / 86400000;
+      cycleDays = tot / (cycles.length - 1);
     }
+    var totalDepthIn = 0;
+    cycles.forEach(function(cy) { totalDepthIn += zone.precipRate * (cy.totalSec / 3600); });
+    depthIn = cycles.length > 0 ? totalDepthIn / cycles.length : 0;
+  } else {
+    // Sim mode: count from data[].sprinkler
+    var cur = null;
+    for (var i = 0; i < data.length; i++) {
+      if (data[i].sprinkler > 0) {
+        if (!cur) cur = { s: i, e: i };
+        else if (i - cur.e <= 8) cur.e = i;
+        else { cycles.push(cur); cur = { s: i, e: i }; }
+      }
+    }
+    if (cur) cycles.push(cur);
+    if (cycles.length > 1) {
+      var tot2 = 0;
+      for (var c2 = 1; c2 < cycles.length; c2++) tot2 += (data[cycles[c2].s].t - data[cycles[c2-1].s].t) / 86400000;
+      cycleDays = tot2 / (cycles.length - 1);
+    }
+    var totSprPct = 0;
+    for (var j2 = 0; j2 < data.length; j2++) totSprPct += (data[j2].sprinkler || 0);
+    depthIn = cycles.length > 0 ? (totSprPct / 100 * zone.rootDepthIn / cycles.length) : 0;
   }
-  if (cur) cycles.push(cur);
 
-  var cycleDays = 0;
-  if (cycles.length > 1) {
-    var tot = 0;
-    for (var c = 1; c < cycles.length; c++) tot += (data[cycles[c].s].t - data[cycles[c-1].s].t) / 86400000;
-    cycleDays = tot / (cycles.length - 1);
-  }
-
-  var stressSteps = 0, deepStressSteps = 0, decSteps = 0, totSprPct = 0;
+  // Stress stats (same for both modes — from moisture line)
+  var stressSteps = 0, deepStressSteps = 0;
   for (var j = 0; j < data.length; j++) {
     if (data[j].beneficialStress) stressSteps++;
     if (data[j].damageStress) deepStressSteps++;
-    if (j > 0 && data[j].moisture < data[j-1].moisture) decSteps++;
-    totSprPct += (data[j].sprinkler || 0);
   }
-
-  var rootD = getZoneBrainConfig(currentZoneId).rootDepthIn;
-  var depthIn = cycles.length > 0 ? (totSprPct / 100 * rootD / cycles.length) : 0;
   var totalStressHrs = stressSteps * 0.25;
   var totalDeepStressHrs = deepStressSteps * 0.25;
   var stressPerCycle = cycles.length > 0 ? (totalStressHrs / cycles.length).toFixed(1) : '0.0';
   var deepStressPerCycle = cycles.length > 0 ? (totalDeepStressHrs / cycles.length).toFixed(1) : '0.0';
 
+  // Last watered / next estimate
   var lastWatered = '—', nextEst = '—';
-  for (var lw = data.length - 1; lw >= 0; lw--) {
-    if (data[lw].sprinkler > 0) {
-      var agoH = (Date.now() - data[lw].t.getTime()) / 3600000;
+  if (actualWaterings && actualWaterings.length > 0) {
+    var lastW = actualWaterings.reduce(function(a, b) { return a.start_ts > b.start_ts ? a : b; });
+    if (lastW && lastW.start_ts) {
+      var agoH = (Date.now() - new Date(lastW.start_ts).getTime()) / 3600000;
       lastWatered = agoH < 24 ? Math.round(agoH) + 'h ago' : (agoH / 24).toFixed(1) + 'd ago';
-      if (cycleDays > 0) {
-        var nextH = (data[lw].t.getTime() + cycleDays * 86400000 - Date.now()) / 3600000;
-        nextEst = nextH <= 0 ? 'overdue' : nextH < 24 ? Math.round(nextH) + 'h' : (nextH / 24).toFixed(1) + 'd';
+    }
+  } else {
+    for (var lw = data.length - 1; lw >= 0; lw--) {
+      if (data[lw].sprinkler > 0) {
+        var agoH2 = (Date.now() - data[lw].t.getTime()) / 3600000;
+        lastWatered = agoH2 < 24 ? Math.round(agoH2) + 'h ago' : (agoH2 / 24).toFixed(1) + 'd ago';
+        break;
       }
-      break;
     }
   }
 
@@ -861,7 +808,7 @@ function computeStats(data, MAD) {
   };
 }
 
-function renderUI(stats, MAD, decisions, zoneCfg) {
+function renderUI(stats, MAD, decisions, zoneCfg, actualWaterings) {
   var pct = parseFloat(stats.curMoisture);
   var dot = document.querySelector('#current-badge .dot');
   var badgeColor = pct > MAD + 10 ? '#22c55e' : pct > MAD ? '#f59e0b' : '#ef4444';
@@ -895,43 +842,59 @@ function renderUI(stats, MAD, decisions, zoneCfg) {
       '<div class="summary-line"><span class="summary-label">MAD trigger</span><span class="summary-val warn">' + z.madPct + '%</span></div>' +
     '</div>';
 
-  // Decision log
-  var icons = {
-    'water': '💧', 'water-emergency': '🚨', 'water-despite-rain': '⚠️',
-    'skip-wind': '💨', 'skip-rain': '🌧️', 'arm-preemptive': '🌡️',
-    'catch-up': '💧', 'skip-harden': '🌿'
-  };
+  // Decision log / event log
   var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var logHtml = '';
 
-  var typeCounts = {};
-  if (decisions) decisions.forEach(function(dec) { typeCounts[dec.type] = (typeCounts[dec.type]||0) + 1; });
+  if (actualWaterings && actualWaterings.length > 0) {
+    // Real data mode: show actual watering events from DB
+    logHtml = '<h3>💧 Watering History (' + actualWaterings.length + ' events)</h3>';
+    var sorted = actualWaterings.slice().sort(function(a,b) { return a.start_ts > b.start_ts ? -1 : 1; });
+    sorted.forEach(function(w) {
+      if (!w.start_ts || !w.duration_sec) return;
+      var d = new Date(w.start_ts);
+      var h = d.getHours() % 12 || 12;
+      var ap = d.getHours() >= 12 ? 'PM' : 'AM';
+      var dateStr = dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate();
+      var timeStr = h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+      var mins = Math.round(w.duration_sec / 60);
+      var inches = (z.precipRate * w.duration_sec / 3600).toFixed(2);
+      var reason = w.trigger_reason || '';
+      logHtml += '<div class="decision-entry"><span class="decision-icon">💧</span>' +
+        '<span class="decision-time">' + dateStr + '</span>' +
+        '<span class="decision-reason" style="color:#22c55e">' + timeStr + ' — ' + mins + ' min (' + inches + '") ' + reason + '</span></div>';
+    });
+  } else if (actualWaterings && actualWaterings.length === 0 && decisions.length === 0) {
+    // Real data mode, no watering events
+    logHtml = '<h3>💧 Watering History</h3>';
+    logHtml += '<div style="font-size:.75rem;color:#64748b">No watering events recorded for this zone</div>';
+  } else {
+    // Brain sim mode: show simulated decisions
+    var icons = {
+      'water': '💧', 'water-emergency': '🚨', 'water-despite-rain': '⚠️',
+      'skip-wind': '💨', 'skip-rain': '🌧️', 'arm-preemptive': '🌡️',
+      'catch-up': '💧', 'skip-harden': '🌿'
+    };
+    var typeCounts = {};
+    decisions.forEach(function(dec) { typeCounts[dec.type] = (typeCounts[dec.type]||0) + 1; });
+    var allTypes = ['water','catch-up','skip-rain','skip-wind','arm-preemptive','water-despite-rain','skip-harden','water-emergency'];
+    var badgeColorsMap = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#e2e8f0','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
 
-  var allTypes = ['water','catch-up','skip-rain','skip-wind','arm-preemptive','water-despite-rain','skip-harden','water-emergency'];
-  var badgeColors = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#e2e8f0','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
-
-  var logHtml = '<h3>🧠 Decision Log (' + (decisions ? decisions.length : 0) + ' decisions)</h3>';
-  logHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
-  allTypes.forEach(function(t) {
-    var cnt = typeCounts[t] || 0;
-    var col = badgeColors[t] || '#94a3b8';
-    logHtml += '<span style="font-size:.65rem;padding:2px 6px;border-radius:4px;background:' + col + '22;color:' + col + ';border:1px solid ' + col + '44">' + (icons[t]||'') + ' ' + t + ': ' + cnt + '</span>';
-  });
-  logHtml += '</div>';
-
-  if (decisions && decisions.length > 0) {
+    logHtml = '<h3>🧠 Sim Decision Log (' + decisions.length + ')</h3>';
+    logHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
+    allTypes.forEach(function(t) {
+      var cnt = typeCounts[t] || 0;
+      var col = badgeColorsMap[t] || '#94a3b8';
+      logHtml += '<span style="font-size:.65rem;padding:2px 6px;border-radius:4px;background:' + col + '22;color:' + col + ';border:1px solid ' + col + '44">' + (icons[t]||'') + ' ' + t + ': ' + cnt + '</span>';
+    });
+    logHtml += '</div>';
     decisions.forEach(function(dec) {
       var icon = icons[dec.type] || '📋';
-      // Use actual date from data if available
-      var dayLabel = 'Day ' + (dec.day + 1);
       logHtml += '<div class="decision-entry decision-type-' + dec.type + '">' +
-        '<span class="decision-icon">' + icon + '</span>' +
-        '<span class="decision-time">' + dayLabel + '</span>' +
-        '<span class="decision-reason">' + dec.reason + '</span>' +
-      '</div>';
+        '<span class="decision-icon">' + icon + '</span><span class="decision-time">Day ' + (dec.day + 1) + '</span>' +
+        '<span class="decision-reason">' + dec.reason + '</span></div>';
     });
-  } else {
-    logHtml += '<div style="font-size:.75rem;color:#64748b">No decisions recorded</div>';
   }
   document.getElementById('decision-log').innerHTML = logHtml;
 }
@@ -1008,22 +971,28 @@ var forecastZonePlugin = {
 // ═══════════════════════════════════
 // CHART BUILDER
 // ═══════════════════════════════════
-function buildChart(zoneId, days, data, actualWaterings) {
+function buildChart(zoneId, days, data, actualWaterings, liveData) {
   var zone = getZoneBrainConfig(zoneId);
   var MAD = zone.madPct;
+  var isReal = data.isRealData === true;
 
   // Show last N days (days param), but data contains full season
   var tMax = data[data.length - 1].t.getTime();
   var tMin = days < 999 ? tMax - days * 86400000 : data[0].t.getTime();
   if (tMin < data[0].t.getTime()) tMin = data[0].t.getTime();
 
-  // Filter data/decisions to visible window for stats
+  // Filter to visible window
   var visibleData = data.filter(function(p) { return p.t.getTime() >= tMin; });
+  var visibleActual = (actualWaterings || []).filter(function(w) {
+    return w.start_ts && new Date(w.start_ts).getTime() >= tMin;
+  });
   var visibleDecisions = (data.decisions || []).filter(function(d) {
     var pt = data[d.step]; return pt && pt.t.getTime() >= tMin;
   });
-  var stats = computeStats(visibleData, MAD);
-  renderUI(stats, MAD, visibleDecisions, zone);
+
+  // Stats: use actual watering events for real data, simulated sprinkler for brain sim
+  var stats = computeStats(visibleData, MAD, isReal ? visibleActual : null);
+  renderUI(stats, MAD, isReal ? [] : visibleDecisions, zone, isReal ? visibleActual : null);
 
   // Find forecast start for shading
   var forecastStart = null;
@@ -1073,15 +1042,22 @@ function buildChart(zoneId, days, data, actualWaterings) {
   var precipDatasets = [
     { label: '🌧️ Rain', data: rainBarData,
       backgroundColor: 'rgba(59,130,246,0.60)', borderColor: 'rgba(59,130,246,0.9)',
-      borderWidth: 1, barThickness: 5, maxBarThickness: 8 },
-    { label: '💧 Sim Sprinkler', data: sprinklerBarData,
-      backgroundColor: 'rgba(16,185,129,0.60)', borderColor: 'rgba(16,185,129,0.9)',
       borderWidth: 1, barThickness: 5, maxBarThickness: 8 }
   ];
+  // Only show simulated sprinkler bars for brain sim (historical years)
+  if (!isReal && sprinklerBarData.length > 0) {
+    precipDatasets.push({
+      label: '💧 Sim Sprinkler', data: sprinklerBarData,
+      backgroundColor: 'rgba(16,185,129,0.60)', borderColor: 'rgba(16,185,129,0.9)',
+      borderWidth: 1, barThickness: 5, maxBarThickness: 8
+    });
+  }
+  // Actual watering events from DB
   if (actualBarData.length > 0) {
     precipDatasets.push({
-      label: '▮ Actual Run', data: actualBarData,
-      backgroundColor: 'rgba(56,189,248,0.70)', borderColor: 'rgba(56,189,248,0.95)',
+      label: isReal ? '💧 Sprinkler' : '▮ Actual Run', data: actualBarData,
+      backgroundColor: isReal ? 'rgba(16,185,129,0.70)' : 'rgba(56,189,248,0.70)',
+      borderColor: isReal ? 'rgba(16,185,129,0.95)' : 'rgba(56,189,248,0.95)',
       borderWidth: 1, barThickness: 7, maxBarThickness: 10
     });
   }
@@ -1334,42 +1310,79 @@ function buildChart(zoneId, days, data, actualWaterings) {
   moistureChart._forecastStart = forecastStart;
 
   // Update "Next Watering" banner
-  updateNextWateringBanner(data);
+  updateNextWateringBanner(data, liveData);
 }
 
 // ═══════════════════════════════════
 // NEXT WATERING PREDICTION
 // ═══════════════════════════════════
-function updateNextWateringBanner(data) {
+function updateNextWateringBanner(data, liveData) {
   var banner = document.getElementById('next-water-banner');
   var now = Date.now();
-  // Find next watering decision in the future
-  var decs = data.decisions || [];
-  var nextDec = null;
-  for (var i = 0; i < decs.length; i++) {
-    var pt = data[decs[i].step];
-    if (pt && pt.t.getTime() > now && (decs[i].type === 'water' || decs[i].type === 'catch-up' || decs[i].type === 'water-despite-rain' || decs[i].type === 'water-emergency')) {
-      nextDec = { dec: decs[i], pt: pt };
-      break;
+
+  if (selectedYear === '2026' && data.isRealData) {
+    // Real data mode: estimate from current moisture and ET forecast
+    var lastMoisture = data.length > 0 ? data[data.length - 1].moisture : 50;
+    var madPct = data.length > 0 ? data[data.length - 1].madNow : 50;
+    var zone = getZoneBrainConfig(currentZoneId);
+
+    // Use forecast_7day from API if available
+    var forecast = (liveData && liveData.forecast_7day) || [];
+    if (forecast.length > 0 && lastMoisture > madPct) {
+      // Walk forward through forecast days, subtract ET, see when we hit MAD
+      var m = lastMoisture;
+      var rootD = zone.rootDepthIn;
+      var hitDay = null;
+      for (var fi = 0; fi < forecast.length; fi++) {
+        var dayEt0 = forecast[fi].et0 || 0; // inches
+        var dayRain = forecast[fi].rain || 0; // inches
+        var kc = 0.90;
+        var etPct = (dayEt0 * kc / rootD) * 100;
+        var rainPct = (dayRain * 0.65 / rootD) * 100; // 65% effectiveness
+        m = m - etPct + rainPct;
+        if (m <= madPct) { hitDay = fi; break; }
+      }
+      if (hitDay !== null) {
+        var estDate = new Date();
+        estDate.setDate(estDate.getDate() + hitDay);
+        estDate.setHours(4, 0, 0, 0); // 4 AM watering window
+        var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var hoursAway = (estDate.getTime() - now) / 3600000;
+        var timeStr = hoursAway < 1 ? 'now' : hoursAway < 24 ? hoursAway.toFixed(0) + ' hours' : (hoursAway / 24).toFixed(1) + ' days';
+
+        banner.style.display = 'flex';
+        document.getElementById('nw-value').textContent = dn[estDate.getDay()] + ' ' + mn[estDate.getMonth()] + ' ' + estDate.getDate() + ' ~4 AM';
+        document.getElementById('nw-value').style.color = hoursAway < 24 ? '#f59e0b' : '#22c55e';
+        document.getElementById('nw-detail').textContent = '~' + timeStr + ' · moisture ' + Math.round(lastMoisture) + '% → MAD ' + Math.round(madPct) + '% (ET forecast)';
+        return;
+      }
     }
-  }
-
-  if (nextDec && selectedYear === '2026') {
-    banner.style.display = 'flex';
-    var d = nextDec.pt.t;
-    var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    var hoursAway = (d.getTime() - now) / 3600000;
-    var timeStr;
-    if (hoursAway < 1) timeStr = Math.round(hoursAway * 60) + ' minutes';
-    else if (hoursAway < 24) timeStr = hoursAway.toFixed(1) + ' hours';
-    else timeStr = (hoursAway / 24).toFixed(1) + ' days';
-
-    var ap = d.getHours() >= 12 ? 'PM' : 'AM';
-    var hh = d.getHours() % 12 || 12;
-    document.getElementById('nw-value').textContent = dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ' at ' + hh + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
-    document.getElementById('nw-value').style.color = hoursAway < 24 ? '#f59e0b' : '#22c55e';
-    document.getElementById('nw-detail').textContent = '~' + timeStr + ' from now · ' + nextDec.dec.reason;
+    // If we can't estimate, hide the banner
+    banner.style.display = 'none';
+  } else if (selectedYear === '2026') {
+    // Brain sim mode: use decisions
+    var decs = data.decisions || [];
+    var nextDec = null;
+    for (var i = 0; i < decs.length; i++) {
+      var pt = data[decs[i].step];
+      if (pt && pt.t.getTime() > now && (decs[i].type === 'water' || decs[i].type === 'catch-up' || decs[i].type === 'water-despite-rain' || decs[i].type === 'water-emergency')) {
+        nextDec = { dec: decs[i], pt: pt }; break;
+      }
+    }
+    if (nextDec) {
+      banner.style.display = 'flex';
+      var d = nextDec.pt.t;
+      var dn2 = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      var mn2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      var hoursAway2 = (d.getTime() - now) / 3600000;
+      var timeStr2 = hoursAway2 < 1 ? Math.round(hoursAway2 * 60) + ' min' : hoursAway2 < 24 ? hoursAway2.toFixed(1) + ' hours' : (hoursAway2 / 24).toFixed(1) + ' days';
+      var ap = d.getHours() >= 12 ? 'PM' : 'AM';
+      var hh = d.getHours() % 12 || 12;
+      document.getElementById('nw-value').textContent = dn2[d.getDay()] + ' ' + mn2[d.getMonth()] + ' ' + d.getDate() + ' at ' + hh + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+      document.getElementById('nw-value').style.color = hoursAway2 < 24 ? '#f59e0b' : '#22c55e';
+      document.getElementById('nw-detail').textContent = '~' + timeStr2 + ' from now · ' + nextDec.dec.reason;
+    } else { banner.style.display = 'none'; }
   } else {
     banner.style.display = 'none';
   }
@@ -1416,7 +1429,7 @@ function refresh() {
       // 2026 = real DB data only, no simulation
       var data = generateRealData2026(currentZoneId, liveData);
       if (data) {
-        buildChart(currentZoneId, currentDays, data, liveData.waterings || []);
+        buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
       }
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;
@@ -1430,7 +1443,7 @@ function refresh() {
     fetchArchiveWeather(year).then(function() {
       loadMsg.style.display = 'none';
       var data = generateBrainData(currentZoneId, 9999, year);
-      if (data) buildChart(currentZoneId, currentDays, data, []);
+      if (data) buildChart(currentZoneId, currentDays, data, [], null);
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;
       console.error('Refresh error:', err);

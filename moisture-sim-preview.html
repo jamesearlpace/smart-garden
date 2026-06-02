@@ -340,12 +340,12 @@ function generateSimData(zoneIdx, days) {
     var sprinkler = 0;
     var decision = null;
 
-    // Arm logic: multiple factors
-    var shouldArm = !armed && !recovering && moisture <= madNow + 3;
+    // Arm logic: arm early enough to water BEFORE hitting MAD
+    var shouldArm = !armed && !recovering && moisture <= madNow + 8;
 
     // Pre-emptive arm: if tomorrow is forecast hot (>82°F) and we're below madNow+8
     var wxTomorrow = dailyWeather[di + 1] || wx;
-    if (!armed && !recovering && wxTomorrow.hi > 82 && moisture < madNow + 10 && h >= 18) {
+    if (!armed && !recovering && wxTomorrow.hi > 82 && moisture < madNow + 14 && h >= 18) {
       shouldArm = true;
       if (!armed) decision = { step: stepIdx, type: 'arm-preemptive', day: di,
         reason: 'Tomorrow forecast ' + wxTomorrow.hi.toFixed(0) + '°F — pre-watering to build buffer' };
@@ -378,22 +378,23 @@ function generateSimData(zoneIdx, days) {
           recovering = true;
           cycleTarget = madNow + 14 + rng() * 4;
           decision = { step: stepIdx, type: 'water-despite-rain', day: di,
-            reason: 'Rain forecast but moisture ' + moisture.toFixed(0) + '% too low to wait (' + madNow.toFixed(0) + '% MAD)' };
+            reason: 'Rain forecast but moisture ' + moisture.toFixed(0) + '% too low to skip (' + madNow.toFixed(0) + '% MAD)' };
         }
       }
       // Check 3: Beneficial stress not yet reached? (intentional delay for root growth)
-      else if (cumulativeStressHrs < 2 && moisture > madNow - 2 && (stepIdx - lastWateredStep) < 96 * 2) {
+      // Only delay if we still have plenty of buffer above wilt point
+      else if (cumulativeStressHrs < 1.5 && moisture > madNow && (stepIdx - lastWateredStep) < 96 * 3) {
         if (!decision) decision = { step: stepIdx, type: 'skip-stress-target', day: di,
-          reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress this cycle — letting roots grow deeper' };
+          reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress — soil at ' + moisture.toFixed(0) + '%, letting roots reach for water' };
         // Stay armed, let it stress a bit more
       }
       // All clear: water
       else {
         recovering = true;
         // Depth adapts to conditions: more on hot days, less on cool
-        var extraDepth = Math.max(0, (tempF - 70)) * 0.15;
-        cycleTarget = madNow + 12 + extraDepth + rng() * 4;
-        cycleTarget = Math.min(85, cycleTarget);
+        var extraDepth = Math.max(0, (tempF - 65)) * 0.12;
+        cycleTarget = madNow + 18 + extraDepth + rng() * 4;
+        cycleTarget = Math.min(90, cycleTarget);
         decision = { step: stepIdx, type: 'water', day: di,
           reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
                   tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };
@@ -470,8 +471,11 @@ function computeStats(data, MAD) {
 
   var depthIn = cycles.length > 0 ? (totSprPct / 100 * 6 / cycles.length) : 0;
   var dryDown = Math.round(decSteps / Math.max(data.length - 1, 1) * 100);
-  var stressHrs = stressSteps * 0.25;
-  var deepStressHrs = deepStressSteps * 0.25;
+  var totalStressHrs = stressSteps * 0.25;
+  var totalDeepStressHrs = deepStressSteps * 0.25;
+  // Per-cycle averages (more meaningful than totals)
+  var stressPerCycle = cycles.length > 0 ? (totalStressHrs / cycles.length).toFixed(1) : '0.0';
+  var deepStressPerCycle = cycles.length > 0 ? (totalDeepStressHrs / cycles.length).toFixed(1) : '0.0';
 
   // Last watered / next estimate
   var lastWatered = '—', nextEst = '—';
@@ -491,8 +495,8 @@ function computeStats(data, MAD) {
 
   return {
     cycleDays: cycleDays > 0 ? cycleDays.toFixed(1) : '—',
-    dryDown: dryDown, stressHrs: stressHrs.toFixed(1),
-    deepStressHrs: deepStressHrs.toFixed(1),
+    dryDown: dryDown, stressPerCycle: stressPerCycle,
+    deepStressPerCycle: deepStressPerCycle,
     depthIn: depthIn > 0 ? depthIn.toFixed(2) : '—',
     cycles: cycles.length, lastWatered: lastWatered, nextEst: nextEst,
     curMoisture: curMoisture.toFixed(1)
@@ -512,13 +516,14 @@ function renderUI(stats, MAD, decisions) {
   // Stat cards
   function cls(ok, warn) { return ok ? 'stat-good' : warn ? 'stat-warn' : 'stat-bad'; }
   var cd = parseFloat(stats.cycleDays);
-  var sh = parseFloat(stats.stressHrs);
+  var sh = parseFloat(stats.stressPerCycle);
+  var dsh = parseFloat(stats.deepStressPerCycle);
   var di = parseFloat(stats.depthIn);
 
   document.getElementById('stats-row').innerHTML =
     '<div class="stat"><div class="stat-value ' + cls(cd>=2&&cd<=4, cd>0) + '">' + stats.cycleDays + ' days</div><div class="stat-label">Avg Cycle Length</div><div class="stat-hint">Target: 2–4 days</div></div>' +
-    '<div class="stat"><div class="stat-value ' + cls(sh>=2&&sh<=8, sh<12) + '">' + stats.stressHrs + ' hrs</div><div class="stat-label">Beneficial Stress</div><div class="stat-hint">Sweet spot: 2–8 hrs</div></div>' +
-    '<div class="stat"><div class="stat-value ' + cls(parseFloat(stats.deepStressHrs)==0, parseFloat(stats.deepStressHrs)<=2) + '">' + stats.deepStressHrs + ' hrs</div><div class="stat-label">Deep Stress</div><div class="stat-hint">Target: 0 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(sh>=1&&sh<=4, sh<8) + '">' + stats.stressPerCycle + ' hrs</div><div class="stat-label">Stress / Cycle</div><div class="stat-hint">Sweet spot: 1–4 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(dsh==0, dsh<=1) + '">' + stats.deepStressPerCycle + ' hrs</div><div class="stat-label">Deep Stress / Cycle</div><div class="stat-hint">Target: 0 hrs</div></div>' +
     '<div class="stat"><div class="stat-value ' + cls(di>=0.4&&di<=0.8, di>0) + '">' + stats.depthIn + '"</div><div class="stat-label">Depth Per Cycle</div><div class="stat-hint">Target: 0.5–0.75"</div></div>';
 
   // Summary cards

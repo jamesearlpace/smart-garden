@@ -1144,7 +1144,7 @@ function generateRealData(zoneIdx, days, year) {
         avg5hi += wx.daily.temperature_2m_max[fd]; cnt5++;
       }
       avg5hi = cnt5 > 0 ? avg5hi / cnt5 : 999;
-      if (avg5hi > 80) canHarden = false; // too hot — heat is doing the hardening already
+      if (avg5hi > 85) canHarden = false; // too hot — heat is doing the hardening already
     }
     
     var hiTomorrow = (di + 1 < numDays) ? wx.daily.temperature_2m_max[di + 1] : hi;
@@ -1218,7 +1218,7 @@ function generateRealData(zoneIdx, days, year) {
         
         // Wind check: use today's FORECAST max wind, not 4 AM reading
         // Sprinklers run 30-60 min — if wind picks up by 7 AM, drift wastes water
-        if (maxWind > 10) {
+        if (maxWind >= 10) {
           decision = { step: globalStep, type: 'skip-wind', day: di,
             reason: 'Today max wind ' + Math.round(maxWind) + ' mph — drift risk' };
         } else {
@@ -1263,7 +1263,7 @@ function generateRealData(zoneIdx, days, year) {
             }
             
             // ── Hardening mode: periodic deep-stress cycle ──
-            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 5 && moisture > wiltNow + 8) {
+            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 8 && moisture > wiltNow + 8) {
               // Time for a hardening cycle — skip this watering on purpose
               inHardeningMode = true;
               decision = { step: globalStep, type: 'skip-harden', day: di,

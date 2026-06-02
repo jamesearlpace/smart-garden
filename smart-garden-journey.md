@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **System operational.** New ESP32 board deployed (old one fried by accidental short). WiFi modem sleep + CPU 160MHz. Eero moved closer for signal. Battery calibrated to Wanderer (13.2V). New MAC: `00:70:07:26:48:DC`.
-**Last Updated:** 2026-05-27
+**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Decisions driven by weather API. Water budget chart deployed. Precip rates calibrated per zone. Next: hourly moisture simulation chart.
+**Last Updated:** 2026-06-01
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -192,6 +192,67 @@ Before any "you can box it up" / "last flash" / "OTA will work" / "ship it" clai
 6. **Then** make the claim. Not before.
 
 This rule exists because I broke it 4 times in one session on 2026-04-21. See `/memories/mistake-ledger.md` M2 and [smart-garden#4](https://github.com/jamesearlpace/smart-garden/issues/4).
+
+---
+
+## Session Log: 2026-06-01 (ET₀-Only Mode + Water Budget Chart)
+
+### Switched to ET₀ water balance decisions (no soil sensors)
+
+**Problem:** Soil moisture sensors not connected. System was skipping all zones with "No valid soil sensor configured."
+
+**Fix:** Modified `evaluate_zone()` in `irrigation.py` to use the existing soil water balance model instead of sensor readings. Now the trigger is `balance_mm <= MAD` instead of `soil_pct < dry_trigger`.
+
+**Changes:**
+- Removed soil sensor checks (wet_target, dry_trigger) from decision chain
+- Added water balance lookup (`db.get_soil_balance(zone_id)`) at decision time
+- Removed "no valid soil sensor" skip in main loop
+- Runtime-based stop for active zones (not soil target)
+- Budget tightening uses balance vs MAD instead of soil_pct
+
+### Precipitation rate calibration
+
+Updated `precip_rate_iph` per zone with better estimates based on head count:
+
+| Zone | Name | Rate | Basis |
+|------|------|------|-------|
+| 0-1 | Front Yard A/B | 1.5 iph | 4 spray heads, compact |
+| 2-4,6 | Backyard/SE/SW | 1.3 iph | 4 spray heads, larger areas |
+| 5 | South | 1.0 iph | 3 spray heads |
+| 7-8 | Garden/Grapes | 0.4 iph | Drip emitters |
+
+All rates are **uncalibrated guesses** — editable in Settings → Zone Configuration → Precip Rate column. Adjust based on observed grass health over time.
+
+### Water Budget chart (deployed)
+
+New chart on History page showing daily gains vs losses:
+- Red bars (down): ET₀ × Kc evapotranspiration loss
+- Blue bars (up): Rain
+- Green bars (up): Irrigation from sprinklers
+- Orange line: Running soil water balance
+
+Best viewed on 7d or 30d time range (daily data, updates at 11 PM).
+
+### Water Meter Cam: live auto-refresh (deployed)
+
+Cam page auto-refreshes JPEG every 5s when visible, stops when you switch tabs. Flash toggle button. No gallery/auto-capture.
+
+### Next: Hourly Moisture Simulation Chart (planned, not built)
+
+**Goal:** A live chart on the Home page showing estimated soil moisture % dropping in real-time as ET₀ evaporates water, spiking up when rain falls or sprinklers run, with a clear "needs water" threshold line.
+
+**Key metrics to track:**
+- Moisture % (continuous line, updated every 5 min with prorated hourly ET₀)
+- Cycle length (days between waterings — target 2-4 days for PNW grass)
+- Dry-down ratio (% of cycle spent drying vs wet — target 50-70%)
+- Stress hours (time below MAD before water arrives — target < 6 hrs)
+
+**Implementation needs:**
+1. Hourly ET₀ proration (more drain midday, none at night)
+2. New DB table: `moisture_sim` with 5-min resolution data points
+3. Real-time rain and irrigation event integration
+4. Chart.js line chart with rain/irrigation event markers
+5. Cycle health summary card (avg cycle length, stress hours, dry-down ratio)
 
 ---
 

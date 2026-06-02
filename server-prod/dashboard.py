@@ -19,6 +19,7 @@ from flask import make_response, Response, Flask, render_template, request, json
 
 import database as db
 from irrigation import ESP32_MANUAL_TIMEOUT
+from cam_ocr import MeterReader
 
 
 def create_app(config, engine, weather, billing):
@@ -255,7 +256,7 @@ def create_app(config, engine, weather, billing):
     @app.before_request
     def check_auth():
         # Public routes
-        public = ("/login", "/auth/", "/favicon.ico", "/static/", "/api/cam/upload")
+        public = ("/login", "/auth/", "/favicon.ico", "/static/", "/api/cam/upload", "/api/cam/status")
         if any(request.path.startswith(p) for p in public) or request.path == "/login":
             return None
         # Check session cookie
@@ -1168,7 +1169,8 @@ def create_app(config, engine, weather, billing):
     CAM_URL = "http://192.168.0.160"
 
     # In-memory storage for latest pushed image
-    cam_state = {"image": None, "timestamp": None, "flash": False}
+    cam_state = {"image": None, "timestamp": None, "flash": False, "ocr_count": 0}
+    meter_reader = MeterReader()
 
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
@@ -1178,6 +1180,11 @@ def create_app(config, engine, weather, billing):
             return jsonify({"error": "No image data"}), 400
         cam_state["image"] = data
         cam_state["timestamp"] = datetime.now().isoformat()
+        cam_state["ocr_count"] += 1
+        # OCR paused — uncomment to re-enable
+        # if meter_reader.enabled and cam_state["ocr_count"] % 3 == 0:
+        #     from threading import Thread
+        #     Thread(target=meter_reader.process, args=(data,), daemon=True).start()
         return "OK", 200
 
     @app.route("/api/cam/latest")
@@ -1195,6 +1202,17 @@ def create_app(config, engine, weather, billing):
             "has_image": cam_state["image"] is not None,
             "timestamp": cam_state["timestamp"],
             "size": len(cam_state["image"]) if cam_state["image"] else 0,
+        })
+
+    @app.route("/api/cam/readings")
+    def cam_readings_api():
+        """Return OCR meter readings."""
+        limit = request.args.get("limit", 100, type=int)
+        return jsonify({
+            "readings": meter_reader.get_readings(limit),
+            "enabled": meter_reader.enabled,
+            "orientation": meter_reader.orientation,
+            "avg_rate": round(meter_reader.avg_rate, 4),
         })
 
     @app.route("/api/cam/capture")

@@ -1835,6 +1835,16 @@ a{color:var(--blue);text-decoration:none}
       <div style="font-weight:600;font-size:.8rem;margin-bottom:8px">🪣 Soil Water Balance (Zone 1) <span style="color:var(--text3);font-weight:400;font-size:.72rem">— balance vs. TAW &amp; MAD thresholds</span></div>
       <div style="height:160px"><canvas id="sh-chart-balance"></canvas></div>
     </div>
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px">💧 Water Budget (Zone 1) <span style="color:var(--text3);font-weight:400;font-size:.72rem">— daily gains vs. losses (mm)</span></div>
+      <div style="display:flex;gap:16px;font-size:.68rem;color:var(--text3);margin-bottom:6px;flex-wrap:wrap">
+        <span>🔴 <b>ET₀ loss</b> (evaporation)</span>
+        <span>🔵 <b>Rain</b> (free water)</span>
+        <span>🟢 <b>Irrigation</b> (sprinklers)</span>
+        <span>━━ <b>Balance</b> (running total)</span>
+      </div>
+      <div style="height:200px"><canvas id="sh-chart-water-budget"></canvas></div>
+    </div>
     <div class="card" style="padding:16px;margin-bottom:24px">
       <div style="font-weight:600;font-size:.8rem;margin-bottom:8px">⚠️ Sensor Fault Status <span style="color:var(--text3);font-weight:400;font-size:.72rem">— current fault state for each sensor</span></div>
       <div id="sh-fault-status" style="min-height:40px;font-size:.82rem;color:var(--text2)">Loading…</div>
@@ -2061,8 +2071,32 @@ a{color:var(--blue);text-decoration:none}
       <div style="margin-bottom:8px">
         <span id="cam-status" style="color:var(--green);font-size:.85rem">● Live — refreshing every 5s</span>
       </div>
-      <img id="cam-img" alt="Camera offline — are you on the home network?"
-           style="max-width:100%;border-radius:8px;border:2px solid var(--border)">
+      <img id="cam-img" alt="Waiting for first image..."
+           style="max-width:100%;border-radius:8px;border:2px solid var(--border);cursor:pointer"
+           onclick="window.open('/api/cam/latest?t='+Date.now(),'_blank')">
+      <div id="cam-ts" style="margin-top:6px;font-size:.78rem;color:var(--text2)"></div>
+    </div>
+
+    <div class="section-header" style="margin-top:20px"><h2>📊 Meter Readings</h2>
+      <span class="aside">
+        <span id="cam-ocr-status" style="font-size:.72rem;color:var(--text2)"></span>
+      </span>
+    </div>
+    <div class="card" style="max-height:500px;overflow-y:auto;padding:0">
+      <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+        <thead>
+          <tr style="text-align:left;border-bottom:2px solid var(--border);position:sticky;top:0;background:var(--bg)">
+            <th style="padding:8px 10px">Time</th>
+            <th style="padding:8px 10px">Reading</th>
+            <th style="padding:8px 10px">Δ</th>
+            <th style="padding:8px 10px">Conf</th>
+            <th style="padding:8px 10px">Raw OCR</th>
+          </tr>
+        </thead>
+        <tbody id="cam-readings-body">
+          <tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -3924,6 +3958,8 @@ function loadSensorHistory(hours) {
   loadCostChart('sh-chart-cost', '/api/daily-summary-history?hours=' + hours, hours);
   // Soil Water Balance
   loadBalanceChart('sh-chart-balance', '/api/balance-history?hours=' + hours + '&zone=0', hours);
+  // Water Budget — ET₀ loss vs rain vs irrigation breakdown
+  loadWaterBudgetChart('sh-chart-water-budget', '/api/balance-history?hours=' + hours + '&zone=0', hours);
   // Sensor Fault Status (not a time-series, just current state)
   loadFaultStatus();
   // System Telemetry
@@ -4351,6 +4387,57 @@ function loadBalanceChart(canvasId, url, hours) {
         scales:{
           x:shTimeAxis(hours),
           y:{display:true,ticks:{font:{size:9}},grid:{color:'#e5e7eb22'},title:{display:true,text:'mm',font:{size:8}}}
+        }
+      }
+    });
+  });
+}
+
+// Water Budget — stacked bar (gains vs losses) with balance line overlay
+function loadWaterBudgetChart(canvasId, url, hours) {
+  fetch(url).then(function(r){return r.json();}).then(function(data) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
+    if (!data.length) {
+      _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
+        type:'bar',data:{labels:['No balance data yet'],datasets:[{data:[0],backgroundColor:'#33415522'}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:true},y:{display:false}}}
+      });
+      return;
+    }
+    _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        datasets: [
+          {label:'ET loss (mm)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:-(r.etc_mm||0)};}),
+           backgroundColor:'#ef444488',stack:'budget',maxBarThickness:25,order:2},
+          {label:'Rain (mm)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.rain_mm||0};}),
+           backgroundColor:'#3b82f688',stack:'budget',maxBarThickness:25,order:2},
+          {label:'Irrigation (mm)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.irrigation_mm||0};}),
+           backgroundColor:'#22c55e88',stack:'budget',maxBarThickness:25,order:2},
+          {label:'Balance (mm)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.balance_mm};}),
+           type:'line',borderColor:'#f59e0b',backgroundColor:'transparent',
+           borderWidth:2,pointRadius:3,pointBackgroundColor:'#f59e0b',tension:0.3,order:1,yAxisID:'y'}
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{
+          legend:{display:true,position:'top',labels:{boxWidth:10,font:{size:8},padding:4}},
+          tooltip:{callbacks:{label:function(ctx){
+            var v = ctx.parsed.y;
+            return ctx.dataset.label + ': ' + (v >= 0 ? '+' : '') + v.toFixed(1) + 'mm';
+          }}}
+        },
+        scales:{
+          x:Object.assign({},shTimeAxis(hours),{stacked:true}),
+          y:{display:true,stacked:true,ticks:{font:{size:9}},grid:{color:'#e5e7eb22'},
+             title:{display:true,text:'mm',font:{size:8}}}
         }
       }
     });
@@ -5361,9 +5448,51 @@ function camRefresh() {
   var panel = document.getElementById('p-cam');
   if (!panel || !panel.classList.contains('active')) return;
   var img = document.getElementById('cam-img');
+  var ts = document.getElementById('cam-ts');
   var newImg = new Image();
-  newImg.onload = function() { img.src = newImg.src; };
-  newImg.src = '/api/cam/capture?t=' + Date.now();
+  newImg.onload = function() {
+    img.src = newImg.src;
+    ts.textContent = 'Last image: ' + new Date().toLocaleTimeString();
+  };
+  newImg.src = '/api/cam/latest?t=' + Date.now();
+  // Also refresh readings table
+  camLoadReadings();
+}
+
+function camLoadReadings() {
+  fetch('/api/cam/readings?limit=200').then(function(r){return r.json()}).then(function(d){
+    var tbody = document.getElementById('cam-readings-body');
+    var status = document.getElementById('cam-ocr-status');
+
+    if (!d.enabled) {
+      status.textContent = '\u26a0\ufe0f Set AZURE_VISION_ENDPOINT + AZURE_VISION_KEY on server';
+      status.style.color = 'var(--amber)';
+      return;
+    }
+
+    var orient = d.orientation || 'learning\u2026';
+    status.textContent = 'Orientation: ' + orient + ' | Avg \u0394: ' + (d.avg_rate || 0).toFixed(4);
+
+    if (!d.readings || !d.readings.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings\u2026</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = d.readings.map(function(r) {
+      var c = r.confidence === 'high' ? 'var(--green)' :
+              r.confidence === 'medium' ? 'var(--amber)' :
+              r.confidence === 'low' ? 'var(--red)' : 'var(--text2)';
+      var raw = r.raw_n || r.raw_f || r.error || '';
+      if (raw.length > 40) raw = raw.substring(0,40) + '\u2026';
+      return '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:4px 8px;white-space:nowrap">' + r.ts + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;font-weight:bold">' + r.reading + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace">' + r.delta + '</td>' +
+        '<td style="padding:4px 8px;color:' + c + '">' + r.confidence + '</td>' +
+        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + raw + '</td>' +
+        '</tr>';
+    }).join('');
+  }).catch(function(e){ console.error('Readings error:', e); });
 }
 
 // Start/stop live refresh when cam panel is shown/hidden

@@ -1268,9 +1268,10 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
               if (!items.length) return '';
               var d = new Date(items[0].parsed.x);
               var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
               var h = d.getHours() % 12 || 12;
               var ap = d.getHours() >= 12 ? 'PM' : 'AM';
-              return dn[d.getDay()] + ' ' + h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+              return dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
             },
             label: function(ctx) {
               if (ctx.parsed.y > 0.001) {

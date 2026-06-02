@@ -87,6 +87,48 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 
 ---
 
+## RCA: Auto-Watering Completely Broken (Bug #5)
+
+**Severity:** Critical — system was non-functional for auto-watering since code deployment.
+
+### Summary
+Every `run_cycle()` call (every 5 min, 24/7) crashed with `TypeError: list indices must be integers or slices, not NoneType` at line 671. The decision loop never reached zone evaluation. All 128 watering events in the DB were manual.
+
+### Root cause
+```python
+# BROKEN (deployed Jun 1 ~17:00):
+if sensor_idx is None:
+    pass                                          # ← no-op, falls through
+soil_readings[zone["id"]] = soil_list[None]["pct"]  # ← CRASH
+
+# PREVIOUS WORKING CODE (≤ May 27):
+if sensor_idx is None:
+    invalid_sensor_zones.add(zone["id"])
+    log.warning("Zone %d has no sensor; skipping", zone["id"])
+    continue                                      # ← skips to next zone
+```
+
+The refactor intended to enable water-balance mode for sensorless zones. The old 6-line block (warning + skip) was replaced with a 2-line comment + `pass`. But `pass` doesn't skip the next line — `soil_list[None]` still executes.
+
+### Timeline
+- **≤ May 27**: Working code — sensorless zones safely skipped with `continue` (but never auto-watered)
+- **Jun 1 17:06**: Refactored code deployed — `continue` replaced with `pass`
+- **Jun 1 17:07**: First crash. 213 consecutive crashes over 17.75 hours.
+- **Jun 2 10:39**: Fixed — `pass` → `continue`. First successful cycle immediately.
+
+### Why it wasn't caught
+1. No monitoring on `run_cycle` completion — APScheduler logged exceptions but no alert fired
+2. Manual watering still worked (bypasses `run_cycle`)
+3. Crash tracebacks buried in 17K-line log file
+4. No "last successful cycle" health metric
+
+### Preventive measures (implemented below)
+1. ✅ Added `=== Decision cycle complete ===` log line (was already there but unreachable due to crash)
+2. ✅ Added ntfy alert if run_cycle hasn't succeeded in >15 minutes
+3. ✅ Added `last_successful_cycle_ts` to system health
+
+---
+
 ## Calibration TODO
 
 - [ ] **Measure zone areas** — pace off or use Google Earth for each zone's coverage area

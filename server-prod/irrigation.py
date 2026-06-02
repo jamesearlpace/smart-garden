@@ -107,8 +107,11 @@ class IrrigationEngine:
         self.weather = weather
         self.billing = billing
 
-        # Active watering state: zone_id ΓåÆ {event_id, start_time}
+        # Active watering state: zone_id → {event_id, start_time}
         self._active = {}
+
+        # Cycle health tracking (for alerting on stuck/crashing cycles)
+        self._last_successful_cycle = None
 
         # Weather adjustment config (Zimmerman method)
         wa = config.get("weather_adjustment", {})
@@ -713,6 +716,7 @@ class IrrigationEngine:
             )
 
         log.info("=== Decision cycle complete ===")
+        self._last_successful_cycle = datetime.now()
         return actions
 
     def safety_check(self):
@@ -898,4 +902,5 @@ class IrrigationEngine:
             "forecast_7day": self.weather.get_7day_forecast(allow_fetch=allow_weather_fetch),
             "weather_scale": self.calculate_weather_scale(allow_weather_fetch=allow_weather_fetch),
             "soil_balances": db.get_all_balances(),
+            "last_successful_cycle": self._last_successful_cycle.isoformat() if self._last_successful_cycle else None,
         }

@@ -13,6 +13,7 @@ Subscribe to topic on phone: https://ntfy.sh/smart-garden-james
 
 import logging
 import time
+from datetime import datetime
 import requests
 import database as db
 
@@ -85,6 +86,7 @@ class AlertMonitor:
             self._check_sensor_faults()
             self._check_counter_deltas(status)
             self._check_chip_temp(status)
+            self._check_cycle_stale()
         except Exception as e:
             log.error("Alert check failed: %s", e)
 
@@ -230,6 +232,36 @@ class AlertMonitor:
                 f"chipTempC = {temp:.1f}C for 3 consecutive reads (threshold 85C). "
                 "Check enclosure ventilation or sun exposure.",
                 priority="high", tags="thermometer",
+            )
+
+    def _check_cycle_stale(self):
+        """Alert if run_cycle hasn't completed successfully in >15 minutes.
+
+        Prevents silent failures like the pass/continue bug (RCA 2026-06-02)
+        where the cycle crashed every 5 min for 17+ hours undetected.
+        """
+        last = getattr(self.engine, '_last_successful_cycle', None)
+        if last is None:
+            # Engine just started — give it 20 min to run first cycle
+            uptime = time.time() - self.config.get("_start_time", time.time())
+            if uptime < 1200:
+                return
+            if self._should_alert("cycle_stale"):
+                self._send(
+                    "🔴 Irrigation Cycle Never Completed",
+                    "run_cycle() has never completed successfully since server start. "
+                    "Check smart-garden.log for exceptions in the decision loop.",
+                    priority="urgent", tags="rotating_light",
+                )
+            return
+
+        age_min = (datetime.now() - last).total_seconds() / 60
+        if age_min > 15 and self._should_alert("cycle_stale"):
+            self._send(
+                "🔴 Irrigation Cycle Stale",
+                f"Last successful run_cycle was {int(age_min)} minutes ago. "
+                "The decision loop may be crashing. Check smart-garden.log.",
+                priority="urgent", tags="rotating_light",
             )
 
     def daily_digest(self):

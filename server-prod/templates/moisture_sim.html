@@ -151,16 +151,6 @@ h2 { margin: 0; font-size: 1.05rem; }
   <a href="/">← Dashboard</a> · <a href="/forecast">Forecast</a> · <b>Moisture Sim</b>
 </div>
 
-<!-- Next watering prediction banner -->
-<div class="next-water-banner" id="next-water-banner" style="display:none">
-  <span class="nw-icon">🌧️</span>
-  <div class="nw-main">
-    <div class="nw-title">Next Expected Watering</div>
-    <div class="nw-value" id="nw-value">—</div>
-    <div class="nw-detail" id="nw-detail"></div>
-  </div>
-</div>
-
 <div class="card">
   <div class="header-row">
     <h2>💧 Soil Moisture Simulation</h2>
@@ -170,6 +160,16 @@ h2 { margin: 0; font-size: 1.05rem; }
     </div>
   </div>
   <div class="subtitle">Checkbook moisture balance — ET₀ evaporation, rainfall, and irrigation (FAO-56)</div>
+
+  <!-- Next watering prediction banner (inside card so it's always visible) -->
+  <div class="next-water-banner" id="next-water-banner" style="display:none">
+    <span class="nw-icon">🌧️</span>
+    <div class="nw-main">
+      <div class="nw-title">Next Expected Watering</div>
+      <div class="nw-value" id="nw-value">—</div>
+      <div class="nw-detail" id="nw-detail"></div>
+    </div>
+  </div>
 
   <div class="controls">
     <select id="zone-select">

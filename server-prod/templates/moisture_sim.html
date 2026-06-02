@@ -1212,7 +1212,10 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
   if (actualWaterings && actualWaterings.length > 0) {
     actualWaterings.forEach(function(w) {
       if (w.duration_sec >= 60 && w.start_ts) {
-        var t = new Date(w.start_ts);
+        // Server stores local time as 'YYYY-MM-DDTHH:MM:SS' without timezone
+        // Parse manually to avoid UTC interpretation
+        var tp = w.start_ts.split(/[-T:]/);
+        var t = new Date(parseInt(tp[0]), parseInt(tp[1])-1, parseInt(tp[2]), parseInt(tp[3]||0), parseInt(tp[4]||0), parseInt(tp[5]||0));
         var precipRate = zone.precipRate;
         var inches = precipRate * (w.duration_sec / 3600);
         actualBarData.push({ x: t, y: inches, duration: w.duration_sec, reason: w.trigger_reason || '?' });

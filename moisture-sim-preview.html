@@ -363,41 +363,48 @@ function generateSimData(zoneIdx, days) {
         if (!decision) decision = { step: stepIdx, type: 'skip-wind', day: di,
           reason: 'Wind ' + windMph.toFixed(0) + ' mph — skipping to avoid drift (>10 mph threshold)' };
       }
-      // Check 2: Rain forecast today? (skip if rain coming within 12h)
-      else if (wx.rainTomorrow || (di + 1 < dailyWeather.length && dailyWeather[di].rainTomorrow)) {
-        var skipForRain = false;
+      // Check 2: Rain expected today or tomorrow?
+      // Look at: (a) yesterday's "rainTomorrow" flag (forecast), (b) actual rain events today/tomorrow
+      else {
+        var rainExpected = false;
+        var rainReason = '';
+        // Check forecast flag (set on previous day)
+        if (wx.rainTomorrow) { rainExpected = true; rainReason = 'tomorrow'; }
+        // Check if previous day flagged rain for today
+        if (di > 0 && dailyWeather[di - 1] && dailyWeather[di - 1].rainTomorrow) { rainExpected = true; rainReason = 'today (forecast)'; }
+        // Check actual rain events scheduled for today or tomorrow
         for (var rci = 0; rci < rainEvents.length; rci++) {
-          if (rainEvents[rci].day === di || rainEvents[rci].day === di + 1) skipForRain = true;
+          if (rainEvents[rci].day === di) { rainExpected = true; rainReason = 'today'; }
+          if (rainEvents[rci].day === di + 1) { rainExpected = true; rainReason = rainReason || 'tomorrow'; }
         }
-        if (skipForRain && moisture > madNow - 3) {
+
+        if (rainExpected && moisture > madNow - 3) {
           if (!decision) decision = { step: stepIdx, type: 'skip-rain', day: di,
-            reason: 'Rain forecast — holding off. Moisture ' + moisture.toFixed(0) + '% can wait.' };
+            reason: 'Rain expected ' + rainReason + ' — holding off. Moisture ' + moisture.toFixed(0) + '% can wait.' };
           // Stay armed
-        } else {
+        } else if (rainExpected && moisture <= madNow - 3) {
           // Rain coming but we're too dry to wait
           recovering = true;
           cycleTarget = madNow + 14 + rng() * 4;
           decision = { step: stepIdx, type: 'water-despite-rain', day: di,
-            reason: 'Rain forecast but moisture ' + moisture.toFixed(0) + '% too low to skip (' + madNow.toFixed(0) + '% MAD)' };
+            reason: 'Rain expected ' + rainReason + ' but moisture ' + moisture.toFixed(0) + '% too low to skip (' + madNow.toFixed(0) + '% MAD)' };
         }
-      }
-      // Check 3: Beneficial stress not yet reached? (intentional delay for root growth)
-      // Only delay if we still have plenty of buffer above wilt point
-      else if (cumulativeStressHrs < 1 && moisture > madNow + 1 && (stepIdx - lastWateredStep) < 96 * 3) {
-        if (!decision) decision = { step: stepIdx, type: 'skip-stress-target', day: di,
-          reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress — soil at ' + moisture.toFixed(0) + '%, letting roots reach for water' };
-        // Stay armed, let it stress a bit more
-      }
-      // All clear: water
-      else {
-        recovering = true;
-        // Depth adapts to conditions: more on hot days, less on cool
-        var extraDepth = Math.max(0, (tempF - 65)) * 0.08;
-        cycleTarget = madNow + 15 + extraDepth + rng() * 3;
-        cycleTarget = Math.min(85, cycleTarget);
-        decision = { step: stepIdx, type: 'water', day: di,
-          reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
-                  tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };
+        // No rain expected — continue to stress/water checks
+        // Check 3: Beneficial stress not yet reached? (intentional delay for root growth)
+        else if (!rainExpected && cumulativeStressHrs < 1 && moisture > madNow + 1 && (stepIdx - lastWateredStep) < 96 * 3) {
+          if (!decision) decision = { step: stepIdx, type: 'skip-stress-target', day: di,
+            reason: 'Only ' + cumulativeStressHrs.toFixed(1) + 'h stress — soil at ' + moisture.toFixed(0) + '%, letting roots reach for water' };
+        }
+        // All clear: water
+        else if (!rainExpected) {
+          recovering = true;
+          var extraDepth = Math.max(0, (tempF - 65)) * 0.08;
+          cycleTarget = madNow + 15 + extraDepth + rng() * 3;
+          cycleTarget = Math.min(85, cycleTarget);
+          decision = { step: stepIdx, type: 'water', day: di,
+            reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
+                    tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };
+        }
       }
     }
 

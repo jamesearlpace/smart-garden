@@ -334,6 +334,202 @@ function fetchLiveData(zoneId) {
 }
 
 // ═══════════════════════════════════
+// 2026 REAL DATA (no simulation)
+// ═══════════════════════════════════
+function generateRealData2026(zoneId, liveData) {
+  // Build chart data from DB soil_balance + Open-Meteo weather + actual watering events.
+  // NO brain simulation. What the DB says is what you see.
+  var wx = weatherCache['2026'];
+  if (!wx) return null;
+
+  var zone = getZoneBrainConfig(zoneId);
+  var balances = liveData.balances || [];
+  var waterings = liveData.waterings || [];
+  if (balances.length === 0) return null;
+
+  // Build a date→balance lookup
+  var balMap = {};
+  balances.forEach(function(b) { balMap[b.date] = b; });
+
+  // Build a date→watering lookup (total irrigation_mm per day)
+  var waterMap = {};
+  waterings.forEach(function(w) {
+    if (!w.start_ts || !w.duration_sec || w.duration_sec <= 0) return;
+    var day = w.start_ts.slice(0, 10);
+    if (!waterMap[day]) waterMap[day] = [];
+    waterMap[day].push(w);
+  });
+
+  var points = [], decisions = [];
+
+  // Walk through weather days, use DB balance where available
+  var numDays = wx.daily.time.length;
+  var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
+
+  // Track last known balance for interpolation within a day
+  var lastBalPct = 70; // default start
+
+  for (var di = 0; di < numDays; di++) {
+    var dateStr = wx.daily.time[di];
+    var hi = wx.daily.temperature_2m_max[di];
+    var lo = wx.daily.temperature_2m_min[di];
+    var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
+    var maxWind = wx.daily.wind_speed_10m_max[di] || 0;
+    var month = parseInt(dateStr.split('-')[1]);
+    var rootDepth = ({ 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 })[month] || zone.rootDepthIn;
+    var isForecast = wx.isForecast && wx.isForecast.indexOf(di) >= 0;
+
+    // Get DB balance for this day (end-of-day value)
+    var bal = balMap[dateStr];
+    var balPct = bal ? (bal.balance_mm / bal.taw_mm * 100) : null;
+    var tawMm = bal ? bal.taw_mm : 22.86;
+    var madMm = bal ? bal.mad_mm : tawMm * 0.5;
+    var madPct = madMm / tawMm * 100;
+    var wiltPct = Math.max(15, madPct - 15);
+    var etcMm = bal ? bal.etc_mm : 0;
+    var rainMm = bal ? bal.rain_mm : 0;
+    var irrigMm = bal ? bal.irrigation_mm : 0;
+
+    // Get previous day's balance for start-of-day
+    var prevDateStr = di > 0 ? wx.daily.time[di - 1] : null;
+    var prevBal = prevDateStr ? balMap[prevDateStr] : null;
+    var startPct = prevBal ? (prevBal.balance_mm / prevBal.taw_mm * 100) : lastBalPct;
+    var endPct = balPct !== null ? balPct : startPct;
+
+    // Daily rain from Open-Meteo hourly (for bar chart granularity)
+    var dailyRainIn = wx.daily.precipitation_sum[di] || 0;
+
+    // Actual watering events for this day
+    var dayWaterings = waterMap[dateStr] || [];
+    var totalIrrigSec = 0;
+    dayWaterings.forEach(function(w) { totalIrrigSec += w.duration_sec; });
+    var irrigIn = zone.precipRate * (totalIrrigSec / 3600);
+
+    // Log decisions based on what actually happened
+    if (irrigMm > 0.5 || totalIrrigSec > 60) {
+      decisions.push({ step: di * 96 + 16, type: 'water', day: di,
+        reason: 'Actual: ' + Math.round(totalIrrigSec / 60) + ' min, ' + (irrigMm / 25.4).toFixed(2) + '" applied' });
+    }
+    if (dailyRainIn >= 0.20 && irrigMm < 0.5) {
+      decisions.push({ step: di * 96 + 32, type: 'skip-rain', day: di,
+        reason: 'Rain ' + dailyRainIn.toFixed(2) + '" — no irrigation' });
+    }
+
+    // Interpolate moisture through the day (96 steps = 15-min intervals)
+    // ET follows a sine curve during daylight, rain/irrigation happen at recorded times
+    for (var step = 0; step < 96; step++) {
+      var h = Math.floor(step / 4);
+      var m = (step % 4) * 15;
+      var globalStep = di * 96 + step;
+
+      // Temperature from hourly data
+      var hrIdx = di * 24 + h;
+      var tempF = (hrIdx < wx.hourly.temperature_2m.length) ? wx.hourly.temperature_2m[hrIdx] : (hi + lo) / 2;
+      var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
+
+      // Interpolate moisture within the day
+      // Morning: start at previous day's closing balance
+      // During day: ET draws down with sine curve
+      // Rain/irrigation: applied at recorded times or spread proportionally
+      var dayFrac = step / 96;
+      var moisture;
+      if (balPct !== null) {
+        // We have DB data: interpolate from start to end using ET curve shape
+        var etFrac = 0; // fraction of daily ET consumed by this point
+        if (h >= 6 && h <= 20) {
+          // Integrate sine from 6AM to current hour
+          var t1 = Math.max(0, (h + m/60 - 6));
+          var period = 14;
+          etFrac = (1 - Math.cos(t1 / period * Math.PI)) / 2;
+        } else if (h > 20) {
+          etFrac = 1;
+        }
+
+        // Daily moisture change = endPct - startPct (includes ET, rain, irrigation)
+        // ET portion drawn during daylight, gains applied when they happened
+        var etDailyPct = (etcMm / tawMm) * 100;
+        var rainDailyPct = (rainMm / tawMm) * 100;
+        var irrigDailyPct = (irrigMm / tawMm) * 100;
+
+        // Start with morning balance, subtract ET curve, add rain/irrigation
+        moisture = startPct - etDailyPct * etFrac;
+
+        // Add rain proportionally through the day (from hourly data)
+        var rainSoFar = 0;
+        for (var rhi = di * 24; rhi < di * 24 + h; rhi++) {
+          if (rhi < wx.hourly.precipitation.length) {
+            rainSoFar += (wx.hourly.precipitation[rhi] || 0);
+          }
+        }
+        var totalHourlyRain = 0;
+        for (var rha = di * 24; rha < di * 24 + 24; rha++) {
+          if (rha < wx.hourly.precipitation.length) {
+            totalHourlyRain += (wx.hourly.precipitation[rha] || 0);
+          }
+        }
+        if (totalHourlyRain > 0) {
+          moisture += rainDailyPct * (rainSoFar / totalHourlyRain);
+        }
+
+        // Add irrigation (assume it happens 4-6AM)
+        if (irrigDailyPct > 0 && h >= 6) {
+          moisture += irrigDailyPct;
+        } else if (irrigDailyPct > 0 && h >= 4) {
+          moisture += irrigDailyPct * ((h - 4) / 2);
+        }
+
+        moisture = Math.max(0, Math.min(100, moisture));
+      } else {
+        // No DB data (forecast days): use last known balance with ET decay
+        var kc = (month >= 3 && month <= 11) ? 0.90 : 0.40;
+        var etPctDay = (et0_in / rootDepth) * 100 * kc;
+        var etSoFar = 0;
+        if (h >= 6 && h <= 20) {
+          var t2 = (h + m/60 - 6);
+          etSoFar = etPctDay * (1 - Math.cos(t2 / 14 * Math.PI)) / 2;
+        } else if (h > 20) {
+          etSoFar = etPctDay;
+        }
+        moisture = Math.max(0, Math.min(100, lastBalPct - etSoFar));
+      }
+
+      // Rain for bar chart (from hourly weather)
+      var hourlyPrecip = (hrIdx < wx.hourly.precipitation.length) ? wx.hourly.precipitation[hrIdx] : 0;
+      var rainBar = hourlyPrecip > 0.005 ? hourlyPrecip / 4 : null; // spread hour across 4 steps
+
+      // Sprinkler bar (from actual events only)
+      var sprinklerBar = null;
+      dayWaterings.forEach(function(w) {
+        var wStart = new Date(w.start_ts);
+        var wEnd = new Date(wStart.getTime() + w.duration_sec * 1000);
+        var stepTime = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
+        if (stepTime >= wStart && stepTime < wEnd) {
+          sprinklerBar = (zone.precipRate / 4); // inches per 15-min step
+        }
+      });
+
+      var ptDate = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
+
+      points.push({
+        t: ptDate, moisture: moisture, tempF: tempF, windMph: windMph,
+        madNow: madPct, wiltNow: wiltPct, etDrain: 0,
+        rain: rainBar,
+        sprinkler: sprinklerBar,
+        beneficialStress: moisture < madPct && moisture >= wiltPct,
+        damageStress: moisture < wiltPct,
+        isForecast: isForecast
+      });
+    }
+
+    // Update last known balance for next day
+    if (balPct !== null) lastBalPct = balPct;
+  }
+
+  points.decisions = decisions;
+  return points;
+}
+
+// ═══════════════════════════════════
 // IRRIGATION BRAIN (FAO-56 audited)
 // ═══════════════════════════════════
 function generateBrainData(zoneId, days, year, actualWaterings) {
@@ -1217,7 +1413,8 @@ function refresh() {
     ]).then(function(results) {
       loadMsg.style.display = 'none';
       var liveData = results[1];
-      var data = generateBrainData(currentZoneId, 9999, '2026', liveData.waterings || []);
+      // 2026 = real DB data only, no simulation
+      var data = generateRealData2026(currentZoneId, liveData);
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || []);
       }

@@ -1129,8 +1129,11 @@ function generateRealData(zoneIdx, days, year) {
     var lo = wx.daily.temperature_2m_min[di];
     var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
     var maxWind = wx.daily.wind_speed_10m_max[di] || 0;
-    var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) > 0.02);
-    var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) > 0.02);
+    // Rain forecast flags — only skip for meaningful rain (>=0.20")
+    // PNW drizzle (<0.10") doesn't penetrate thatch layer
+    var RAIN_SKIP_THRESHOLD = 0.20; // inches — golf course standard for PNW
+    var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) >= RAIN_SKIP_THRESHOLD);
+    var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) >= RAIN_SKIP_THRESHOLD);
     var month = parseInt(wx.daily.time[di].split('-')[1]);
     var kc = (month >= 3 && month <= 11) ? KC_ACTIVE : KC_DORMANT;
     var rootDepth = rootDepthSchedule[month] || zone.rootDepthIn;
@@ -1225,7 +1228,7 @@ function generateRealData(zoneIdx, days, year) {
           var rainExpected = false;
           if (rainTomorrow) rainExpected = true;
           if (prevRainTomorrow) rainExpected = true;
-          if ((wx.daily.precipitation_sum[di] || 0) > 0.05) rainExpected = true;
+          if ((wx.daily.precipitation_sum[di] || 0) >= RAIN_SKIP_THRESHOLD) rainExpected = true;
           for (var rci = 0; rci < rainEvents.length; rci++) {
             if (rainEvents[rci].day === di || rainEvents[rci].day === di + 1) rainExpected = true;
           }

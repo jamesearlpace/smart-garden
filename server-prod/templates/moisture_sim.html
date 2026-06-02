@@ -1470,9 +1470,6 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
 
   // Store forecast start for plugin
   moistureChart._forecastStart = forecastStart;
-
-  // Update "Next Watering" banner
-  updateNextWateringBanner(data, liveData);
 }
 
 // ═══════════════════════════════════
@@ -1623,6 +1620,7 @@ function refresh() {
       var data = generateRealData2026(currentZoneId, liveData);
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
+        updateNextWateringBanner(data, liveData);
       }
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;
@@ -1636,7 +1634,10 @@ function refresh() {
     fetchArchiveWeather(year).then(function() {
       loadMsg.style.display = 'none';
       var data = generateBrainData(currentZoneId, 9999, year);
-      if (data) buildChart(currentZoneId, currentDays, data, [], null);
+      if (data) {
+        buildChart(currentZoneId, currentDays, data, [], null);
+        document.getElementById('next-water-banner').style.display = 'none';
+      }
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;
       console.error('Refresh error:', err);

@@ -294,12 +294,38 @@ h2 { margin: 0; font-size: 1.05rem; }
 // CONFIG & STATE
 // ═══════════════════════════════════
 var ZONES = {{ zones | tojson }};
-var currentZoneId = ZONES.length > 0 ? ZONES[0].id : 0;
-var currentDays = 153;
-var selectedYear = '2026';
+
+// Restore filters from URL hash (e.g. #zone=6&days=30&year=2026)
+function parseHash() {
+  var h = {};
+  location.hash.replace('#','').split('&').forEach(function(p) {
+    var kv = p.split('='); if (kv.length === 2) h[kv[0]] = kv[1];
+  });
+  return h;
+}
+function saveHash() {
+  location.hash = 'zone=' + currentZoneId + '&days=' + currentDays + '&year=' + selectedYear;
+}
+var hashParams = parseHash();
+
+var currentZoneId = hashParams.zone ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
+var currentDays = hashParams.days ? parseInt(hashParams.days) : 9999;
+var selectedYear = hashParams.year || '2026';
 var weatherCache = {};
 var liveDataCache = {};
 var precipChart = null, moistureChart = null;
+
+// Set UI controls to match restored state
+document.addEventListener('DOMContentLoaded', function() {
+  var zoneSelect = document.getElementById('zone-select');
+  if (zoneSelect) zoneSelect.value = currentZoneId;
+  var yearSelect = document.getElementById('year-select');
+  if (yearSelect) yearSelect.value = selectedYear;
+  document.querySelectorAll('#range-btns button').forEach(function(btn) {
+    btn.classList.remove('active');
+    if (parseInt(btn.dataset.days) === currentDays) btn.classList.add('active');
+  });
+});
 
 // Map zone config from server to the format the brain expects
 function getZoneBrainConfig(zoneId) {
@@ -1615,7 +1641,8 @@ function updateNextWateringBanner(data, liveData) {
 // ═══════════════════════════════════
 document.getElementById('zone-select').addEventListener('change', function() {
   currentZoneId = parseInt(this.value);
-  liveDataCache = {}; // clear live cache on zone change
+  liveDataCache = {};
+  saveHash();
   refresh();
 });
 document.querySelectorAll('#range-btns button').forEach(function(btn) {
@@ -1623,11 +1650,13 @@ document.querySelectorAll('#range-btns button').forEach(function(btn) {
     document.querySelectorAll('#range-btns button').forEach(function(b) { b.classList.remove('active'); });
     btn.classList.add('active');
     currentDays = parseInt(btn.dataset.days);
+    saveHash();
     refresh();
   });
 });
 document.getElementById('year-select').addEventListener('change', function() {
   selectedYear = this.value;
+  saveHash();
   refresh();
 });
 document.getElementById('btn-reset-zoom').addEventListener('click', function() {

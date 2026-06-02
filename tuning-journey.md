@@ -88,7 +88,17 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 | 16 | Current moisture badge reads end of forecast | ALL | Badge shows 76.9% when actual moisture is ~36% | `curMoisture` in `computeStats` used `data[data.length - 1]` which is the last point of the 7-day forecast after predicted watering cycles have been applied, not the actual current moisture | ✅ Fixed: walks backward from end to find last non-forecast point |
 | 17 | No "Next Watering" banner when moisture already below MAD | 6 | Zone at 43% (below MAD 50%), server logging "will water at next window", but no banner shown | `updateNextWateringBanner` had `if (lastMoisture > madPct)` — only showed banner when moisture was ABOVE MAD (estimating future crossing). When already below MAD, the condition was false and banner was hidden. | ✅ Fixed: added `if (lastMoisture <= madPct)` branch that shows "needs water now — next 4 AM window" |
 | 18 | Stress stats misleading when 0 watering cycles | 6,7,8 | Shows "0.0 hrs Stress/Cycle" even though zone has real stress | `stressHours / cycles.length` — with 0 cycles, the ternary returned `'0.0'`. There IS stress (zone is below MAD for days), it just can't be expressed per-cycle because there are no cycles. | ✅ Fixed: when cycles=0, shows total stress hours instead of per-cycle (e.g. "142 total") or "—" if no stress at all |
-| 19 | Depth stat shows "—"" (em-dash + quote) | ALL | Visual artifact when no watering data | `computeStats` returns `'—'` for depthIn, stat card HTML appends `"` for inches unit → displays as `—"` | Cosmetic — acceptable for now. Would fix by suppressing the unit when value is "—" |
+| 19 | Depth stat shows "—"" (em-dash + quote) | ALL | Visual artifact when no watering data | `computeStats` returns `'—'` for depthIn, stat card HTML unconditionally appends `"` for inches unit → displays as `—"` | ✅ Fixed: suppress `"` when value is "—" |
+
+### Verified Correct (not bugs)
+
+| Item | Value Shown | Why It's Correct |
+|------|-------------|-----------------|
+| Badge 43.2% | Zone 6 balance 9.87mm / 22.86mm TAW | = 43.2%. Reads last non-forecast data point. ✅ |
+| "— days" cycle length | No watering cycles | Zone has 0 real watering events > 60s. Only two 1s and 6s valve test blips. ✅ |
+| "10 total hrs" stress | Below MAD since Jun 1 afternoon | ~1.5 days × ~7 daytime hrs ≈ 10 hrs beneficial stress. Filter correctly starts from May 26 (first time > MAD). ✅ |
+| "0 total hrs" deep stress | Never below 35% since May 26 | Moisture dropped from 100% → 43.2% but stress limit is 35%. Never reached. ✅ |
+| Forecast predicted watering | Green bars + moisture recovery | Zone at 43% < MAD 50% → predicts watering at next 4 AM window, then daily ET decay + periodic re-watering. ✅ |
 
 ### Resolved
 

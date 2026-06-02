@@ -74,7 +74,7 @@ The current precip rates imply ~250-300 sq ft per zone. James says the east zone
 | 2 | Zone 6 (SW) balance at 43% but no auto-watering | 6 | Server predicts 0.6 days until water but nothing fires | Irrigation engine may not be triggering cycles automatically yet — all runs are manual | Check `irrigation.py` auto-watering logic |
 | 3 | Zone 7/8 never watered | 7,8 | No watering events in DB for garden/grapes | Evening window (8-10 PM) for zone 7 only; zone 8 not in any window | Add zone 8 to evening window or create separate schedule |
 | 4 | Kc values in config are old seasonal schedule | all spray | Config has `kc: [0.6, 0.75, 0.8, 0.65]` per zone | Pre-audit values — should be 0.90 constant for active turf | Update via tuning panel or bulk config update |
-| 5 | `irrigation.py:671` TypeError on run_cycle | — | `list indices must be integers or slices, not NoneType` | sensor_idx is None for zones without soil sensors | Pre-existing; not blocking scheduling |
+| 5 | `irrigation.py:671` TypeError on run_cycle | ALL | No auto-watering ever fires, all events are manual | `pass` instead of `continue` — sensor_idx=None falls through to array indexing | ✅ Fixed 2026-06-02: `pass` → `continue` |
 
 ### Resolved
 

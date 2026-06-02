@@ -150,6 +150,7 @@
     <span class="legend-item"><span style="color:#94a3b8; font-size:12px">◆</span> <b>Wind Skip</b></span>
     <span class="legend-item"><span style="color:#f59e0b; font-size:12px">■</span> <b>Stress Delay</b></span>
     <span class="legend-item"><span style="color:#fb923c; font-size:12px">★</span> <b>Pre-emptive</b></span>
+    <span class="legend-item"><span style="color:#8b5cf6; font-size:12px">▲</span> <b>Hardening</b></span>
     <span class="legend-item"><span style="color:#ef4444; font-size:12px">✕</span> <b>Emergency</b></span>
   </div>
 
@@ -795,7 +796,8 @@ function buildChart(zoneIdx, days, precomputedData) {
   var decisionMarkers = {
     water: [], 'skip-rain': [], 'skip-wind': [], 'skip-stress': [],
     'skip-stress-target': [], 'arm-preemptive': [],
-    'water-despite-rain': [], 'water-emergency': []
+    'water-despite-rain': [], 'water-emergency': [],
+    'skip-harden': []
   };
   var decs = data.decisions || [];
   decs.forEach(function(dec) {
@@ -816,6 +818,7 @@ function buildChart(zoneIdx, days, precomputedData) {
     'arm-preemptive':     { color: '#fb923c', shape: 'star',     size: 8, label: '🌡️ Pre-emptive' },
     'water-despite-rain': { color: '#a78bfa', shape: 'circle',   size: 7, label: '⚠️ Water (rain)' },
     'water-emergency':    { color: '#ef4444', shape: 'crossRot', size: 9, label: '🚨 Emergency' },
+    'skip-harden':        { color: '#8b5cf6', shape: 'triangle', size: 8, label: '🌿 Hardening' },
   };
   Object.keys(markerConfig).forEach(function(type) {
     var pts = decisionMarkers[type];
@@ -1036,6 +1039,15 @@ function generateRealData(zoneIdx, days, year) {
   var cumulativeStressHrs = 0, lastWateredStep = -999;
   var decidedToday = false;
   
+  // Rain catch-up tracking
+  var skippedForRainDay = -1;       // day we last skipped for rain
+  var moistureAtRainSkip = 0;       // moisture when we skipped
+  
+  // Hardening mode: every 3 weeks, allow one full stress cycle for root growth
+  var lastHardenDay = -21;          // pretend last hardening was 3 weeks before start
+  var HARDEN_INTERVAL = 21;         // days between hardening cycles
+  var inHardeningMode = false;      // currently in a hardening skip
+  
   // Parse dates for display
   var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
   
@@ -1129,6 +1141,8 @@ function generateRealData(zoneIdx, days, year) {
           }
           
           if (rainExpected && moisture > madNow - 3) {
+            skippedForRainDay = di;
+            moistureAtRainSkip = moisture;
             decision = { step: globalStep, type: 'skip-rain', day: di,
               reason: 'Rain expected, moisture ' + Math.round(moisture) + '% can wait' };
           } else if (rainExpected && moisture <= madNow - 3) {
@@ -1137,12 +1151,54 @@ function generateRealData(zoneIdx, days, year) {
             decision = { step: globalStep, type: 'water-despite-rain', day: di,
               reason: 'Too dry (' + Math.round(moisture) + '%) to wait for rain' };
           } else if (!rainExpected) {
-            recovering = true;
-            var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
-            var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
-            cycleTarget = Math.min(80, madNow + 20 + recoverExtra);
-            decision = { step: globalStep, type: 'water', day: di,
-              reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc };
+            // ── Rain catch-up: did yesterday's rain skip pay off? ──
+            var catchUpNeeded = false;
+            if (skippedForRainDay >= 0 && di - skippedForRainDay <= 2) {
+              // We skipped recently — did rain actually help?
+              var rainSinceSkip = 0;
+              for (var rk = skippedForRainDay; rk <= di; rk++) {
+                rainSinceSkip += (wx.daily.precipitation_sum[rk] || 0);
+              }
+              var expectedGain = (rainSinceSkip * 0.75 / zone.rootDepthIn) * 100; // effective rain as %
+              if (expectedGain < 3) {
+                // Rain was a bust — less than 3% moisture gain. Catch up now.
+                catchUpNeeded = true;
+                decision = { step: globalStep, type: 'water', day: di,
+                  reason: 'CATCH-UP: Rain skip day ' + (skippedForRainDay+1) + ' only delivered ' + rainSinceSkip.toFixed(2) + '" (' + expectedGain.toFixed(0) + '%) — compensating. ' + Math.round(moisture) + '% → ' };
+              }
+              skippedForRainDay = -1; // reset
+            }
+            
+            // ── Hardening mode: periodic deep-stress cycle ──
+            if (!catchUpNeeded && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 5 && moisture > wiltNow + 8) {
+              // Time for a hardening cycle — skip this watering on purpose
+              inHardeningMode = true;
+              decision = { step: globalStep, type: 'skip-harden', day: di,
+                reason: 'HARDENING: ' + (di - lastHardenDay) + ' days since last — letting roots grow deep. Moisture ' + Math.round(moisture) + '%' };
+            } else if (inHardeningMode && moisture <= wiltNow + 5) {
+              // End hardening — getting too close to damage
+              inHardeningMode = false;
+              lastHardenDay = di;
+              recovering = true;
+              cycleTarget = Math.min(80, madNow + 22);
+              decision = { step: globalStep, type: 'water', day: di,
+                reason: 'END HARDENING: Moisture ' + Math.round(moisture) + '% approaching damage zone. Deep recovery to ' + Math.round(cycleTarget) + '%' };
+            } else if (inHardeningMode) {
+              // Still hardening — skip
+              decision = { step: globalStep, type: 'skip-harden', day: di,
+                reason: 'HARDENING day ' + (di - lastHardenDay + HARDEN_INTERVAL) + ': moisture ' + Math.round(moisture) + '%, wilt at ' + Math.round(wiltNow) + '%' };
+            } else {
+              // Normal watering
+              recovering = true;
+              var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
+              var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
+              cycleTarget = Math.min(80, madNow + 20 + recoverExtra);
+              if (!decision) decision = { step: globalStep, type: 'water', day: di,
+                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc };
+              if (catchUpNeeded) {
+                decision.reason += Math.round(cycleTarget) + '%';
+              }
+            }
           }
         }
       }

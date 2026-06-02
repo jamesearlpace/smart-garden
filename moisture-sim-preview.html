@@ -6,262 +6,595 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
-  body { background: #0f1923; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
+  *{box-sizing:border-box}
+  body { background: #0f1923; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 16px; }
+
   .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-  h2 { margin: 0 0 4px; font-size: 1rem; }
-  .subtitle { color: #94a3b8; font-size: .75rem; margin-bottom: 12px; }
-  .legend { display: flex; gap: 16px; font-size: .72rem; color: #94a3b8; margin-bottom: 10px; flex-wrap: wrap; }
+
+  /* Header row: title + current moisture badge */
+  .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+  h2 { margin: 0; font-size: 1.05rem; }
+  .subtitle { color: #94a3b8; font-size: .73rem; margin-bottom: 14px; }
+  .current-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #0f172a; border: 1px solid #334155; border-radius: 20px;
+    padding: 4px 14px 4px 10px; font-size: .82rem; font-weight: 600;
+  }
+  .current-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* Controls row */
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .controls select {
+    background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 6px;
+    padding: 5px 10px; font-size: .8rem; cursor: pointer; outline: none;
+  }
+  .controls select:hover { border-color: #22c55e; }
+  .range-btns { display: flex; gap: 0; }
+  .range-btns button {
+    background: #0f172a; color: #94a3b8; border: 1px solid #475569;
+    padding: 5px 12px; font-size: .75rem; cursor: pointer; transition: all .15s;
+  }
+  .range-btns button:first-child { border-radius: 6px 0 0 6px; }
+  .range-btns button:last-child { border-radius: 0 6px 6px 0; }
+  .range-btns button:not(:first-child) { border-left: none; }
+  .range-btns button.active { background: #22c55e22; color: #22c55e; border-color: #22c55e; }
+  .range-btns button:hover:not(.active) { color: #e2e8f0; }
+
+  .legend { display: flex; gap: 14px; font-size: .72rem; color: #94a3b8; margin-bottom: 8px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+  .legend-bar { width: 4px; height: 14px; border-radius: 1px; }
+  .legend-line { width: 14px; height: 0; border-top: 2px dashed #f59e0b; }
+
+  /* Stats grid */
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
-  .stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; }
+  .stat { background: #0f172a; border-radius: 8px; padding: 12px; text-align: center; position: relative; }
   .stat-value { font-size: 1.3rem; font-weight: 700; }
   .stat-label { font-size: .7rem; color: #94a3b8; margin-top: 4px; }
+  .stat-hint { font-size: .6rem; color: #64748b; margin-top: 2px; }
   .stat-good { color: #22c55e; }
   .stat-warn { color: #f59e0b; }
+  .stat-bad { color: #ef4444; }
+
+  /* Summary row */
+  .summary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .summary-card { background: #0f172a; border-radius: 8px; padding: 14px 16px; }
+  .summary-card h3 { margin: 0 0 8px; font-size: .85rem; color: #e2e8f0; }
+  .summary-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: .78rem; border-bottom: 1px solid #1e293b; }
+  .summary-line:last-child { border-bottom: none; }
+  .summary-label { color: #94a3b8; }
+  .summary-val { color: #e2e8f0; font-weight: 500; }
+  .summary-val.good { color: #22c55e; }
+  .summary-val.warn { color: #f59e0b; }
+
+  @media (max-width: 700px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .summary-row { grid-template-columns: 1fr; }
+    .controls { gap: 8px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="card">
-  <h2>💧 Soil Moisture Simulation — Front Yard A (Zone 1)</h2>
+  <div class="header-row">
+    <h2>💧 Soil Moisture Simulation</h2>
+    <div class="current-badge" id="current-badge">
+      <span class="dot" style="background:#22c55e"></span>
+      <span id="current-pct">—%</span>
+    </div>
+  </div>
   <div class="subtitle">Estimated moisture based on ET₀ evaporation, rainfall, and irrigation events</div>
+
+  <div class="controls">
+    <select id="zone-select">
+      <option value="0">Zone 1 — Front Yard A</option>
+      <option value="1">Zone 2 — Front Yard B</option>
+      <option value="2">Zone 3 — Backyard</option>
+      <option value="3">Zone 4 — SE Side</option>
+      <option value="4">Zone 5 — SW Side</option>
+      <option value="5">Zone 6 — South</option>
+      <option value="6">Zone 7 — NW Side</option>
+      <option value="7">Zone 8 — Garden (drip)</option>
+      <option value="8">Zone 9 — Grapes (drip)</option>
+    </select>
+    <div class="range-btns">
+      <button data-days="3">3d</button>
+      <button data-days="7" class="active">7d</button>
+      <button data-days="14">14d</button>
+      <button data-days="30">30d</button>
+    </div>
+  </div>
+
   <div class="legend">
-    <span>🟢 <b>Moisture %</b> (simulated)</span>
-    <span>🔵 <b>Rain</b> events</span>
-    <span>🟩 <b>Sprinkler</b> events</span>
-    <span>🔴 <b>Stress zone</b> (below MAD)</span>
-    <span>━━ <b>MAD</b> threshold (needs water)</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#22c55e"></span> <b>Moisture %</b></span>
+    <span class="legend-item"><span class="legend-bar" style="background:rgba(59,130,246,0.6)"></span> <b>Rain</b> (in)</span>
+    <span class="legend-item"><span class="legend-bar" style="background:rgba(16,185,129,0.6)"></span> <b>Sprinkler</b> (in)</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:rgba(239,68,68,0.35)"></span> <b>Stress</b></span>
+    <span class="legend-item"><span class="legend-line"></span> <b>MAD</b></span>
   </div>
-  <div style="height:350px"><canvas id="moisture-sim"></canvas></div>
+
+  <!-- Two stacked charts: precip bars on top, moisture line below -->
+  <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
+  <div style="height:280px; position:relative; margin-top:-6px"><canvas id="moisture-chart"></canvas></div>
   
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-value stat-good">3.1 days</div>
-      <div class="stat-label">Avg Cycle Length</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value stat-good">62%</div>
-      <div class="stat-label">Dry-Down Ratio</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value stat-good">1.8 hrs</div>
-      <div class="stat-label">Avg Stress Duration</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value stat-warn">0.67"</div>
-      <div class="stat-label">Avg Depth Per Cycle</div>
-    </div>
-  </div>
+  <div class="stats" id="stats-row"></div>
+  <div class="summary-row" id="summary-row"></div>
 </div>
 
 <script>
-// Generate realistic 7-day moisture simulation data
-function generateSimData() {
+// ─── Zone configs ───
+var ZONES = [
+  { name: 'Front Yard A',  precipRate: 1.5, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'Front Yard B',  precipRate: 1.5, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'Backyard',      precipRate: 1.3, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'SE Side',       precipRate: 1.3, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'SW Side',       precipRate: 1.3, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'South',         precipRate: 1.0, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'NW Side',       precipRate: 1.3, kc: 0.80, madPct: 50, rootDepthIn: 6 },
+  { name: 'Garden (drip)', precipRate: 0.4, kc: 1.00, madPct: 40, rootDepthIn: 12 },
+  { name: 'Grapes (drip)', precipRate: 0.4, kc: 0.55, madPct: 45, rootDepthIn: 18 },
+];
+
+var currentZone = 0, currentDays = 7, chartInstance = null;
+
+// ─── Deterministic PRNG ───
+function mkRng(seed) {
+  return function() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+}
+
+// ─── Simulation ───
+// Goal: produce a clear sawtooth — slow daily decline, flat overnight, sharp
+// jump when sprinkler fires at 4-5 AM, occasional rain bump. 2-3 cycles / 7d.
+function generateSimData(zoneIdx, days) {
+  var zone = ZONES[zoneIdx];
   var now = new Date();
-  var start = new Date(now.getTime() - 7 * 24 * 3600000);
+  var start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start = new Date(start.getTime() - days * 86400000);
+
+  var rng = mkRng(zoneIdx * 7919 + days * 31);
+  var MAD = zone.madPct;
+  var moisture = MAD + 15 + rng() * 10;  // start well above MAD
   var points = [];
-  var moisture = 85; // Start at 85%
-  var TAW = 100;
-  var MAD = 50;
-  
-  // Simulate every 15 minutes for 7 days
-  for (var t = start.getTime(); t <= now.getTime(); t += 15 * 60000) {
+
+  // ── Pre-bake rain events (1-2 per week, placed on specific days/hours) ──
+  var rainEvents = [];
+  var numRain = Math.max(1, Math.round(days / 5 * (0.8 + rng() * 0.6)));
+  for (var r = 0; r < numRain; r++) {
+    var dayOff = Math.floor(rng() * days);
+    var hr = Math.floor(rng() * 10) + 8;          // 8 AM – 6 PM
+    var dur = Math.floor(rng() * 4) + 2;           // 2-5 steps (30–75 min)
+    var depth = 0.08 + rng() * 0.12;               // 0.08–0.20 inches total
+    rainEvents.push({ day: dayOff, hr: hr, dur: dur, depth: depth });
+  }
+
+  // ── Per-day ET₀ multiplier (sunny vs cloudy) ──
+  var dayET = [];
+  for (var de = 0; de <= days; de++) dayET.push(0.85 + rng() * 0.35); // 0.85–1.20
+
+  // ── Sprinkler state ──
+  var armed = false;            // true once moisture drops near MAD
+  var recovering = false;       // true while sprinkler is actively running
+  var cycleTarget = 0;          // moisture % to reach before stopping
+
+  var STEP = 15 * 60000;
+  for (var t = start.getTime(); t <= now.getTime(); t += STEP) {
     var d = new Date(t);
-    var hour = d.getHours();
-    var dayOfWeek = d.getDay();
-    
-    // ET₀ drain — bell curve peaking at 1 PM, near zero at night
-    var etDrain = 0;
-    if (hour >= 6 && hour <= 20) {
-      // Sine curve from 6 AM to 8 PM
-      var phase = (hour - 6) / 14 * Math.PI;
-      var baseRate = Math.sin(phase) * 0.35; // max ~0.35% per 15 min
-      
-      // Hotter days drain faster (vary by day)
-      var dayHeat = [0.8, 1.0, 1.2, 1.1, 0.9, 1.3, 1.0][dayOfWeek];
-      etDrain = baseRate * dayHeat;
+    var h = d.getHours(), m = d.getMinutes();
+    var di = Math.floor((t - start.getTime()) / 86400000);
+
+    // ── 1. ET₀ drain ──
+    // Bell curve 6 AM → 8 PM, peak ~1 PM.  Total daily loss ≈ 8-11%
+    var drain = 0;
+    if (h >= 6 && h <= 20) {
+      var phase = (h + m / 60 - 6) / 14 * Math.PI;
+      drain = Math.sin(phase) * 0.32 * zone.kc * (dayET[di] || 1);
     }
-    
-    moisture -= etDrain;
-    
-    // Rain events
+    moisture -= drain;
+
+    // ── 2. Rain ──
     var rain = 0;
-    // Day 2 afternoon: light rain
-    var dayIdx = Math.floor((t - start.getTime()) / 86400000);
-    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 0) {
-      rain = 12; // Moderate rain — adds 12%
-    }
-    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 15) {
-      rain = 8;
-    }
-    if (dayIdx === 2 && hour === 14 && d.getMinutes() === 30) {
-      rain = 5;
-    }
-    
-    // Sprinkler events (triggered when moisture drops below MAD)
-    var sprinkler = 0;
-    if (moisture <= MAD - 2) {
-      // Only water in the morning window (4-6 AM)
-      if (hour >= 4 && hour <= 5) {
-        sprinkler = 8; // Each 15-min interval adds 8%
+    var stepInDay = h * 4 + Math.floor(m / 15);
+    for (var ri = 0; ri < rainEvents.length; ri++) {
+      var re = rainEvents[ri];
+      var rs = re.hr * 4;
+      if (di === re.day && stepInDay >= rs && stepInDay < rs + re.dur) {
+        // Convert depth (inches) to moisture % boost. Spread over duration.
+        // 1 inch ≈ fills 6" root zone ≈ 100% moisture swing, so depth/dur * 100
+        rain = (re.depth / re.dur) * 100;
       }
     }
-    
-    moisture += rain + sprinkler;
-    moisture = Math.max(0, Math.min(TAW, moisture));
-    
+
+    // ── 3. Sprinkler ──
+    var sprinkler = 0;
+
+    // Arm when moisture is within 5% of MAD
+    if (moisture <= MAD + 5 && !recovering) armed = true;
+
+    // Fire at 4:00 AM – 5:15 AM on the NEXT morning after arming
+    if (armed && h >= 4 && h < 6 && !recovering) {
+      recovering = true;
+      cycleTarget = MAD + 16 + rng() * 6; // recover to 66-72%
+    }
+
+    if (recovering) {
+      if (moisture < cycleTarget) {
+        // Each 15-min run adds precip_rate/4 inches → convert to moisture %
+        // For 6" root zone: inches * (100/rootDepthIn) = moisture %
+        sprinkler = (zone.precipRate / 4) * (100 / zone.rootDepthIn);
+        // Cap so we don't overshoot
+        if (moisture + sprinkler > cycleTarget) sprinkler = cycleTarget - moisture;
+      }
+      if (moisture + sprinkler >= cycleTarget || h >= 6) {
+        recovering = false;
+        armed = false;
+      }
+    }
+
+    moisture = Math.min(100, Math.max(0, moisture + rain + sprinkler));
+
     points.push({
-      t: new Date(t),
-      moisture: moisture,
-      rain: rain > 0 ? rain : null,
-      sprinkler: sprinkler > 0 ? sprinkler : null,
+      t: d, moisture: moisture,
+      rain: rain > 0.1 ? rain : null,
+      sprinkler: sprinkler > 0.1 ? sprinkler : null,
       stressed: moisture < MAD
     });
   }
   return points;
 }
 
-var data = generateSimData();
-var MAD_LINE = 50;
+// ─── Stats ───
+function computeStats(data, MAD) {
+  var cycles = [], cur = null;
+  for (var i = 0; i < data.length; i++) {
+    if (data[i].sprinkler > 0) {
+      if (!cur) cur = { s: i, e: i };
+      else if (i - cur.e <= 8) cur.e = i;
+      else { cycles.push(cur); cur = { s: i, e: i }; }
+    }
+  }
+  if (cur) cycles.push(cur);
 
-// Build datasets
-var moistureData = data.map(function(p) { return {x: p.t, y: p.moisture}; });
-var madData = data.map(function(p) { return {x: p.t, y: MAD_LINE}; });
+  var cycleDays = 0;
+  if (cycles.length > 1) {
+    var tot = 0;
+    for (var c = 1; c < cycles.length; c++) tot += (data[cycles[c].s].t - data[cycles[c-1].s].t) / 86400000;
+    cycleDays = tot / (cycles.length - 1);
+  }
 
-// Stress zones — moisture below MAD
-var stressData = data.map(function(p) { 
-  return {x: p.t, y: p.stressed ? p.moisture : null}; 
-});
+  var stressSteps = 0, decSteps = 0, totSprPct = 0;
+  for (var j = 0; j < data.length; j++) {
+    if (data[j].stressed) stressSteps++;
+    if (j > 0 && data[j].moisture < data[j-1].moisture) decSteps++;
+    totSprPct += (data[j].sprinkler || 0);
+  }
 
-// Rain event markers
-var rainData = data.filter(function(p) { return p.rain; }).map(function(p) {
-  return {x: p.t, y: p.moisture};
-});
+  var depthIn = cycles.length > 0 ? (totSprPct / 100 * 6 / cycles.length) : 0;
+  var dryDown = Math.round(decSteps / Math.max(data.length - 1, 1) * 100);
+  var stressHrs = stressSteps * 0.25;
 
-// Sprinkler event markers
-var sprinklerData = data.filter(function(p) { return p.sprinkler; }).map(function(p) {
-  return {x: p.t, y: p.moisture};
-});
+  // Last watered / next estimate
+  var lastWatered = '—', nextEst = '—';
+  for (var lw = data.length - 1; lw >= 0; lw--) {
+    if (data[lw].sprinkler > 0) {
+      var agoH = (Date.now() - data[lw].t.getTime()) / 3600000;
+      lastWatered = agoH < 24 ? Math.round(agoH) + 'h ago' : (agoH / 24).toFixed(1) + 'd ago';
+      if (cycleDays > 0) {
+        var nextH = (data[lw].t.getTime() + cycleDays * 86400000 - Date.now()) / 3600000;
+        nextEst = nextH <= 0 ? 'overdue' : nextH < 24 ? Math.round(nextH) + 'h' : (nextH / 24).toFixed(1) + 'd';
+      }
+      break;
+    }
+  }
 
-var ctx = document.getElementById('moisture-sim').getContext('2d');
+  var curMoisture = data.length > 0 ? data[data.length - 1].moisture : 0;
 
-// Custom plugin to shade stress zones
+  return {
+    cycleDays: cycleDays > 0 ? cycleDays.toFixed(1) : '—',
+    dryDown: dryDown, stressHrs: stressHrs.toFixed(1),
+    depthIn: depthIn > 0 ? depthIn.toFixed(2) : '—',
+    cycles: cycles.length, lastWatered: lastWatered, nextEst: nextEst,
+    curMoisture: curMoisture.toFixed(1)
+  };
+}
+
+// ─── Render stats + summary cards ───
+function renderUI(stats, MAD) {
+  // Current moisture badge
+  var pct = parseFloat(stats.curMoisture);
+  var dot = document.querySelector('#current-badge .dot');
+  var badgeColor = pct > MAD + 10 ? '#22c55e' : pct > MAD ? '#f59e0b' : '#ef4444';
+  dot.style.background = badgeColor;
+  document.getElementById('current-pct').textContent = stats.curMoisture + '%';
+  document.getElementById('current-pct').style.color = badgeColor;
+
+  // Stat cards
+  function cls(ok, warn) { return ok ? 'stat-good' : warn ? 'stat-warn' : 'stat-bad'; }
+  var cd = parseFloat(stats.cycleDays);
+  var sh = parseFloat(stats.stressHrs);
+  var di = parseFloat(stats.depthIn);
+
+  document.getElementById('stats-row').innerHTML =
+    '<div class="stat"><div class="stat-value ' + cls(cd>=2&&cd<=4, cd>0) + '">' + stats.cycleDays + ' days</div><div class="stat-label">Avg Cycle Length</div><div class="stat-hint">Target: 2–4 days</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(stats.dryDown>=50&&stats.dryDown<=70, true) + '">' + stats.dryDown + '%</div><div class="stat-label">Dry-Down Ratio</div><div class="stat-hint">Target: 50–70%</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(sh<=6, sh<=12) + '">' + stats.stressHrs + ' hrs</div><div class="stat-label">Stress Duration</div><div class="stat-hint">Target: < 6 hrs</div></div>' +
+    '<div class="stat"><div class="stat-value ' + cls(di>=0.4&&di<=0.8, di>0) + '">' + stats.depthIn + '"</div><div class="stat-label">Depth Per Cycle</div><div class="stat-hint">Target: 0.5–0.75"</div></div>';
+
+  // Summary cards
+  document.getElementById('summary-row').innerHTML =
+    '<div class="summary-card"><h3>📅 Watering</h3>' +
+      '<div class="summary-line"><span class="summary-label">Cycles in period</span><span class="summary-val">' + stats.cycles + '</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Last watered</span><span class="summary-val">' + stats.lastWatered + '</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Est. next</span><span class="summary-val good">' + stats.nextEst + '</span></div>' +
+    '</div>' +
+    '<div class="summary-card"><h3>🌱 Zone Info</h3>' +
+      '<div class="summary-line"><span class="summary-label">Precip rate</span><span class="summary-val">' + ZONES[currentZone].precipRate + ' iph</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Crop coeff (Kc)</span><span class="summary-val">' + ZONES[currentZone].kc + '</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Root depth</span><span class="summary-val">' + ZONES[currentZone].rootDepthIn + '"</span></div>' +
+      '<div class="summary-line"><span class="summary-label">MAD trigger</span><span class="summary-val warn">' + ZONES[currentZone].madPct + '%</span></div>' +
+    '</div>';
+}
+
+// ─── Chart plugins ───
 var stressShadePlugin = {
   id: 'stressShade',
   beforeDraw: function(chart) {
-    var ctx = chart.ctx;
-    var yAxis = chart.scales.y;
-    var xAxis = chart.scales.x;
-    var madPixel = yAxis.getPixelForValue(MAD_LINE);
-    var bottomPixel = yAxis.getPixelForValue(0);
-    
+    var ctx = chart.ctx, yA = chart.scales.y, xA = chart.scales.x;
+    var madPx = yA.getPixelForValue(chart.options._madLine || 50);
     ctx.save();
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
-    ctx.fillRect(xAxis.left, madPixel, xAxis.right - xAxis.left, bottomPixel - madPixel);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.06)';
+    ctx.fillRect(xA.left, madPx, xA.right - xA.left, yA.getPixelForValue(0) - madPx);
     ctx.restore();
   }
 };
 
-new Chart(ctx, {
-  type: 'line',
-  plugins: [stressShadePlugin],
-  data: {
-    datasets: [
-      {
-        label: 'Soil Moisture %',
-        data: moistureData,
-        borderColor: '#22c55e',
-        backgroundColor: '#22c55e18',
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-        order: 2
-      },
-      {
-        label: 'Stress (below MAD)',
-        data: stressData,
-        borderColor: '#ef4444',
-        backgroundColor: '#ef444435',
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.3,
-        order: 1
-      },
-      {
-        label: 'MAD — Needs Water',
-        data: madData,
-        borderColor: '#f59e0b',
-        backgroundColor: 'transparent',
-        borderWidth: 1.5,
-        borderDash: [8, 4],
-        pointRadius: 0,
-        fill: false,
-        order: 3
-      },
-      {
-        label: '🌧️ Rain',
-        data: rainData,
-        borderColor: '#3b82f6',
-        backgroundColor: '#3b82f6',
-        pointRadius: 8,
-        pointStyle: 'triangle',
-        showLine: false,
-        order: 0
-      },
-      {
-        label: '🚿 Sprinkler',
-        data: sprinklerData,
-        borderColor: '#10b981',
-        backgroundColor: '#10b981',
-        pointRadius: 8,
-        pointStyle: 'rectRot',
-        showLine: false,
-        order: 0
-      }
-    ]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: { boxWidth: 12, font: { size: 11 }, padding: 8, color: '#94a3b8' }
-      },
-      tooltip: {
-        callbacks: {
-          label: function(ctx) {
-            if (ctx.dataset.label.includes('Rain')) return '🌧️ Rain: +' + data.find(function(p) { return p.t.getTime() === ctx.parsed.x; }).rain + '%';
-            if (ctx.dataset.label.includes('Sprinkler')) return '🚿 Sprinkler: +' + data.find(function(p) { return p.t.getTime() === ctx.parsed.x; }).sprinkler + '%';
-            if (ctx.dataset.label.includes('MAD')) return 'MAD Trigger: ' + ctx.parsed.y + '%';
-            return ctx.parsed.y.toFixed(1) + '% moisture';
+var nowLinePlugin = {
+  id: 'nowLine',
+  afterDraw: function(chart) {
+    var xA = chart.scales.x, yA = chart.scales.y;
+    var nowPx = xA.getPixelForValue(Date.now());
+    if (nowPx < xA.left || nowPx > xA.right) return;
+    var ctx = chart.ctx;
+    ctx.save();
+    ctx.strokeStyle = '#94a3b844';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(nowPx, yA.top);
+    ctx.lineTo(nowPx, yA.bottom);
+    ctx.stroke();
+    // "Now" label
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Now', nowPx, yA.top - 4);
+    ctx.restore();
+  }
+};
+
+// ─── Build charts ───
+var precipChart = null, moistureChart = null;
+
+function buildChart(zoneIdx, days) {
+  var zone = ZONES[zoneIdx];
+  var data = generateSimData(zoneIdx, days);
+  var MAD = zone.madPct;
+  var stats = computeStats(data, MAD);
+  renderUI(stats, MAD);
+
+  // Shared time bounds
+  var tMin = data[0].t.getTime();
+  var tMax = data[data.length - 1].t.getTime();
+
+  // ── Data for moisture chart ──
+  var moistureData = data.map(function(p) { return { x: p.t, y: p.moisture }; });
+  var madData = data.map(function(p) { return { x: p.t, y: MAD }; });
+  var stressData = data.map(function(p) { return { x: p.t, y: p.stressed ? p.moisture : null }; });
+
+  // ── Data for precip chart (inches) ──
+  var rd = zone.rootDepthIn;
+  var rainBarData = data.filter(function(p) { return p.rain !== null; }).map(function(p) {
+    return { x: p.t, y: p.rain * rd / 100 };
+  });
+  var sprinklerBarData = data.filter(function(p) { return p.sprinkler !== null; }).map(function(p) {
+    return { x: p.t, y: p.sprinkler * rd / 100 };
+  });
+
+  // Find max bar value to set axis — round to nice number
+  var maxBar = 0.1;
+  rainBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+  sprinklerBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
+  var y2Max = Math.ceil(maxBar * 5) / 5; // round up to nearest 0.2
+  if (y2Max < 0.2) y2Max = 0.2;
+
+  // ══════════════════════════════════
+  // TOP CHART — Precipitation bars
+  // ══════════════════════════════════
+  var ctxP = document.getElementById('precip-chart').getContext('2d');
+  if (precipChart) precipChart.destroy();
+
+  precipChart = new Chart(ctxP, {
+    type: 'bar',
+    data: {
+      datasets: [
+        {
+          label: '🌧️ Rain', data: rainBarData,
+          backgroundColor: 'rgba(59,130,246,0.60)', borderColor: 'rgba(59,130,246,0.9)',
+          borderWidth: 1, barThickness: 5, maxBarThickness: 8
+        },
+        {
+          label: '💧 Sprinkler', data: sprinklerBarData,
+          backgroundColor: 'rgba(16,185,129,0.60)', borderColor: 'rgba(16,185,129,0.9)',
+          borderWidth: 1, barThickness: 5, maxBarThickness: 8
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 300 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
+          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 8, displayColors: true,
+          callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              var d = new Date(items[0].parsed.x);
+              var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              var h = d.getHours() % 12 || 12;
+              var ap = d.getHours() >= 12 ? 'PM' : 'AM';
+              return dn[d.getDay()] + ' ' + h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
+            },
+            label: function(ctx) {
+              if (ctx.parsed.y > 0) return ctx.dataset.label + ' ' + ctx.parsed.y.toFixed(2) + '"';
+              return null;
+            }
           }
         }
-      }
-    },
-    scales: {
-      x: {
-        type: 'time',
-        time: { tooltipFormat: 'EEE MMM d, h:mm a', displayFormats: { hour: 'EEE ha', day: 'MMM d' } },
-        ticks: { maxTicksLimit: 14, font: { size: 10 }, color: '#64748b' },
-        grid: { color: '#1e293b' }
       },
-      y: {
-        min: 0,
-        max: 100,
-        ticks: { 
-          callback: function(v) { return v + '%'; },
-          font: { size: 10 },
-          color: '#64748b'
+      scales: {
+        x: {
+          type: 'time', min: tMin, max: tMax,
+          display: false
         },
-        grid: { color: '#1e293b22' },
-        title: { display: true, text: 'Soil Moisture %', font: { size: 11 }, color: '#94a3b8' }
+        y: {
+          reverse: true,
+          min: 0, max: y2Max,
+          position: 'right',
+          ticks: {
+            callback: function(v) { return v.toFixed(1) + '"'; },
+            font: { size: 9 }, color: '#64748b88', maxTicksLimit: 3,
+            padding: 2
+          },
+          grid: { color: '#1e293b22' },
+          afterFit: function(axis) { axis.width = 35; }
+        },
+        // Invisible left axis to match moisture chart width
+        yDummy: {
+          position: 'left', display: true,
+          ticks: { display: false },
+          grid: { drawOnChartArea: false, drawTicks: false, drawBorder: false },
+          afterFit: function(axis) { axis.width = 50; }
+        }
       }
     }
-  }
+  });
+
+  // ══════════════════════════════════
+  // BOTTOM CHART — Moisture line
+  // ══════════════════════════════════
+  var ctxM = document.getElementById('moisture-chart').getContext('2d');
+  if (moistureChart) moistureChart.destroy();
+
+  var grad = ctxM.createLinearGradient(0, 0, 0, 300);
+  grad.addColorStop(0, 'rgba(34,197,94,0.12)');
+  grad.addColorStop(0.6, 'rgba(34,197,94,0.03)');
+  grad.addColorStop(1, 'rgba(34,197,94,0)');
+
+  moistureChart = new Chart(ctxM, {
+    type: 'line',
+    plugins: [stressShadePlugin, nowLinePlugin],
+    data: {
+      datasets: [
+        {
+          label: 'Soil Moisture %', data: moistureData,
+          borderColor: '#22c55e', backgroundColor: grad,
+          borderWidth: 2, pointRadius: 0, pointHitRadius: 6,
+          fill: true, tension: 0.05, order: 2
+        },
+        {
+          label: 'Stress', data: stressData,
+          borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.18)',
+          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.05,
+          spanGaps: false, order: 1
+        },
+        {
+          label: 'MAD', data: madData,
+          borderColor: '#f59e0b88', backgroundColor: 'transparent',
+          borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, fill: false, order: 3
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, _madLine: MAD,
+      animation: { duration: 400, easing: 'easeOutQuart' },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
+          titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 10, displayColors: true,
+          filter: function(item) { return !item.dataset.label.includes('MAD') && !item.dataset.label.includes('Stress'); },
+          callbacks: {
+            title: function(items) {
+              if (!items.length) return '';
+              var d = new Date(items[0].parsed.x);
+              var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+              var ap = d.getHours() >= 12 ? 'PM' : 'AM', h = d.getHours() % 12 || 12;
+              var m = d.getMinutes();
+              return dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + (m<10?'0':'') + m + ' ' + ap;
+            },
+            label: function(ctx) {
+              return '🌱 ' + ctx.parsed.y.toFixed(1) + '%';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time', min: tMin, max: tMax,
+          time: { tooltipFormat: 'EEE MMM d, h:mm a', displayFormats: { hour: 'EEE ha', day: 'EEE MMM d' } },
+          ticks: { maxTicksLimit: days <= 7 ? 14 : 20, font: { size: 10 }, color: '#64748b' },
+          grid: { color: '#1e293b33' }
+        },
+        y: {
+          // Dynamic range: zoom to where the action is
+          min: function() {
+            var lo = 100;
+            moistureData.forEach(function(p) { if (p.y < lo) lo = p.y; });
+            return Math.max(0, Math.floor((lo - 10) / 10) * 10);
+          }(),
+          max: function() {
+            var hi = 0;
+            moistureData.forEach(function(p) { if (p.y > hi) hi = p.y; });
+            return Math.min(100, Math.ceil((hi + 10) / 10) * 10);
+          }(),
+          ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, color: '#64748b', stepSize: 10 },
+          grid: { color: '#1e293b22' },
+          title: { display: true, text: 'Soil Moisture %', font: { size: 11 }, color: '#94a3b8' },
+          afterFit: function(axis) { axis.width = 50; }
+        },
+        // Invisible right axis to match precip chart width
+        yDummy: {
+          position: 'right', display: true,
+          ticks: { display: false },
+          grid: { drawOnChartArea: false, drawTicks: false, drawBorder: false },
+          afterFit: function(axis) { axis.width = 35; }
+        }
+      }
+    }
+  });
+}
+
+// ─── Controls ───
+document.getElementById('zone-select').addEventListener('change', function() {
+  currentZone = parseInt(this.value);
+  buildChart(currentZone, currentDays);
 });
+document.querySelectorAll('.range-btns button').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.range-btns button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentDays = parseInt(btn.dataset.days);
+    buildChart(currentZone, currentDays);
+  });
+});
+
+buildChart(0, 7);
 </script>
 </body>
 </html>

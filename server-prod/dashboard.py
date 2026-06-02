@@ -439,11 +439,15 @@ def create_app(config, engine, weather, billing):
                 "id": zone_cfg["id"],
                 "name": zone_cfg["name"],
                 "installed": zone_cfg.get("installed", False),
+                "type": zone_cfg.get("type", "sprinkler"),
                 "precip_rate_iph": zone_cfg.get("precip_rate_iph", 1.0),
                 "kc": zone_cfg.get("kc", [0.90, 0.90, 0.90, 0.90]),
                 "root_depth_in": zone_cfg.get("root_depth_in", 6),
                 "taw_in": zone_cfg.get("taw_in", 1.2),
                 "mad_pct": zone_cfg.get("mad_pct", 50),
+                "heads": zone_cfg.get("heads", 4),
+                "est_gpm": zone_cfg.get("est_gpm", 4.0),
+                "area_sqft": zone_cfg.get("area_sqft", 0),
             },
             "balances": balances,
             "waterings": zone_waterings,
@@ -458,6 +462,55 @@ def create_app(config, engine, weather, billing):
         """Moisture simulation chart — historical, live 2026, and forecast."""
         zones = [z for z in config["zones"] if z.get("installed", False)]
         return render_template("moisture_sim.html", zones=zones)
+
+    @app.route("/api/zone-config", methods=["POST"])
+    def api_zone_config_update():
+        """Update tunable zone parameters (precip rate, root depth, etc.)."""
+        data = request.get_json(silent=True) or {}
+        zone_id = data.get("zone_id")
+        if zone_id is None:
+            return jsonify({"ok": False, "error": "zone_id required"}), 400
+
+        zone_cfg = None
+        zone_idx = None
+        for i, z in enumerate(config["zones"]):
+            if z["id"] == zone_id:
+                zone_cfg = z
+                zone_idx = i
+                break
+        if zone_cfg is None:
+            return jsonify({"ok": False, "error": "Zone not found"}), 404
+
+        # Apply allowed fields
+        allowed = {
+            "precip_rate_iph": (0.05, 10.0),
+            "root_depth_in": (2, 36),
+            "heads": (1, 20),
+            "est_gpm": (0.1, 40.0),
+            "area_sqft": (10, 10000),
+        }
+        changes = {}
+        for key, (lo, hi) in allowed.items():
+            if key in data and data[key] is not None:
+                val = float(data[key])
+                val = max(lo, min(hi, val))
+                zone_cfg[key] = round(val, 3)
+                changes[key] = zone_cfg[key]
+
+        # Kc array (for garden/grapes)
+        if "kc" in data and isinstance(data["kc"], list):
+            kc = [max(0.1, min(1.5, float(v))) for v in data["kc"][:4]]
+            zone_cfg["kc"] = kc
+            changes["kc"] = kc
+
+        if not changes:
+            return jsonify({"ok": False, "error": "No valid fields"}), 400
+
+        # Write updated config
+        config["zones"][zone_idx] = zone_cfg
+        write_config_atomic(config)
+
+        return jsonify({"ok": True, "changes": changes})
 
     # ── Pages ──
 

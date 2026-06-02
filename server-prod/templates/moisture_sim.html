@@ -108,7 +108,41 @@ h2 { margin: 0; font-size: 1.05rem; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .summary-row { grid-template-columns: 1fr; }
   .controls { gap: 8px; }
+  .tune-grid { grid-template-columns: 1fr !important; }
 }
+
+/* Tuning panel */
+.tune-panel { margin-top: 16px; }
+.tune-toggle {
+  background: var(--bg); color: var(--text2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 16px; font-size: .82rem; cursor: pointer;
+  width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center;
+}
+.tune-toggle:hover { border-color: var(--green); color: var(--text); }
+.tune-body { display: none; padding: 16px 0 0; }
+.tune-body.open { display: block; }
+.tune-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.tune-field { }
+.tune-field label { display: block; font-size: .7rem; color: var(--text2); margin-bottom: 4px; }
+.tune-field input {
+  width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: .85rem; outline: none;
+}
+.tune-field input:focus { border-color: var(--green); }
+.tune-field .tune-hint { font-size: .6rem; color: #64748b; margin-top: 2px; }
+.tune-field .tune-calc { font-size: .65rem; color: var(--amber); margin-top: 2px; }
+.tune-actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
+.tune-save {
+  background: var(--green); color: #000; border: none; border-radius: 6px;
+  padding: 8px 20px; font-size: .82rem; font-weight: 600; cursor: pointer;
+}
+.tune-save:hover { opacity: 0.9; }
+.tune-save:disabled { opacity: 0.4; cursor: not-allowed; }
+.tune-status { font-size: .75rem; color: var(--text2); }
+.tune-kc { margin-top: 10px; }
+.tune-kc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tune-kc-row label { font-size: .7rem; color: var(--text2); min-width: 80px; }
+.tune-kc-row input { width: 60px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-size: .8rem; }
 </style>
 </head>
 <body>
@@ -192,6 +226,67 @@ h2 { margin: 0; font-size: 1.05rem; }
   <div class="stats" id="stats-row"></div>
   <div class="summary-row" id="summary-row"></div>
   <div class="decision-log" id="decision-log"></div>
+
+  <!-- Tuning Panel -->
+  <div class="tune-panel" id="tune-panel">
+    <button class="tune-toggle" id="tune-toggle">
+      <span>⚙️ Zone Tuning</span>
+      <span id="tune-arrow">▸</span>
+    </button>
+    <div class="tune-body" id="tune-body">
+      <div class="tune-grid">
+        <div class="tune-field">
+          <label>Heads</label>
+          <input type="number" id="tune-heads" min="1" max="20" step="1">
+          <div class="tune-hint">Sprinkler heads on this zone</div>
+        </div>
+        <div class="tune-field">
+          <label>GPM per Head</label>
+          <input type="number" id="tune-gpm-head" min="0.1" max="5" step="0.1" value="1.0">
+          <div class="tune-hint">Nozzle flow rate</div>
+        </div>
+        <div class="tune-field">
+          <label>Total GPM</label>
+          <input type="number" id="tune-gpm" min="0.1" max="40" step="0.1" readonly style="opacity:0.6">
+          <div class="tune-hint">Heads × GPM/head (auto)</div>
+        </div>
+        <div class="tune-field">
+          <label>Area (sq ft)</label>
+          <input type="number" id="tune-area" min="10" max="10000" step="10">
+          <div class="tune-hint">Coverage area for this zone</div>
+          <div class="tune-calc" id="tune-area-calc"></div>
+        </div>
+        <div class="tune-field">
+          <label>Precip Rate (in/hr)</label>
+          <input type="number" id="tune-precip" min="0.05" max="10" step="0.01">
+          <div class="tune-hint">= 96.25 × GPM ÷ area</div>
+          <div class="tune-calc" id="tune-precip-calc"></div>
+        </div>
+        <div class="tune-field">
+          <label>Root Depth (in)</label>
+          <input type="number" id="tune-root" min="2" max="36" step="1">
+          <div class="tune-hint">Bucket size — deeper = slower drain</div>
+        </div>
+      </div>
+
+      <!-- Kc row (for garden/grapes) -->
+      <div class="tune-kc" id="tune-kc-section" style="display:none">
+        <label style="font-size:.75rem;color:var(--text2);margin-bottom:6px;display:block">Crop Coefficient (Kc) by Season</label>
+        <div class="tune-kc-row">
+          <label>Spring</label><input type="number" id="tune-kc-0" min="0.1" max="1.5" step="0.05">
+          <label>Early Sum</label><input type="number" id="tune-kc-1" min="0.1" max="1.5" step="0.05">
+          <label>Peak</label><input type="number" id="tune-kc-2" min="0.1" max="1.5" step="0.05">
+          <label>Fall</label><input type="number" id="tune-kc-3" min="0.1" max="1.5" step="0.05">
+        </div>
+        <div class="tune-hint" style="margin-top:4px">Turf=0.90, Garden=0.8-1.1, Grapes=0.4-0.7</div>
+      </div>
+
+      <div class="tune-actions">
+        <button class="tune-save" id="tune-save" disabled>Save to Server</button>
+        <span class="tune-status" id="tune-status"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1150,8 +1245,8 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     });
   });
 
-  // Actual watering markers on moisture chart (if 2026)
-  if (actualBarData.length > 0) {
+  // Actual watering markers on moisture chart (brain-sim mode only — in real mode the bars are enough)
+  if (!isReal && actualBarData.length > 0) {
     // Find the closest moisture data point for each actual watering event
     var actualMoistureMarkers = [];
     actualBarData.forEach(function(ab) {
@@ -1426,6 +1521,13 @@ function refresh() {
     ]).then(function(results) {
       loadMsg.style.display = 'none';
       var liveData = results[1];
+      // Populate tuning panel with zone config from API
+      if (liveData.zone) {
+        tuneData = liveData.zone;
+        if (document.getElementById('tune-body').classList.contains('open')) {
+          populateTunePanel(tuneData);
+        }
+      }
       // 2026 = real DB data only, no simulation
       var data = generateRealData2026(currentZoneId, liveData);
       if (data) {
@@ -1450,6 +1552,174 @@ function refresh() {
     });
   }
 }
+
+// ═══════════════════════════════════
+// TUNING PANEL
+// ═══════════════════════════════════
+var tuneData = null; // current zone config from API
+
+document.getElementById('tune-toggle').addEventListener('click', function() {
+  var body = document.getElementById('tune-body');
+  var arrow = document.getElementById('tune-arrow');
+  if (body.classList.contains('open')) {
+    body.classList.remove('open'); arrow.textContent = '▸';
+  } else {
+    body.classList.add('open'); arrow.textContent = '▾';
+    if (tuneData) populateTunePanel(tuneData);
+  }
+});
+
+function populateTunePanel(zoneInfo) {
+  var z = zoneInfo;
+  document.getElementById('tune-heads').value = z.heads || 4;
+  var gpmPerHead = z.est_gpm && z.heads ? (z.est_gpm / z.heads) : 1.0;
+  document.getElementById('tune-gpm-head').value = gpmPerHead.toFixed(1);
+  document.getElementById('tune-gpm').value = (z.est_gpm || 4.0).toFixed(1);
+
+  // Area: if saved, use it; otherwise back-calculate from precip rate
+  var area = z.area_sqft;
+  if (!area && z.precip_rate_iph && z.est_gpm) {
+    area = Math.round(96.25 * z.est_gpm / z.precip_rate_iph);
+  }
+  document.getElementById('tune-area').value = area || '';
+  document.getElementById('tune-precip').value = (z.precip_rate_iph || 1.0).toFixed(2);
+  document.getElementById('tune-root').value = z.root_depth_in || 6;
+
+  // Show what precip rate implies and vice versa
+  updateTuneCalcs();
+
+  // Kc section: show for drip zones (garden, grapes) or any non-sprinkler
+  var isDrip = z.type === 'drip' || (z.name && (z.name.toLowerCase().indexOf('garden') >= 0 || z.name.toLowerCase().indexOf('grape') >= 0));
+  var kcSection = document.getElementById('tune-kc-section');
+  kcSection.style.display = isDrip ? 'block' : 'none';
+  if (z.kc && z.kc.length >= 4) {
+    for (var ki = 0; ki < 4; ki++) {
+      document.getElementById('tune-kc-' + ki).value = z.kc[ki];
+    }
+  }
+
+  document.getElementById('tune-save').disabled = false;
+  document.getElementById('tune-status').textContent = '';
+}
+
+function updateTuneCalcs() {
+  var heads = parseFloat(document.getElementById('tune-heads').value) || 4;
+  var gpmHead = parseFloat(document.getElementById('tune-gpm-head').value) || 1.0;
+  var totalGpm = heads * gpmHead;
+  document.getElementById('tune-gpm').value = totalGpm.toFixed(1);
+
+  var area = parseFloat(document.getElementById('tune-area').value);
+  var precip = parseFloat(document.getElementById('tune-precip').value);
+
+  // Show calculated precip from area, or calculated area from precip
+  var areaCalc = document.getElementById('tune-area-calc');
+  var precipCalc = document.getElementById('tune-precip-calc');
+
+  if (area > 0) {
+    var calcPrecip = 96.25 * totalGpm / area;
+    precipCalc.textContent = 'From area: ' + calcPrecip.toFixed(2) + ' iph';
+  } else {
+    precipCalc.textContent = '';
+  }
+  if (precip > 0) {
+    var calcArea = Math.round(96.25 * totalGpm / precip);
+    areaCalc.textContent = 'From rate: ~' + calcArea + ' sq ft';
+  } else {
+    areaCalc.textContent = '';
+  }
+
+  // Show runtime to replace 1 day of peak ET
+  var root = parseFloat(document.getElementById('tune-root').value) || 6;
+  if (precip > 0) {
+    var peakET = 0.20; // typical peak day ET₀ inches
+    var minsToReplace = (peakET * 0.90 / precip) * 60; // Kc=0.90
+    var areaHint = document.querySelector('#tune-panel .tune-field:nth-child(5) .tune-hint');
+    if (areaHint) areaHint.textContent = '= 96.25 × GPM ÷ area · ~' + Math.round(minsToReplace) + ' min replaces peak day ET';
+  }
+}
+
+// Auto-calc when area changes → update precip rate
+document.getElementById('tune-area').addEventListener('input', function() {
+  var area = parseFloat(this.value);
+  var gpm = parseFloat(document.getElementById('tune-gpm').value);
+  if (area > 0 && gpm > 0) {
+    var precip = 96.25 * gpm / area;
+    document.getElementById('tune-precip').value = precip.toFixed(2);
+  }
+  updateTuneCalcs();
+});
+
+// Auto-calc when heads or gpm/head changes
+['tune-heads', 'tune-gpm-head'].forEach(function(id) {
+  document.getElementById(id).addEventListener('input', function() {
+    var heads = parseFloat(document.getElementById('tune-heads').value) || 4;
+    var gpmHead = parseFloat(document.getElementById('tune-gpm-head').value) || 1.0;
+    var totalGpm = heads * gpmHead;
+    document.getElementById('tune-gpm').value = totalGpm.toFixed(1);
+    // Recalc precip if area is set
+    var area = parseFloat(document.getElementById('tune-area').value);
+    if (area > 0) {
+      document.getElementById('tune-precip').value = (96.25 * totalGpm / area).toFixed(2);
+    }
+    updateTuneCalcs();
+  });
+});
+
+// If user manually edits precip rate, back-calculate area
+document.getElementById('tune-precip').addEventListener('input', function() {
+  updateTuneCalcs();
+});
+
+document.getElementById('tune-root').addEventListener('input', function() {
+  updateTuneCalcs();
+});
+
+document.getElementById('tune-save').addEventListener('click', function() {
+  var btn = this;
+  var status = document.getElementById('tune-status');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+
+  var payload = {
+    zone_id: currentZoneId,
+    heads: parseInt(document.getElementById('tune-heads').value),
+    est_gpm: parseFloat(document.getElementById('tune-gpm').value),
+    precip_rate_iph: parseFloat(document.getElementById('tune-precip').value),
+    root_depth_in: parseInt(document.getElementById('tune-root').value)
+  };
+  var area = parseFloat(document.getElementById('tune-area').value);
+  if (area > 0) payload.area_sqft = area;
+
+  // Kc if visible
+  if (document.getElementById('tune-kc-section').style.display !== 'none') {
+    payload.kc = [];
+    for (var ki = 0; ki < 4; ki++) {
+      payload.kc.push(parseFloat(document.getElementById('tune-kc-' + ki).value) || 0.90);
+    }
+  }
+
+  fetch('/api/zone-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(r) { return r.json(); }).then(function(resp) {
+    if (resp.ok) {
+      status.textContent = '✅ Saved — balance will recalculate at 11 PM';
+      status.style.color = '#22c55e';
+      // Clear cache so next refresh picks up new config
+      liveDataCache = {};
+      setTimeout(function() { btn.disabled = false; }, 2000);
+    } else {
+      status.textContent = '❌ ' + (resp.error || 'Failed');
+      status.style.color = '#ef4444';
+      btn.disabled = false;
+    }
+  }).catch(function(err) {
+    status.textContent = '❌ ' + err;
+    status.style.color = '#ef4444';
+    btn.disabled = false;
+  });
+});
 
 // Initial load
 refresh();

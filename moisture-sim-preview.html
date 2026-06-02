@@ -5,6 +5,8 @@
 <title>Soil Moisture Simulation — Preview</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   *{box-sizing:border-box}
   body { background: #0f1923; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 16px; }
@@ -131,6 +133,8 @@
       <option value="2022">2022</option>
       <option value="2021">2021 (Heat Dome)</option>
     </select>
+    <button id="btn-reset-zoom" style="background:#0f172a; color:#94a3b8; border:1px solid #475569; border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer">Reset Zoom</button>
+    <span style="color:#475569; font-size:.65rem">Drag to zoom · Scroll to pan</span>
     <span id="loading-msg" style="color:#f59e0b; font-size:.75rem; display:none">Loading weather…</span>
   </div>
 
@@ -886,6 +890,31 @@ function buildChart(zoneIdx, days, precomputedData) {
       animation: { duration: 400, easing: 'easeOutQuart' },
       interaction: { mode: 'index', intersect: false },
       plugins: {
+        zoom: {
+          pan: {
+            enabled: true, mode: 'x',
+            onPan: function(ctx) {
+              if (precipChart) {
+                var xScale = ctx.chart.scales.x;
+                precipChart.options.scales.x.min = xScale.min;
+                precipChart.options.scales.x.max = xScale.max;
+                precipChart.update('none');
+              }
+            }
+          },
+          zoom: {
+            drag: { enabled: true, backgroundColor: 'rgba(34,197,94,0.1)', borderColor: '#22c55e44', borderWidth: 1 },
+            mode: 'x',
+            onZoom: function(ctx) {
+              if (precipChart) {
+                var xScale = ctx.chart.scales.x;
+                precipChart.options.scales.x.min = xScale.min;
+                precipChart.options.scales.x.max = xScale.max;
+                precipChart.update('none');
+              }
+            }
+          }
+        },
         legend: { display: false },
         tooltip: {
           backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
@@ -1306,6 +1335,10 @@ document.querySelectorAll('#range-btns button').forEach(function(btn) {
 document.getElementById('year-select').addEventListener('change', function() {
   selectedYear = this.value;
   refresh();
+});
+document.getElementById('btn-reset-zoom').addEventListener('click', function() {
+  if (moistureChart) moistureChart.resetZoom();
+  if (precipChart) precipChart.resetZoom();
 });
 
 function refresh() {

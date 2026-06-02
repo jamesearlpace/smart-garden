@@ -536,7 +536,10 @@ function generateRealData2026(zoneId, liveData) {
         }
 
         // Predicted auto-watering: if below MAD during 4-7AM window
-        if (h >= 4 && h < 7 && moisture < madPct) {
+        // Only predict for FUTURE time — don't show watering that hasn't happened yet today
+        var stepTime = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
+        var isInFuture = stepTime.getTime() > Date.now();
+        if (h >= 4 && h < 7 && moisture < madPct && isInFuture) {
           var waterTarget = Math.min(100, madPct + 20);
           var waterPerStep = (zone.precipRate / 4) * (100 / rootDepth);
           if (moisture + waterPerStep > waterTarget) waterPerStep = waterTarget - moisture;

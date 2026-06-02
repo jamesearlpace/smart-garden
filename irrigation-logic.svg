@@ -36,7 +36,7 @@
 
   <!-- ARM check -->
   <rect x="230" y="188" width="340" height="44" rx="22" fill="#1e293b" stroke="#f59e0b44" stroke-width="1.5"/>
-  <text x="400" y="207" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="600">Moisture ≤ MAD + 10% ?</text>
+  <text x="400" y="207" text-anchor="middle" fill="#f59e0b" font-size="11" font-weight="600">Moisture ≤ MAD + 14% ?</text>
   <text x="400" y="222" text-anchor="middle" fill="#94a3b8" font-size="9">MAD shifts with temperature: +3% per 10°F above 70°F</text>
 
   <!-- YES: ARM -->

@@ -341,7 +341,7 @@ function generateSimData(zoneIdx, days) {
     var decision = null;
 
     // Arm logic: arm early enough to water BEFORE hitting MAD
-    var shouldArm = !armed && !recovering && moisture <= madNow + 10;
+    var shouldArm = !armed && !recovering && moisture <= madNow + 14;
 
     // Pre-emptive arm: if tomorrow is forecast hot (>82°F) and we're below madNow+8
     var wxTomorrow = dailyWeather[di + 1] || wx;
@@ -398,9 +398,9 @@ function generateSimData(zoneIdx, days) {
         // All clear: water
         else if (!rainExpected) {
           recovering = true;
-          var extraDepth = Math.max(0, (tempF - 65)) * 0.08;
-          cycleTarget = madNow + 15 + extraDepth + rng() * 3;
-          cycleTarget = Math.min(85, cycleTarget);
+        var extraDepth = Math.max(0, (tempF - 65)) * 0.06;
+        cycleTarget = madNow + 13 + extraDepth + rng() * 3;
+        cycleTarget = Math.min(80, cycleTarget);
           decision = { step: stepIdx, type: 'water', day: di,
             reason: 'Moisture ' + moisture.toFixed(0) + '%, MAD ' + madNow.toFixed(0) + '%, ' +
                     tempF.toFixed(0) + '°F, wind ' + windMph.toFixed(0) + ' mph — watering to ' + cycleTarget.toFixed(0) + '%' };

@@ -1620,7 +1620,44 @@ function refresh() {
       var data = generateRealData2026(currentZoneId, liveData);
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
-        updateNextWateringBanner(data, liveData);
+        // Inline banner logic (bug #23: function call kept failing silently)
+        try {
+          var _banner = document.getElementById('next-water-banner');
+          var _curM = 50, _madM = 50;
+          for (var _i = data.length - 1; _i >= 0; _i--) {
+            if (!data[_i].isForecast) { _curM = data[_i].moisture; _madM = data[_i].madNow; break; }
+          }
+          if (_curM <= _madM) {
+            var _d = new Date();
+            if (_d.getHours() >= 7) _d.setDate(_d.getDate() + 1);
+            _d.setHours(4, 0, 0, 0);
+            var _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            var _mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            var _ha = (_d.getTime() - Date.now()) / 3600000;
+            var _ts = _ha < 1 ? 'now' : _ha < 24 ? _ha.toFixed(0) + ' hours' : (_ha / 24).toFixed(1) + ' days';
+            _banner.style.display = 'flex';
+            document.getElementById('nw-value').textContent = _dn[_d.getDay()] + ' ' + _mn[_d.getMonth()] + ' ' + _d.getDate() + ' ~4 AM';
+            document.getElementById('nw-value').style.color = '#f59e0b';
+            document.getElementById('nw-detail').textContent = '~' + _ts + ' · moisture ' + Math.round(_curM) + '% below MAD ' + Math.round(_madM) + '% — needs water';
+          } else {
+            // Above MAD — estimate when it will cross
+            var _fc = (liveData && liveData.forecast_7day) || [];
+            var _m = _curM, _hit = null, _rd = getZoneBrainConfig(currentZoneId).rootDepthIn;
+            for (var _fi = 0; _fi < _fc.length; _fi++) {
+              _m = _m - ((_fc[_fi].et0 || 0) * 0.90 / _rd) * 100 + ((_fc[_fi].rain || 0) * 0.65 / _rd) * 100;
+              if (_m <= _madM) { _hit = _fi; break; }
+            }
+            if (_hit !== null) {
+              var _d2 = new Date(); _d2.setDate(_d2.getDate() + _hit); _d2.setHours(4, 0, 0, 0);
+              var _ha2 = (_d2.getTime() - Date.now()) / 3600000;
+              var _ts2 = _ha2 < 1 ? 'now' : _ha2 < 24 ? _ha2.toFixed(0) + ' hours' : (_ha2 / 24).toFixed(1) + ' days';
+              _banner.style.display = 'flex';
+              document.getElementById('nw-value').textContent = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][_d2.getDay()] + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][_d2.getMonth()] + ' ' + _d2.getDate() + ' ~4 AM';
+              document.getElementById('nw-value').style.color = _ha2 < 24 ? '#f59e0b' : '#22c55e';
+              document.getElementById('nw-detail').textContent = '~' + _ts2 + ' · ' + Math.round(_curM) + '% → MAD ' + Math.round(_madM) + '%';
+            } else { _banner.style.display = 'none'; }
+          }
+        } catch(e) { console.error('Banner error:', e); }
       }
     }).catch(function(err) {
       loadMsg.textContent = 'Error: ' + err;

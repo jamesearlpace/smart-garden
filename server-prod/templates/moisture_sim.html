@@ -1131,10 +1131,17 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
   var MAD = zone.madPct;
   var isReal = data.isRealData === true;
 
-  // Show last N days (days param), but data contains full season
+  // Show last N days relative to NOW (not end of forecast)
+  // So "30d" means 30 days of history + whatever forecast exists after Now
   var tMax = data[data.length - 1].t.getTime();
-  var tMin = days < 999 ? tMax - days * 86400000 : data[0].t.getTime();
-  if (tMin < data[0].t.getTime()) tMin = data[0].t.getTime();
+  var tMin;
+  if (days >= 999) {
+    tMin = data[0].t.getTime();
+  } else {
+    var nowMs = Date.now();
+    tMin = nowMs - days * 86400000;
+    if (tMin < data[0].t.getTime()) tMin = data[0].t.getTime();
+  }
 
   // Filter to visible window
   var visibleData = data.filter(function(p) { return p.t.getTime() >= tMin; });
@@ -1486,23 +1493,25 @@ function updateNextWateringBanner(data, liveData) {
 
     // Use forecast_7day from API if available
     var forecast = (liveData && liveData.forecast_7day) || [];
-    if (forecast.length > 0) {
-      if (lastMoisture <= madPct) {
-        // Already below MAD — needs water at next 4 AM window
-        var estDate = new Date();
-        if (estDate.getHours() >= 7) estDate.setDate(estDate.getDate() + 1); // past today's window
-        estDate.setHours(4, 0, 0, 0);
-        var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-        var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        var hoursAway = (estDate.getTime() - now) / 3600000;
-        var timeStr = hoursAway < 1 ? 'now' : hoursAway < 24 ? hoursAway.toFixed(0) + ' hours' : (hoursAway / 24).toFixed(1) + ' days';
 
-        banner.style.display = 'flex';
-        document.getElementById('nw-value').textContent = dn[estDate.getDay()] + ' ' + mn[estDate.getMonth()] + ' ' + estDate.getDate() + ' ~4 AM';
-        document.getElementById('nw-value').style.color = '#f59e0b';
-        document.getElementById('nw-detail').textContent = '~' + timeStr + ' · moisture ' + Math.round(lastMoisture) + '% below MAD ' + Math.round(madPct) + '% — needs water now';
-        return;
-      }
+    if (lastMoisture <= madPct) {
+      // Already below MAD — needs water at next 4 AM window (regardless of forecast data)
+      var estDate = new Date();
+      if (estDate.getHours() >= 7) estDate.setDate(estDate.getDate() + 1);
+      estDate.setHours(4, 0, 0, 0);
+      var dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      var hoursAway = (estDate.getTime() - now) / 3600000;
+      var timeStr = hoursAway < 1 ? 'now' : hoursAway < 24 ? hoursAway.toFixed(0) + ' hours' : (hoursAway / 24).toFixed(1) + ' days';
+
+      banner.style.display = 'flex';
+      document.getElementById('nw-value').textContent = dn[estDate.getDay()] + ' ' + mn[estDate.getMonth()] + ' ' + estDate.getDate() + ' ~4 AM';
+      document.getElementById('nw-value').style.color = '#f59e0b';
+      document.getElementById('nw-detail').textContent = '~' + timeStr + ' · moisture ' + Math.round(lastMoisture) + '% below MAD ' + Math.round(madPct) + '% — needs water now';
+      return;
+    }
+
+    if (forecast.length > 0) {
       // Above MAD — walk forward through forecast to find when it crosses
       var m = lastMoisture;
       var rootD = zone.rootDepthIn;

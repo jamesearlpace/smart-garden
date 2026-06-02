@@ -1237,7 +1237,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     if (forecastSprinklerBars.length > 0) {
       forecastSprinklerBars.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
       precipDatasets.push({
-        label: '💧 Predicted', data: forecastSprinklerBars,
+        label: '� Predicted Sprinkler', data: forecastSprinklerBars,
         backgroundColor: 'rgba(16,185,129,0.35)', borderColor: 'rgba(16,185,129,0.55)',
         borderWidth: 1, borderDash: [3, 3], barThickness: 5, maxBarThickness: 8
       });
@@ -1273,7 +1273,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
               return dn[d.getDay()] + ' ' + h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
             },
             label: function(ctx) {
-              if (ctx.parsed.y > 0) {
+              if (ctx.parsed.y > 0.001) {
                 var lbl = ctx.dataset.label + ' ' + ctx.parsed.y.toFixed(2) + '"';
                 if (ctx.raw && ctx.raw.duration) lbl += ' (' + Math.round(ctx.raw.duration / 60) + ' min)';
                 return lbl;

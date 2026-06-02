@@ -1186,7 +1186,8 @@ function generateRealData(zoneIdx, days, year) {
       for (var ri = 0; ri < rainEvents.length; ri++) {
         var re = rainEvents[ri];
         if (di === re.day && stepInDay >= re.hr * 4 && stepInDay < re.hr * 4 + re.dur) {
-          var rawRain = (re.depth / re.dur) * 100;
+          // Scale by root depth — same units as ET drain and sprinkler
+          var rawRain = (re.depth / re.dur) * (100 / rootDepth);
           // Effectiveness: light (<0.1") = 40%, medium (0.1-0.3") = 65%, heavy (>0.3") = 80%
           var eff = re.depth < 0.1 ? 0.40 : re.depth < 0.3 ? 0.65 : 0.80;
           rain = rawRain * eff;

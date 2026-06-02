@@ -146,12 +146,14 @@
   </div>
   <div class="legend" style="margin-top:-4px">
     <span class="legend-item"><span style="color:#22c55e; font-size:12px">●</span> <b>Watered</b></span>
-    <span class="legend-item"><span style="color:#3b82f6; font-size:12px">▲</span> <b>Rain Skip</b></span>
-    <span class="legend-item"><span style="color:#94a3b8; font-size:12px">◆</span> <b>Wind Skip</b></span>
-    <span class="legend-item"><span style="color:#f59e0b; font-size:12px">■</span> <b>Stress Delay</b></span>
+    <span class="legend-item"><span style="color:#86efac; font-size:12px">●</span> <b>Catch-up</b></span>
+    <span class="legend-item"><span style="color:#60a5fa; font-size:12px">▲</span> <b>Rain Skip</b></span>
+    <span class="legend-item"><span style="color:#e2e8f0; font-size:12px">◆</span> <b>Wind Skip</b></span>
+    <span class="legend-item"><span style="color:#fbbf24; font-size:12px">■</span> <b>Stress Delay</b></span>
     <span class="legend-item"><span style="color:#fb923c; font-size:12px">★</span> <b>Pre-emptive</b></span>
-    <span class="legend-item"><span style="color:#8b5cf6; font-size:12px">▲</span> <b>Hardening</b></span>
-    <span class="legend-item"><span style="color:#ef4444; font-size:12px">✕</span> <b>Emergency</b></span>
+    <span class="legend-item"><span style="color:#a78bfa; font-size:12px">▲</span> <b>Hardening</b></span>
+    <span class="legend-item"><span style="color:#c084fc; font-size:12px">▣</span> <b>Water (rain)</b></span>
+    <span class="legend-item"><span style="color:#f87171; font-size:12px">✕</span> <b>Emergency</b></span>
   </div>
 
   <!-- Two stacked charts: precip bars on top, moisture line below -->
@@ -797,7 +799,7 @@ function buildChart(zoneIdx, days, precomputedData) {
     water: [], 'skip-rain': [], 'skip-wind': [], 'skip-stress': [],
     'skip-stress-target': [], 'arm-preemptive': [],
     'water-despite-rain': [], 'water-emergency': [],
-    'skip-harden': []
+    'skip-harden': [], 'catch-up': []
   };
   var decs = data.decisions || [];
   decs.forEach(function(dec) {
@@ -805,20 +807,25 @@ function buildChart(zoneIdx, days, precomputedData) {
     if (!pt) return;
     var bucket = decisionMarkers[dec.type];
     if (bucket) bucket.push({ x: pt.t, y: pt.moisture, reason: dec.reason });
+    else {
+      // Unknown type — put in water bucket as fallback
+      decisionMarkers['water'].push({ x: pt.t, y: pt.moisture, reason: '[' + dec.type + '] ' + dec.reason });
+    }
   });
 
   // Decision marker datasets (scatter points on the moisture chart)
   var markerDatasets = [];
   var markerConfig = {
-    'water':              { color: '#22c55e', shape: 'circle',   size: 7, label: '💧 Watered' },
-    'skip-rain':          { color: '#3b82f6', shape: 'triangle', size: 8, label: '🌧️ Rain Skip' },
-    'skip-wind':          { color: '#94a3b8', shape: 'rectRot',  size: 7, label: '💨 Wind Skip' },
-    'skip-stress':        { color: '#f59e0b', shape: 'rect',     size: 6, label: '🌱 Stress Delay' },
-    'skip-stress-target': { color: '#f59e0b', shape: 'rect',     size: 6, label: '🌱 Stress Delay' },
-    'arm-preemptive':     { color: '#fb923c', shape: 'star',     size: 8, label: '🌡️ Pre-emptive' },
-    'water-despite-rain': { color: '#a78bfa', shape: 'circle',   size: 7, label: '⚠️ Water (rain)' },
-    'water-emergency':    { color: '#ef4444', shape: 'crossRot', size: 9, label: '🚨 Emergency' },
-    'skip-harden':        { color: '#8b5cf6', shape: 'triangle', size: 8, label: '🌿 Hardening' },
+    'water':              { color: '#22c55e', shape: 'circle',      size: 8,  label: '💧 Watered' },
+    'catch-up':           { color: '#86efac', shape: 'circle',      size: 8,  label: '💧 Catch-up' },
+    'skip-rain':          { color: '#60a5fa', shape: 'triangle',    size: 9,  label: '🌧️ Rain Skip' },
+    'skip-wind':          { color: '#e2e8f0', shape: 'rectRot',     size: 8,  label: '💨 Wind Skip' },
+    'skip-stress':        { color: '#fbbf24', shape: 'rect',        size: 7,  label: '🌱 Stress Delay' },
+    'skip-stress-target': { color: '#fbbf24', shape: 'rect',        size: 7,  label: '🌱 Stress Delay' },
+    'arm-preemptive':     { color: '#fb923c', shape: 'star',        size: 10, label: '🌡️ Pre-emptive' },
+    'water-despite-rain': { color: '#c084fc', shape: 'rectRounded', size: 8,  label: '⚠️ Water (rain)' },
+    'water-emergency':    { color: '#f87171', shape: 'crossRot',    size: 11, label: '🚨 Emergency' },
+    'skip-harden':        { color: '#a78bfa', shape: 'triangle',    size: 9,  label: '🌿 Hardening' },
   };
   Object.keys(markerConfig).forEach(function(type) {
     var pts = decisionMarkers[type];

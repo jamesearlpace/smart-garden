@@ -1232,9 +1232,12 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     var fcstSprinklerByDay = {};
     data.forEach(function(p) {
       if (p.isForecast && p.sprinkler !== null && p.sprinkler > 0) {
-        var dayKey = p.t.toISOString().slice(0, 10);
+        // Use local date string for grouping (not UTC)
+        var dayKey = p.t.getFullYear() + '-' + String(p.t.getMonth()+1).padStart(2,'0') + '-' + String(p.t.getDate()).padStart(2,'0');
         if (!fcstSprinklerByDay[dayKey]) {
-          fcstSprinklerByDay[dayKey] = { totalIn: 0, date: new Date(dayKey + 'T04:00:00') };
+          // Position bar at 4 AM local time on this day
+          var barDate = new Date(p.t.getFullYear(), p.t.getMonth(), p.t.getDate(), 4, 0, 0);
+          fcstSprinklerByDay[dayKey] = { totalIn: 0, date: barDate };
         }
         fcstSprinklerByDay[dayKey].totalIn += p.sprinkler * rd / 100;
       }

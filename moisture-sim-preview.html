@@ -1265,24 +1265,26 @@ function generateRealData(zoneIdx, days, year) {
               skippedForRainDay = -1; // reset
             }
             
-            // ── Hardening mode: periodic deep-stress cycle ──
-            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 8 && moisture > wiltNow + 8) {
-              // Time for a hardening cycle — skip this watering on purpose
-              inHardeningMode = true;
-              decision = { step: globalStep, type: 'skip-harden', day: di,
-                reason: 'HARDENING: ' + (di - lastHardenDay) + ' days since last — letting roots grow deep. Moisture ' + Math.round(moisture) + '%' };
-            } else if (inHardeningMode && moisture <= wiltNow + 5) {
-              // End hardening — getting too close to damage
+            // ── Hardening mode: skip ONE cycle, shallow stress only ──
+            // For turf grass (not vineyards): brief mild stress, not extended deep deficit
+            // Skip one 4AM window, let moisture drop to MAD-5% max, then deep water
+            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 8 && moisture > madNow - 3) {
+              // Only enter hardening if we won't drop past MAD-5% before next 4AM
+              var estDrop = (et0_in / rootDepth) * 100 * kc; // one day drain
+              if (moisture - estDrop > madNow - 5) {
+                inHardeningMode = true;
+                decision = { step: globalStep, type: 'skip-harden', day: di,
+                  reason: 'HARDENING: Skip one cycle. Moisture ' + Math.round(moisture) + '% → est. ' + Math.round(moisture - estDrop) + '% tomorrow. Roots reaching deeper.' };
+              }
+            } else if (inHardeningMode) {
+              // End hardening after ONE skip — water deeply
               inHardeningMode = false;
               lastHardenDay = di;
               recovering = true;
-              cycleTarget = Math.min(80, madNow + 22);
+              // Deep water: MAD+22 to push water below normal root zone
+              cycleTarget = Math.min(82, madNow + 22);
               decision = { step: globalStep, type: 'water', day: di,
-                reason: 'END HARDENING: Moisture ' + Math.round(moisture) + '% approaching damage zone. Deep recovery to ' + Math.round(cycleTarget) + '%' };
-            } else if (inHardeningMode) {
-              // Still hardening — skip
-              decision = { step: globalStep, type: 'skip-harden', day: di,
-                reason: 'HARDENING day ' + (di - lastHardenDay + HARDEN_INTERVAL) + ': moisture ' + Math.round(moisture) + '%, wilt at ' + Math.round(wiltNow) + '%' };
+                reason: 'END HARDENING: Deep water to ' + Math.round(cycleTarget) + '% — rewarding root growth at ' + Math.round(moisture) + '%' };
             } else {
               // Normal watering — depth varies by root depth (seasonal bucket size)
               recovering = true;

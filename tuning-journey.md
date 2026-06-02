@@ -158,47 +158,52 @@ The refactor intended to enable water-balance mode for sensorless zones. The old
 **Severity:** Medium — misleading data, no operational impact.
 
 ### Summary
-The stats engine (`computeStats`) had 6 interacting bugs that produced garbage numbers. Each fix revealed the next bug because the underlying data has two pathological characteristics: (a) weeks of 0% moisture from when auto-watering was broken (bug #5), and (b) forecast predictions that generate synthetic future data.
+The stats engine (`computeStats`) had 6 interacting bugs that produced garbage numbers (177 hrs, 275 hrs, 0.8 days for a zone with zero real watering). Each fix revealed the next bug in the chain. The root cause was reusing a stats engine designed for clean simulated data to process messy real-world data that contains initialization artifacts, test blips, and forecast predictions.
 
-### Root cause chain
+### Root cause: two pathological data characteristics
+
+The real DB data has two properties the stats engine was never designed for:
+
+1. **Initialization garbage**: Auto-watering was broken (bug #5) for the system's entire life, so zones drained from field capacity to 0% with no irrigation. This created weeks of 0% data that looks like catastrophic deep stress but is actually just "the system wasn't running yet."
+
+2. **Forecast pollution**: Bug #10's fix (add predicted watering to forecast) injected synthetic `data[].sprinkler` values and created moisture oscillations in the future portion of the data array. Stats couldn't distinguish these predictions from historical reality.
+
+### The cascade (each fix unmasked the next)
 
 ```
-Bug #5 (auto-watering broken)
-  → Zones drain to 0% for weeks with no irrigation
-  → Bug #6: historical data looks wrong (actually correct for broken system)
-  → Bug #11: stats count those 0% weeks as stress
-    → Fix: skip data before moisture > 10%
-    → Bug #15: rain spike on May 16 briefly exceeds 10%, filter starts too early
-      → Fix: raise to MAD (50%)
+Bug #5 fix (auto-watering crash)
+  └→ Exposed bug #6: weeks of 0% moisture in DB (correct — system was broken)
+     └→ Bug #11: stats counted 0% weeks as stress → "56 hrs Deep Stress"
+        └→ Fix: skip data before moisture > 10%
+           └→ Bug #15: rain spike May 16 briefly exceeded 10%, filter started too early
+              └→ Fix: skip data before moisture > MAD (50%)
 
-Bug #10 (add forecast watering prediction)
-  → Forecast injects synthetic sprinkler bars into data[].sprinkler
-  → Bug #12: real-data mode with 0 actual events falls to sim path, finds forecast sprinklers
-    → Fix: gate on actualWaterings !== null
-  → Bug #13: stress loop counts forecast predictions
-    → Fix: skip isForecast points
-  → Bug #16: curMoisture reads end of forecast (after predicted watering)
-    → Fix: walk backward to last non-forecast point
+Bug #10 fix (forecast predicted watering)
+  └→ Injected data[].sprinkler values into forecast portion
+     ├→ Bug #12: real-data mode with 0 actual events fell to sim path
+     │  (actualWaterings.length > 0 was false → else branch → counted forecast sprinklers)
+     │  └→ Fix: gate on actualWaterings !== null (not .length)
+     ├→ Bug #13: stress loop counted forecast data points
+     │  └→ Fix: skip isForecast in stress loop
+     └→ Bug #16: curMoisture read end of forecast (77%) instead of current (43%)
+        └→ Fix: walk backward to last non-forecast point
 
-Bug #14: 6-second valve test events
-  → Relay toggle tests create watering_event rows with duration_sec = 1-6
-  → Filter was > 5 seconds, allowing 6s events through
-  → Creates phantom "cycles" that stress gets divided by
-  → Fix: raise to > 60 seconds
+Manual valve test artifacts
+  └→ Bug #14: 6-second relay tests created watering_event rows
+     └→ Filter at > 5s let 6s events through → phantom "cycles"
+        └→ Fix: raise to > 60 seconds
 ```
 
-### Lesson learned
-The stats engine was designed for the brain simulation (which generates clean, self-consistent data with sprinkler events). When it was repurposed for real DB data, it inherited assumptions that don't hold:
-- Real data has initialization artifacts (0% periods)
-- Real data has test/accidental events (6-second relay toggles)
-- Forecast predictions create synthetic future data that looks like real events
-- The `data[]` array mixes historical truth with future predictions
+### Key lesson
+**Never reuse simulation-era code for real data without auditing every assumption.** The sim engine generates clean self-consistent arrays where every sprinkler entry is intentional. Real data has: initialization artifacts, test blips, manual overrides, server restarts causing balance resets, and forecast predictions mixed in. Every loop, filter, and division needs explicit guards for these cases.
 
-**Defensive fix pattern applied:** Every loop in `computeStats` now has explicit guards:
-- `if (data[j].isForecast) continue` — skip predictions
-- `if (!pastInit && data[j].moisture > MAD) pastInit = true` — skip broken initialization
-- `duration_sec <= 60` — skip test blips
-- `curMoisture` walks backward to last real point
+### Guards now in place
+- `if (data[j].isForecast) continue` in stress loop
+- `if (!pastInit && data[j].moisture > MAD) pastInit = true` to skip broken init period
+- `duration_sec <= 60` to skip relay test blips
+- `isRealMode = actualWaterings !== null` (not `.length > 0`) to prevent fallthrough to sim path
+- `curMoisture` walks backward from end to find last non-forecast point
+- Stats show "X total" instead of "0.0 per cycle" when no real cycles exist
 
 ---
 

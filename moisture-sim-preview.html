@@ -1013,8 +1013,17 @@ function generateRealData(zoneIdx, days, year) {
   var moisture = MAD_BASE + 20;
   var points = [], decisions = [];
   
-  // Seasonal Kc
-  var kcSchedule = { 5: 0.55, 6: 0.75, 7: 0.85, 8: 0.85, 9: 0.65 };
+  // Seasonal Kc + growth stage
+  var kcSchedule = { 3: 0.40, 4: 0.40, 5: 0.65, 6: 0.80, 7: 0.85, 8: 0.85, 9: 0.65, 10: 0.40 };
+  
+  // Seasonal MAD — shallow spring roots can't handle deep deficit
+  var madSchedule = { 3: 60, 4: 60, 5: 55, 6: 50, 7: 50, 8: 50, 9: 55, 10: 60 };
+  
+  // Seasonal recovery target above MAD — spring: light & frequent, summer: deep & infrequent
+  var recoverSchedule = { 3: 12, 4: 12, 5: 16, 6: 20, 7: 20, 8: 20, 9: 16, 10: 12 };
+  
+  // Hardening only allowed Jun-Aug (established roots)
+  var hardenAllowed = { 3: false, 4: false, 5: false, 6: true, 7: true, 8: true, 9: false, 10: false };
   
   // Build rain events from hourly data
   var rainEvents = [];
@@ -1060,6 +1069,9 @@ function generateRealData(zoneIdx, days, year) {
     var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) > 0.02);
     var month = parseInt(wx.daily.time[di].split('-')[1]);
     var kc = kcSchedule[month] || 0.80;
+    var seasonalMAD = madSchedule[month] || 50;
+    var seasonalRecover = recoverSchedule[month] || 20;
+    var canHarden = hardenAllowed[month] || false;
     var hiTomorrow = (di + 1 < numDays) ? wx.daily.temperature_2m_max[di + 1] : hi;
     
     decidedToday = false;
@@ -1076,9 +1088,9 @@ function generateRealData(zoneIdx, days, year) {
       // Wind from hourly
       var windMph = (hrIdx < wx.hourly.wind_speed_10m.length) ? wx.hourly.wind_speed_10m[hrIdx] : maxWind * 0.5;
       
-      // Dynamic thresholds
+      // Dynamic thresholds — use seasonal MAD as base
       var tempDelta = (tempF - 70) / 10;
-      var madNow = Math.max(38, Math.min(62, MAD_BASE + tempDelta * 3));
+      var madNow = Math.max(38, Math.min(62, seasonalMAD + tempDelta * 3));
       var wiltNow = Math.max(22, Math.min(madNow - 10, WILT_BASE + tempDelta * 2));
       
       // ET₀ drain — prorate actual daily ET₀
@@ -1170,7 +1182,7 @@ function generateRealData(zoneIdx, days, year) {
             }
             
             // ── Hardening mode: periodic deep-stress cycle ──
-            if (!catchUpNeeded && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 5 && moisture > wiltNow + 8) {
+            if (!catchUpNeeded && canHarden && !inHardeningMode && (di - lastHardenDay) >= HARDEN_INTERVAL && moisture <= madNow + 5 && moisture > wiltNow + 8) {
               // Time for a hardening cycle — skip this watering on purpose
               inHardeningMode = true;
               decision = { step: globalStep, type: 'skip-harden', day: di,
@@ -1188,13 +1200,14 @@ function generateRealData(zoneIdx, days, year) {
               decision = { step: globalStep, type: 'skip-harden', day: di,
                 reason: 'HARDENING day ' + (di - lastHardenDay + HARDEN_INTERVAL) + ': moisture ' + Math.round(moisture) + '%, wilt at ' + Math.round(wiltNow) + '%' };
             } else {
-              // Normal watering
+              // Normal watering — depth varies by season
               recovering = true;
               var avgHi3 = (hi + hiTomorrow + (di + 2 < numDays ? wx.daily.temperature_2m_max[di+2] : hi)) / 3;
               var recoverExtra = Math.max(0, (avgHi3 - 70)) * 0.04;
-              cycleTarget = Math.min(80, madNow + 20 + recoverExtra);
+              cycleTarget = Math.min(80, madNow + seasonalRecover + recoverExtra);
+              var stageName = ['','','','spring','spring','growing','peak','peak','peak','fall','dormancy'][month] || '';
               if (!decision) decision = { step: globalStep, type: 'water', day: di,
-                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc };
+                reason: Math.round(moisture) + '% → ' + Math.round(cycleTarget) + '%, ' + Math.round(tempF) + '°F, Kc=' + kc + (stageName ? ' (' + stageName + ')' : '') };
               if (catchUpNeeded) {
                 decision.reason += Math.round(cycleTarget) + '%';
               }

@@ -140,6 +140,14 @@
     <span class="legend-item"><span style="width:14px; height:0; border-top:2px dashed #ef4444; display:inline-block"></span> <b>Stress Limit</b></span>
     <span class="legend-item"><span style="width:14px; height:0; border-top:1px dotted #fb923c; display:inline-block"></span> <b>Temp °F</b></span>
   </div>
+  <div class="legend" style="margin-top:-4px">
+    <span class="legend-item"><span style="color:#22c55e; font-size:12px">●</span> <b>Watered</b></span>
+    <span class="legend-item"><span style="color:#3b82f6; font-size:12px">▲</span> <b>Rain Skip</b></span>
+    <span class="legend-item"><span style="color:#94a3b8; font-size:12px">◆</span> <b>Wind Skip</b></span>
+    <span class="legend-item"><span style="color:#f59e0b; font-size:12px">■</span> <b>Stress Delay</b></span>
+    <span class="legend-item"><span style="color:#fb923c; font-size:12px">★</span> <b>Pre-emptive</b></span>
+    <span class="legend-item"><span style="color:#ef4444; font-size:12px">✕</span> <b>Emergency</b></span>
+  </div>
 
   <!-- Two stacked charts: precip bars on top, moisture line below -->
   <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
@@ -779,6 +787,44 @@ function buildChart(zoneIdx, days, precomputedData) {
   grad.addColorStop(0.6, 'rgba(34,197,94,0.03)');
   grad.addColorStop(1, 'rgba(34,197,94,0)');
 
+  // ── Build decision markers from the decisions array ──
+  var decisionMarkers = {
+    water: [], 'skip-rain': [], 'skip-wind': [], 'skip-stress': [],
+    'skip-stress-target': [], 'arm-preemptive': [],
+    'water-despite-rain': [], 'water-emergency': []
+  };
+  var decs = data.decisions || [];
+  decs.forEach(function(dec) {
+    var pt = data[dec.step];
+    if (!pt) return;
+    var bucket = decisionMarkers[dec.type];
+    if (bucket) bucket.push({ x: pt.t, y: pt.moisture, reason: dec.reason });
+  });
+
+  // Decision marker datasets (scatter points on the moisture chart)
+  var markerDatasets = [];
+  var markerConfig = {
+    'water':              { color: '#22c55e', shape: 'circle',   size: 7, label: '💧 Watered' },
+    'skip-rain':          { color: '#3b82f6', shape: 'triangle', size: 8, label: '🌧️ Rain Skip' },
+    'skip-wind':          { color: '#94a3b8', shape: 'rectRot',  size: 7, label: '💨 Wind Skip' },
+    'skip-stress':        { color: '#f59e0b', shape: 'rect',     size: 6, label: '🌱 Stress Delay' },
+    'skip-stress-target': { color: '#f59e0b', shape: 'rect',     size: 6, label: '🌱 Stress Delay' },
+    'arm-preemptive':     { color: '#fb923c', shape: 'star',     size: 8, label: '🌡️ Pre-emptive' },
+    'water-despite-rain': { color: '#a78bfa', shape: 'circle',   size: 7, label: '⚠️ Water (rain)' },
+    'water-emergency':    { color: '#ef4444', shape: 'crossRot', size: 9, label: '🚨 Emergency' },
+  };
+  Object.keys(markerConfig).forEach(function(type) {
+    var pts = decisionMarkers[type];
+    if (!pts || pts.length === 0) return;
+    var mc = markerConfig[type];
+    markerDatasets.push({
+      type: 'scatter', label: mc.label, data: pts,
+      backgroundColor: mc.color, borderColor: mc.color,
+      pointStyle: mc.shape, pointRadius: mc.size,
+      showLine: false, order: 0, yAxisID: 'y'
+    });
+  });
+
   moistureChart = new Chart(ctxM, {
     type: 'line',
     plugins: [stressZonesPlugin, nowLinePlugin],
@@ -818,7 +864,7 @@ function buildChart(zoneIdx, days, precomputedData) {
           borderWidth: 1, pointRadius: 0, tension: 0.3,
           borderDash: [2, 2], fill: false, order: 5, yAxisID: 'yTemp'
         }
-      ]
+      ].concat(markerDatasets)
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -831,7 +877,13 @@ function buildChart(zoneIdx, days, precomputedData) {
           backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
           titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 12, displayColors: false,
           titleFont: { size: 12 }, bodyFont: { size: 11 },
-          filter: function(item) { var l = item.dataset.label; return l === 'Soil Moisture %'; },
+          filter: function(item) {
+            var l = item.dataset.label || '';
+            if (l === 'Soil Moisture %') return true;
+            if (l.indexOf('Skip') >= 0 || l.indexOf('Watered') >= 0 || l.indexOf('Emergency') >= 0 
+                || l.indexOf('Pre-emptive') >= 0 || l.indexOf('Delay') >= 0 || l.indexOf('Water') >= 0) return true;
+            return false;
+          },
           callbacks: {
             title: function(items) {
               if (!items.length) return '';
@@ -843,7 +895,10 @@ function buildChart(zoneIdx, days, precomputedData) {
               return dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate() + ', ' + h + ':' + (m<10?'0':'') + m + ' ' + ap;
             },
             label: function(ctx) {
-              return '🌱 Moisture: ' + ctx.parsed.y.toFixed(1) + '%';
+              if (ctx.dataset.label === 'Soil Moisture %') return '🌱 Moisture: ' + ctx.parsed.y.toFixed(1) + '%';
+              // Decision markers — show label + reason
+              if (ctx.raw && ctx.raw.reason) return ctx.dataset.label + ': ' + ctx.raw.reason;
+              return ctx.dataset.label;
             },
             afterBody: function(items) {
               if (!items.length) return [];

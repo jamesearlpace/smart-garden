@@ -1,0 +1,160 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <IPAddress.h>
+
+// ============================================================
+// WiFi Configuration — copy this file to config.h and fill in
+// ============================================================
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+// Static IP — pick something outside your router's DHCP pool.
+// Set USE_STATIC_IP false to fall back to DHCP.
+#define USE_STATIC_IP true
+IPAddress STATIC_IP(192, 168, 1, 150);
+IPAddress GATEWAY(192, 168, 1, 1);
+IPAddress SUBNET(255, 255, 255, 0);
+IPAddress DNS1(192, 168, 1, 1);
+
+// ============================================================
+// MQTT (optional — for Home Assistant / Node-RED).
+// Leave MQTT_ENABLED false if you only want the REST + web UI.
+// ============================================================
+#define MQTT_ENABLED false
+const char* MQTT_SERVER = "192.168.1.100";
+const int   MQTT_PORT   = 1883;
+const char* MQTT_USER   = "";
+const char* MQTT_PASS   = "";
+
+// ============================================================
+// Pin Assignments — match the wiring diagram in docs/
+// ============================================================
+
+// Soil moisture sensors (analog input). Disable in server config if unused.
+#define SOIL_SENSOR_1  32
+#define SOIL_SENSOR_2  33
+#define SOIL_SENSOR_3  34
+#define SOIL_SENSOR_4  35
+
+// DHT22 temperature & humidity
+#define DHT_PIN  4
+#define DHT_TYPE DHT22
+
+// L298N H-Bridge control pins for DC-latching solenoids.
+// Pin numbers are MCP23017 pin numbers (0-15): PA0-PA7 = 0-7, PB0-PB7 = 8-15.
+// Each valve has its own useMCP flag so you can mix MCP and direct GPIO.
+#define VALVE1_IN1  8
+#define VALVE1_IN2  9
+#define VALVE2_IN1  11
+#define VALVE2_IN2  10
+#define VALVE3_IN1  12
+#define VALVE3_IN2  13
+#define VALVE4_IN1  15
+#define VALVE4_IN2  14
+
+#define VALVE5_IN1  25
+#define VALVE5_IN2  26
+#define VALVE5_MCP  false
+
+#define VALVE6_IN1  0
+#define VALVE6_IN2  1
+#define VALVE6_MCP  true
+
+#define VALVE7_IN1  7
+#define VALVE7_IN2  6
+#define VALVE7_MCP  true
+
+#define VALVE8_IN1  4
+#define VALVE8_IN2  5
+#define VALVE8_MCP  true
+
+#define VALVE9_IN1  3
+#define VALVE9_IN2  2
+#define VALVE9_MCP  true
+
+#define VALVE10_IN1 27
+#define VALVE10_IN2 14
+
+// Power gate (P-FET via NPN level shifter): HIGH = L298Ns powered, LOW = idle.
+// GPIO 2 is also onboard LED -> visual indicator. Strapping pin defaults LOW
+// at boot, which is the safe state (gate OFF).
+#define POWER_GATE_PIN  2
+#define GATE_SETTLE_MS  5
+
+// Battery voltage divider on GPIO 36 (VP). Calibrate against a multimeter.
+#define BATTERY_ADC_PIN       36
+#define BATTERY_DIVIDER_RATIO 6.464f
+
+// ============================================================
+// System Settings
+// ============================================================
+#define NUM_VALVES        10
+#define NUM_SOIL_SENSORS  4
+
+// MCP23017 I/O expander
+#define MCP23017_ADDR  0x27
+#define MCP_SDA_PIN    21
+#define MCP_SCL_PIN    22
+#define VALVE_PULSE_MS 100
+#define SENSOR_READ_INTERVAL_MS 3600000
+
+#define WIFI_MODEM_SLEEP_ENABLED true
+#define AWAKE_HOLD_MS        300000
+#define AWAKE_HOLD_VALVE_MS  60000
+#define WEB_SERVER_PORT      80
+
+// Where the companion Python server lives. The ESP32's root URL ("/")
+// redirects here so phones on the LAN can hit the chip's IP and land
+// on the real dashboard.
+#define DASHBOARD_URL "http://192.168.1.10:5125"
+
+#define EVENT_RING_SIZE 100
+#define NVS_NAMESPACE   "smartgarden"
+
+// ============================================================
+// API auth — shared secret for state-changing endpoints.
+// Required as ?token=... on /api/reboot. Anyone on the LAN could otherwise
+// reboot the chip with a single curl. Pick something random and keep it
+// out of source control if you can.
+// ============================================================
+#define API_REBOOT_TOKEN "CHANGE_ME_RANDOM_STRING"
+
+// ============================================================
+// Power Management
+// ============================================================
+#define BOOT_CPU_MHZ        80
+#define RUN_CPU_MHZ         160
+#define SAFE_MODE_THRESHOLD 20
+#define SAFE_MODE_DELAY_SEC 15
+#define WIFI_TX_DBM         WIFI_POWER_19_5dBm
+#define WIFI_BOOT_TX_DBM    WIFI_POWER_8_5dBm
+
+#define ADAPTIVE_TX_ENABLED     true
+#define ADAPTIVE_TX_INTERVAL_MS 30000
+#define ADAPTIVE_TX_RSSI_STRONG -50
+#define ADAPTIVE_TX_RSSI_WEAK   -65
+#define ADAPTIVE_TX_LEVELS      4
+static const wifi_power_t ADAPTIVE_TX_LADDER[] = {
+    WIFI_POWER_8_5dBm,
+    WIFI_POWER_13dBm,
+    WIFI_POWER_17dBm,
+    WIFI_POWER_19_5dBm,
+};
+
+// ============================================================
+// Reliability — task watchdog + scheduled reboot
+// ============================================================
+#define TWDT_TIMEOUT_S      60
+#define WEEKLY_REBOOT_HOURS 168
+#define WEEKLY_REBOOT_HOUR  3
+
+// Independent firmware-side hard cap. Force-closes any valve open this long,
+// regardless of what the server says — survives crashed server, lost packets,
+// network partition, vacation.
+#define VALVE_HARD_MAX_MS (95UL * 60UL * 1000UL)
+
+// Fallback schedule fires when the server has been silent this long.
+#define FALLBACK_SERVER_SILENT_HOURS 24
+
+#endif // CONFIG_H

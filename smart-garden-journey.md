@@ -466,6 +466,9 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 | smart-garden-server | (closed) | — | Chip-temp false positives — fixed 2026-04-22. |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji, #12 reboot wiring — closed 2026-04-21. |
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
+| smart-garden-server | [#15](https://github.com/jamesearlpace/smart-garden-server/issues/15) | (fixed) | Moisture-sim banner showed past 4 AM time when above-MAD branch predicted same-day crossing — fixed `1a37f65` (2026-06-02). Roll target forward one day if `< now`. |
+| smart-garden-server | (fixed) | — | Moisture-sim JS parse error blocked all rendering after edit left `return;-1)` garbage in `refreshAllZones` — fixed `3d70b58` (2026-06-02). |
+| smart-garden-server | [#16](https://github.com/jamesearlpace/smart-garden-server/issues/16) | (fixed) | Moisture-sim banner forecast walker treated Open-Meteo ET0/rain as inches (actual = mm), making moisture appear to crash 25.4× too fast — fixed `09d7b01` (2026-06-02). Three duplicated walker copies all patched; consolidation TODO. |
 
 ---
 

@@ -9,18 +9,64 @@
 <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
-:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0;
-        --text2: #94a3b8; --green: #22c55e; --blue: #3b82f6; --amber: #f59e0b;
-        --red: #ef4444; }
+:root {
+  /* Light theme — matches dashboard (index.html) */
+  --bg: #f5f7f9; --card: #ffffff; --bg-card: #ffffff;
+  --border: #e8ecf0; --border-light: #f0f2f5;
+  --text: #1a2b3c; --text2: #5f7082; --text3: #9ba8b5;
+  --green: #22c55e; --green-dark: #16a34a; --green-light: #dcfce7; --green-bg: rgba(34,197,94,.08);
+  --blue: #3b82f6; --blue-light: #dbeafe; --blue-bg: rgba(59,130,246,.08);
+  --amber: #f59e0b; --amber-light: #fef3c7; --amber-bg: rgba(245,158,11,.08);
+  --red: #ef4444; --red-light: #fee2e2; --red-bg: rgba(239,68,68,.08);
+  --bg-sidebar: #1b2e1f; --bg-sidebar-hover: rgba(255,255,255,.08);
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.03);
+  --sidebar-w: 220px;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-       background: var(--bg); color: var(--text); padding: 16px; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; }
+
+/* ── Sidebar (cloned from dashboard) ── */
+.sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-w); height: 100vh; background: var(--bg-sidebar);
+  color: #fff; display: flex; flex-direction: column; z-index: 100; }
+.sidebar-brand { padding: 24px 20px 20px; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08) }
+.sidebar-brand .logo { font-size: 1.8rem }
+.sidebar-brand .name { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em }
+.sidebar-brand .loc { font-size: .7rem; color: rgba(255,255,255,.5); margin-top: 1px }
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto }
+.sidebar .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+  cursor: pointer; transition: all .2s; color: rgba(255,255,255,.6); font-size: .88rem; font-weight: 500; margin-bottom: 2px;
+  text-decoration: none; }
+.sidebar .nav-item:hover { background: var(--bg-sidebar-hover); color: rgba(255,255,255,.85) }
+.sidebar .nav-item.active { background: rgba(34,197,94,.18); color: #4ade80; font-weight: 600 }
+.sidebar .nav-item .icon { font-size: 1.15rem; width: 24px; text-align: center }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.08); font-size: .72rem; color: rgba(255,255,255,.35) }
+
+/* ── Main content offset ── */
+.main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; }
+
+/* ── Mobile bottom nav ── */
+.mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #fff;
+  border-top: 1px solid var(--border); box-shadow: 0 -2px 8px rgba(0,0,0,.05); z-index: 200; }
+.mobile-nav-inner { display: flex; justify-content: space-around; padding: 6px 4px; }
+.mob-nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 8px;
+  font-size: .68rem; color: var(--text2); cursor: pointer; text-decoration: none; }
+.mob-nav-item.active { color: var(--green-dark) }
+.mob-nav-item .mob-icon { font-size: 1.2rem }
+@media (max-width: 768px) {
+  .sidebar { display: none }
+  .main { margin-left: 0; padding: 16px 16px 80px }
+  .mobile-nav { display: block }
+}
 
 .nav { margin-bottom: 16px; font-size: .85rem; }
 .nav a { color: var(--blue); text-decoration: none; }
 .nav a:hover { text-decoration: underline; }
 
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px;
+  margin-bottom: 16px; box-shadow: var(--shadow); }
 
 .header-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
 h2 { margin: 0; font-size: 1.05rem; }
@@ -28,26 +74,26 @@ h2 { margin: 0; font-size: 1.05rem; }
 .current-badge {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
-  padding: 4px 14px 4px 10px; font-size: .82rem; font-weight: 600;
+  padding: 4px 14px 4px 10px; font-size: .82rem; font-weight: 600; color: var(--text);
 }
 .current-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
 
 .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .controls select {
-  background: var(--bg); color: var(--text); border: 1px solid #475569; border-radius: 6px;
+  background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
   padding: 5px 10px; font-size: .8rem; cursor: pointer; outline: none;
 }
 .controls select:hover { border-color: var(--green); }
 .range-btns { display: flex; gap: 0; }
 .range-btns button {
-  background: var(--bg); color: var(--text2); border: 1px solid #475569;
+  background: #fff; color: var(--text2); border: 1px solid var(--border);
   padding: 5px 12px; font-size: .75rem; cursor: pointer; transition: all .15s;
 }
 .range-btns button:first-child { border-radius: 6px 0 0 6px; }
 .range-btns button:last-child { border-radius: 0 6px 6px 0; }
 .range-btns button:not(:first-child) { border-left: none; }
-.range-btns button.active { background: #22c55e22; color: var(--green); border-color: var(--green); }
-.range-btns button:hover:not(.active) { color: var(--text); }
+.range-btns button.active { background: var(--green-light); color: var(--green-dark); border-color: var(--green); }
+.range-btns button:hover:not(.active) { color: var(--text); background: var(--border-light); }
 
 .legend { display: flex; gap: 14px; font-size: .72rem; color: var(--text2); margin-bottom: 8px; flex-wrap: wrap; }
 .legend-item { display: flex; align-items: center; gap: 4px; }
@@ -56,26 +102,26 @@ h2 { margin: 0; font-size: 1.05rem; }
 .legend-line { width: 14px; height: 0; border-top: 2px dashed var(--amber); }
 
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
-.stat { background: var(--bg); border-radius: 8px; padding: 12px; text-align: center; }
+.stat { background: var(--border-light); border-radius: 8px; padding: 12px; text-align: center; }
 .stat-value { font-size: 1.3rem; font-weight: 700; }
 .stat-label { font-size: .7rem; color: var(--text2); margin-top: 4px; }
-.stat-hint { font-size: .6rem; color: #64748b; margin-top: 2px; }
-.stat-good { color: var(--green); }
+.stat-hint { font-size: .6rem; color: var(--text3); margin-top: 2px; }
+.stat-good { color: var(--green-dark); }
 .stat-warn { color: var(--amber); }
 .stat-bad { color: var(--red); }
 
 .summary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-.summary-card { background: var(--bg); border-radius: 8px; padding: 14px 16px; }
+.summary-card { background: var(--border-light); border-radius: 8px; padding: 14px 16px; }
 .summary-card h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
-.summary-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: .78rem; border-bottom: 1px solid var(--card); }
+.summary-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: .78rem; border-bottom: 1px solid var(--border); }
 .summary-line:last-child { border-bottom: none; }
 .summary-label { color: var(--text2); }
 .summary-val { color: var(--text); font-weight: 500; }
-.summary-val.good { color: var(--green); }
+.summary-val.good { color: var(--green-dark); }
 .summary-val.warn { color: var(--amber); }
 
 .next-water-banner {
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: linear-gradient(135deg, var(--green-bg) 0%, var(--blue-bg) 100%);
   border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px;
   margin-bottom: 14px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
 }
@@ -87,21 +133,21 @@ h2 { margin: 0; font-size: 1.05rem; }
 
 .decision-log { margin-top: 12px; }
 .decision-log h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
-.decision-entry { display: flex; gap: 10px; padding: 6px 0; font-size: .75rem; border-bottom: 1px solid var(--card); }
+.decision-entry { display: flex; gap: 10px; padding: 6px 0; font-size: .75rem; border-bottom: 1px solid var(--border); }
 .decision-entry:last-child { border-bottom: none; }
 .decision-icon { font-size: 1rem; flex-shrink: 0; width: 22px; text-align: center; }
-.decision-time { color: #64748b; white-space: nowrap; min-width: 70px; }
-.decision-reason { color: #cbd5e1; }
-.decision-type-water .decision-reason { color: var(--green); }
+.decision-time { color: var(--text3); white-space: nowrap; min-width: 70px; }
+.decision-reason { color: var(--text); }
+.decision-type-water .decision-reason { color: var(--green-dark); }
 .decision-type-skip-wind .decision-reason { color: var(--text2); }
 .decision-type-skip-rain .decision-reason { color: var(--blue); }
-.decision-type-arm-preemptive .decision-reason { color: #fb923c; }
+.decision-type-arm-preemptive .decision-reason { color: #ea580c; }
 .decision-type-water-emergency .decision-reason { color: var(--red); }
-.decision-type-water-despite-rain .decision-reason { color: #a78bfa; }
+.decision-type-water-despite-rain .decision-reason { color: #7c3aed; }
 
 .actual-events { margin-top: 12px; }
 .actual-events h3 { margin: 0 0 8px; font-size: .85rem; }
-.event-row { display: flex; gap: 10px; padding: 4px 0; font-size: .75rem; border-bottom: 1px solid var(--card); }
+.event-row { display: flex; gap: 10px; padding: 4px 0; font-size: .75rem; border-bottom: 1px solid var(--border); }
 .event-row:last-child { border-bottom: none; }
 
 @media (max-width: 700px) {
@@ -114,7 +160,7 @@ h2 { margin: 0; font-size: 1.05rem; }
 /* Tuning panel */
 .tune-panel { margin-top: 16px; }
 .tune-toggle {
-  background: var(--bg); color: var(--text2); border: 1px solid var(--border);
+  background: var(--border-light); color: var(--text2); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 16px; font-size: .82rem; cursor: pointer;
   width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center;
 }
@@ -125,27 +171,50 @@ h2 { margin: 0; font-size: 1.05rem; }
 .tune-field { }
 .tune-field label { display: block; font-size: .7rem; color: var(--text2); margin-bottom: 4px; }
 .tune-field input {
-  width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  width: 100%; background: #fff; color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 10px; font-size: .85rem; outline: none;
 }
 .tune-field input:focus { border-color: var(--green); }
-.tune-field .tune-hint { font-size: .6rem; color: #64748b; margin-top: 2px; }
+.tune-field .tune-hint { font-size: .6rem; color: var(--text3); margin-top: 2px; }
 .tune-field .tune-calc { font-size: .65rem; color: var(--amber); margin-top: 2px; }
 .tune-actions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
 .tune-save {
-  background: var(--green); color: #000; border: none; border-radius: 6px;
+  background: var(--green); color: #fff; border: none; border-radius: 6px;
   padding: 8px 20px; font-size: .82rem; font-weight: 600; cursor: pointer;
 }
-.tune-save:hover { opacity: 0.9; }
+.tune-save:hover { background: var(--green-dark); }
 .tune-save:disabled { opacity: 0.4; cursor: not-allowed; }
 .tune-status { font-size: .75rem; color: var(--text2); }
 .tune-kc { margin-top: 10px; }
 .tune-kc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .tune-kc-row label { font-size: .7rem; color: var(--text2); min-width: 80px; }
-.tune-kc-row input { width: 60px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-size: .8rem; }
+.tune-kc-row input { width: 60px; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-size: .8rem; }
 </style>
 </head>
 <body>
+
+<!-- ═══ Sidebar (cloned from dashboard) ═══ -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">🌱</span>
+    <div>
+      <div class="name">Smart Garden</div>
+      <div class="loc">Duvall, WA</div>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
+    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
+    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/moisture-sim" class="nav-item active"><span class="icon">💧</span> Moisture</a>
+    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
+  </div>
+  <div class="sidebar-footer">Soil Moisture Simulation</div>
+</nav>
+
+<div class="main">
 
 <div class="nav">
   <a href="/">← Dashboard</a> · <a href="/forecast">Forecast</a> · <b>Moisture Sim</b>
@@ -179,7 +248,7 @@ h2 { margin: 0; font-size: 1.05rem; }
     </select>
     <button id="mode-toggle" type="button"
             title="Click to switch between Automatic (engine waters based on chart) and Manual (engine never auto-waters this zone)"
-            style="background:var(--bg); color:var(--text); border:1px solid #475569; border-radius:6px; padding:5px 10px; font-size:.78rem; font-weight:600; cursor:pointer; min-width:110px">
+            style="background:#fff; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:.78rem; font-weight:600; cursor:pointer; min-width:110px">
       <span id="mode-toggle-label">Mode</span>
     </button>
     <div class="range-btns" id="range-btns">
@@ -198,8 +267,8 @@ h2 { margin: 0; font-size: 1.05rem; }
       <option value="2022">2022</option>
       <option value="2021">2021 (Heat Dome)</option>
     </select>
-    <button id="btn-reset-zoom" style="background:var(--bg); color:var(--text2); border:1px solid #475569; border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer">Reset Zoom</button>
-    <span style="color:#475569; font-size:.65rem">Drag to zoom · Scroll to pan</span>
+    <button id="btn-reset-zoom" style="background:#fff; color:var(--text2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:.75rem; cursor:pointer">Reset Zoom</button>
+    <span style="color:var(--text3); font-size:.65rem">Drag to zoom · Scroll to pan</span>
     <span id="loading-msg" style="color:var(--amber); font-size:.75rem; display:none">Loading…</span>
   </div>
 
@@ -218,7 +287,7 @@ h2 { margin: 0; font-size: 1.05rem; }
     <span class="legend-item"><span style="color:var(--green);font-size:12px">●</span> <b>Watered</b></span>
     <span class="legend-item"><span style="color:#86efac;font-size:12px">●</span> <b>Catch-up</b></span>
     <span class="legend-item"><span style="color:#60a5fa;font-size:12px">▲</span> <b>Rain Skip</b></span>
-    <span class="legend-item"><span style="color:#e2e8f0;font-size:12px">◆</span> <b>Wind Skip</b></span>
+    <span class="legend-item"><span style="color:#64748b;font-size:12px">◆</span> <b>Wind Skip</b></span>
     <span class="legend-item"><span style="color:#fb923c;font-size:12px">★</span> <b>Pre-emptive</b></span>
     <span class="legend-item"><span style="color:#a78bfa;font-size:12px">▲</span> <b>Hardening</b></span>
     <span class="legend-item"><span style="color:#c084fc;font-size:12px">▣</span> <b>Water (rain)</b></span>
@@ -1207,7 +1276,7 @@ function renderUI(stats, MAD, decisions, zoneCfg, actualWaterings) {
     var typeCounts = {};
     decisions.forEach(function(dec) { typeCounts[dec.type] = (typeCounts[dec.type]||0) + 1; });
     var allTypes = ['water','catch-up','skip-rain','skip-wind','arm-preemptive','water-despite-rain','skip-harden','water-emergency'];
-    var badgeColorsMap = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#e2e8f0','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
+    var badgeColorsMap = {water:'#22c55e','catch-up':'#86efac','skip-rain':'#60a5fa','skip-wind':'#64748b','arm-preemptive':'#fb923c','water-despite-rain':'#c084fc','skip-harden':'#a78bfa','water-emergency':'#f87171'};
 
     logHtml = '<h3>🧠 Sim Decision Log (' + decisions.length + ')</h3>';
     logHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">';
@@ -1487,7 +1556,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
         y: {
           reverse: true, min: 0, max: y2Max, position: 'right',
           ticks: { callback: function(v) { return v.toFixed(1) + '"'; }, font: { size: 9 }, color: '#64748b88', maxTicksLimit: 3, padding: 2 },
-          grid: { color: '#1e293b22' },
+          grid: { color: 'rgba(0,0,0,.06)' },
           afterFit: function(axis) { axis.width = 35; }
         },
         yDummy: { position: 'left', display: true,
@@ -1520,7 +1589,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     'water':              { color: '#22c55e', shape: 'circle',      size: 8,  label: '💧 Watered' },
     'catch-up':           { color: '#86efac', shape: 'circle',      size: 8,  label: '💧 Catch-up' },
     'skip-rain':          { color: '#60a5fa', shape: 'triangle',    size: 9,  label: '🌧️ Rain Skip' },
-    'skip-wind':          { color: '#e2e8f0', shape: 'rectRot',     size: 8,  label: '💨 Wind Skip' },
+    'skip-wind':          { color: '#64748b', shape: 'rectRot',     size: 8,  label: '💨 Wind Skip' },
     'arm-preemptive':     { color: '#fb923c', shape: 'star',        size: 10, label: '🌡️ Pre-emptive' },
     'water-despite-rain': { color: '#c084fc', shape: 'rectRounded', size: 8,  label: '⚠️ Water (rain)' },
     'water-emergency':    { color: '#f87171', shape: 'crossRot',    size: 11, label: '🚨 Emergency' },
@@ -1679,7 +1748,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
           min: (function() { var lo = 100; moistureData.forEach(function(p) { if (p.y < lo) lo = p.y; }); return Math.max(0, Math.floor((lo - 10) / 10) * 10); })(),
           max: (function() { var hi = 0; moistureData.forEach(function(p) { if (p.y > hi) hi = p.y; }); return Math.min(100, Math.ceil((hi + 10) / 10) * 10); })(),
           ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, color: '#64748b', stepSize: 10 },
-          grid: { color: '#1e293b22' },
+          grid: { color: 'rgba(0,0,0,.06)' },
           title: { display: true, text: 'Soil Moisture %', font: { size: 11 }, color: '#94a3b8' },
           afterFit: function(axis) { axis.width = 50; }
         },
@@ -2162,5 +2231,20 @@ document.getElementById('tune-save').addEventListener('click', function() {
 renderModeToggle();
 refresh();
 </script>
+
+</div><!-- /.main -->
+
+<!-- ═══ Mobile bottom nav ═══ -->
+<div class="mobile-nav">
+  <div class="mobile-nav-inner">
+    <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
+    <a href="/#zones" class="mob-nav-item"><span class="mob-icon">🌿</span>Zones</a>
+    <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
+    <a href="/#settings" class="mob-nav-item"><span class="mob-icon">⚙️</span>Settings</a>
+    <a href="/forecast" class="mob-nav-item"><span class="mob-icon">🌧️</span>Forecast</a>
+    <a href="/moisture-sim" class="mob-nav-item active"><span class="mob-icon">💧</span>Moisture</a>
+  </div>
+</div>
+
 </body>
 </html>

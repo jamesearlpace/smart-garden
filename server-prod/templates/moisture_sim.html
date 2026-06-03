@@ -177,7 +177,13 @@ h2 { margin: 0; font-size: 1.05rem; }
       <option value="{{ z.id }}">Zone {{ z.id + 1 }} — {{ z.name }}</option>
       {% endfor %}
     </select>
+    <button id="mode-toggle" type="button"
+            title="Click to switch between Automatic (engine waters based on chart) and Manual (engine never auto-waters this zone)"
+            style="background:var(--bg); color:var(--text); border:1px solid #475569; border-radius:6px; padding:5px 10px; font-size:.78rem; font-weight:600; cursor:pointer; min-width:110px">
+      <span id="mode-toggle-label">Mode</span>
+    </button>
     <div class="range-btns" id="range-btns">
+      <button data-days="7">7d</button>
       <button data-days="30">30d</button>
       <button data-days="60">60d</button>
       <button data-days="90">90d</button>
@@ -333,14 +339,52 @@ function getZoneBrainConfig(zoneId) {
   for (var i = 0; i < ZONES.length; i++) {
     if (ZONES[i].id === zoneId) { z = ZONES[i]; break; }
   }
-  if (!z) return { precipRate: 1.3, madPct: 50, wiltPct: 35, rootDepthIn: 6 };
+  if (!z) return { precipRate: 1.3, madPct: 50, wiltPct: 35, rootDepthIn: 6, maxRuntimeMin: 24, kc: [0.85, 0.9, 0.95, 0.85] };
   return {
     precipRate: z.precip_rate_iph || 1.3,
     madPct: z.mad_pct || 50,
     wiltPct: Math.max(20, (z.mad_pct || 50) - 15),
     rootDepthIn: z.root_depth_in || 6,
+    maxRuntimeMin: z.max_runtime_min || 24,
+    kc: z.kc || [0.85, 0.9, 0.95, 0.85],
     name: z.name
   };
+}
+
+// ═══════════════════════════════════
+// SHARED MODEL HELPERS
+// Centralized so generateRealData2026 + generateBrainData cannot drift.
+// See issues #8, #9, #12, #14.
+// ═══════════════════════════════════
+// MIRROR of weather.py get_season_index(). If you change one, change both.
+function getSeasonIndex(month) {
+  if (month >= 3 && month <= 5) return 0;   // spring
+  if (month === 6) return 1;                // early summer
+  if (month >= 7 && month <= 8) return 2;   // peak
+  if (month >= 9 && month <= 10) return 3;  // fall
+  return -1;                                 // dormant
+}
+function getSeasonalKc(zone, month) {
+  var idx = getSeasonIndex(month);
+  return idx >= 0 ? (zone.kc[idx] || 0.85) : 0;
+}
+var ROOT_DEPTH_SCHEDULE = { 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 };
+function getSeasonalRootDepth(zone, month) {
+  return ROOT_DEPTH_SCHEDULE[month] || zone.rootDepthIn;
+}
+// Cumulative fraction [0,1] of daily ET consumed by end of hour h, minute m.
+// Sine-curve distribution over 06:00–20:00 daylight. Clamped (see #14).
+function getEtFraction(h, m) {
+  if (h >= 20) return 1;
+  if (h < 6) return 0;
+  var frac = (1 - Math.cos((h + m/60 - 6) / 14 * Math.PI)) / 2;
+  return Math.min(1, Math.max(0, frac));
+}
+// Server stores local time as 'YYYY-MM-DDTHH:MM:SS' (no TZ). Parse as local.
+function parseLocalTs(ts) {
+  var tp = ts.split(/[-T:]/);
+  return new Date(parseInt(tp[0]), parseInt(tp[1]) - 1, parseInt(tp[2]),
+                  parseInt(tp[3] || 0), parseInt(tp[4] || 0), parseInt(tp[5] || 0));
 }
 
 // ═══════════════════════════════════
@@ -457,9 +501,9 @@ function fetchLiveData(zoneId) {
 // ═══════════════════════════════════
 // 2026 REAL DATA (no simulation)
 // ═══════════════════════════════════
-function generateRealData2026(zoneId, liveData) {
+function generateRealData2026(zoneId, liveData, actualWaterings) {
   // Pure DB data — NO brain simulation, NO fabricated decisions.
-  // Moisture line = soil_balance table. Bars = watering_event table + weather.
+  // Moisture line = soil_balance table + per-event watering credit. Bars = watering_event table + weather.
   var wx = weatherCache['2026'];
   if (!wx) return null;
 
@@ -476,14 +520,86 @@ function generateRealData2026(zoneId, liveData) {
   var startDate = new Date(wx.daily.time[0] + 'T00:00:00');
   var lastBalPct = 70;
 
+  // Per-step actual irrigation lookup (key: di*96 + step, value: % of TAW added at that step).
+  // SAME source of truth as the sprinkler bars (#7) — both derive from watering_event.start_ts/duration_sec.
+  // Credit uses ACTUAL seconds in each 15-min step so a 30-second test doesn't get a full step's worth (#15).
+  var actualIrrigByStep = {};
+  if (actualWaterings && actualWaterings.length > 0) {
+    actualWaterings.forEach(function(w) {
+      if (!w.start_ts || !w.duration_sec || w.duration_sec <= 0) return;
+      var wStart = parseLocalTs(w.start_ts);
+      var wEndMs = wStart.getTime() + w.duration_sec * 1000;
+      // Iterate every 15-min step the event overlaps; for each compute the exact seconds in that step.
+      var firstStepStart = Math.floor(wStart.getTime() / 900000) * 900000;
+      for (var stepStartMs = firstStepStart; stepStartMs < wEndMs; stepStartMs += 900000) {
+        var stepEndMs = stepStartMs + 900000;
+        var overlapStart = Math.max(stepStartMs, wStart.getTime());
+        var overlapEnd = Math.min(stepEndMs, wEndMs);
+        var overlapSec = (overlapEnd - overlapStart) / 1000;
+        if (overlapSec <= 0) continue;
+        var stepTime = new Date(stepStartMs);
+        var sDayOff = Math.floor((stepTime.getTime() - startDate.getTime()) / 86400000);
+        if (sDayOff < 0 || sDayOff >= numDays) continue;
+        var dateKey = wx.daily.time[sDayOff];
+        var dayBal = balMap[dateKey];
+        var tawMm = dayBal ? dayBal.taw_mm : 22.86;
+        // mm applied during this step = precipRate (in/hr) * (overlapSec/3600) * 25.4
+        var mmThisStep = zone.precipRate * (overlapSec / 3600) * 25.4;
+        var pctThisStep = (mmThisStep / tawMm) * 100;
+        var sStep = Math.floor((stepTime.getHours() * 60 + stepTime.getMinutes()) / 15);
+        var gKey = sDayOff * 96 + sStep;
+        actualIrrigByStep[gKey] = (actualIrrigByStep[gKey] || 0) + pctThisStep;
+      }
+    });
+  }
+
+  // Chart-vs-engine invariant (#17): per-day sum of chart credits must match the engine's
+  // soil_balance.irrigation_mm (within 5%). Any drift indicates the chart math has regressed
+  // from the engine's authoritative computation. This is the assertion that would have caught
+  // #7, #11, #15 on first load.
+  (function assertChartMatchesEngine() {
+    var driftDays = [];
+    for (var di2 = 0; di2 < numDays; di2++) {
+      var bal2 = balMap[wx.daily.time[di2]];
+      if (!bal2 || !bal2.taw_mm || bal2.irrigation_mm == null) continue;
+      var chartSum = 0;
+      for (var ks2 = 0; ks2 < 96; ks2++) {
+        chartSum += actualIrrigByStep[di2 * 96 + ks2] || 0;
+      }
+      var engineSum = (bal2.irrigation_mm / bal2.taw_mm) * 100;
+      if (engineSum < 0.5 && chartSum < 0.5) continue;  // both ~0, skip
+      var delta = Math.abs(chartSum - engineSum);
+      if (delta > 5) {
+        driftDays.push({ day: wx.daily.time[di2], chart: chartSum, engine: engineSum, delta: delta });
+      }
+    }
+    if (driftDays.length > 0) {
+      console.warn('[chart-engine drift] zone=' + zoneId + ' (Zone ' + (zoneId+1) + ') — ' +
+                   driftDays.length + ' day(s) where chart per-event credits disagree with engine balance.irrigation_mm by >5%:');
+      driftDays.forEach(function(d) {
+        console.warn('  ' + d.day + ': chart=' + d.chart.toFixed(1) + '% engine=' + d.engine.toFixed(1) +
+                     '% delta=' + d.delta.toFixed(1) + '%');
+      });
+    }
+  })();
+
   for (var di = 0; di < numDays; di++) {
     var dateStr = wx.daily.time[di];
     var hi = wx.daily.temperature_2m_max[di];
     var lo = wx.daily.temperature_2m_min[di];
     var et0_in = wx.daily.et0_fao_evapotranspiration[di] || 0;
     var month = parseInt(dateStr.split('-')[1]);
-    var rootDepth = ({ 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 })[month] || zone.rootDepthIn;
+    var rootDepth = getSeasonalRootDepth(zone, month);
     var isForecast = wx.isForecast && wx.isForecast.indexOf(di) >= 0;
+
+    // Cumulative actual-irrigation %-of-TAW up to each 15-min step of this day.
+    var irrigCumulative = new Array(96);
+    var irrigRunning = 0;
+    for (var ks = 0; ks < 96; ks++) {
+      irrigRunning += actualIrrigByStep[di * 96 + ks] || 0;
+      irrigCumulative[ks] = irrigRunning;
+    }
+    var dayHasEvents = irrigCumulative[95] > 0.001;
 
     var bal = balMap[dateStr];
     var tawMm = bal ? bal.taw_mm : 22.86;
@@ -498,6 +614,10 @@ function generateRealData2026(zoneId, liveData) {
     var prevBal = prevDateStr ? balMap[prevDateStr] : null;
     var startPct = prevBal ? (prevBal.balance_mm / prevBal.taw_mm * 100) : lastBalPct;
 
+    // Track predicted watering minutes for this day so we don't exceed the engine's max_runtime_min cap.
+    // Real engine runs one cycle per day (max_runtime_min) then same-day guard blocks further runs.
+    var minutesWateredToday = 0;
+
     for (var step = 0; step < 96; step++) {
       var h = Math.floor(step / 4);
       var m = (step % 4) * 15;
@@ -508,11 +628,8 @@ function generateRealData2026(zoneId, liveData) {
 
       var moisture;
       if (bal) {
-        // Interpolate within day using ET sine curve
-        var etFrac = 0;
-        if (h >= 6 && h <= 20) {
-          etFrac = (1 - Math.cos(Math.max(0, h + m/60 - 6) / 14 * Math.PI)) / 2;
-        } else if (h > 20) { etFrac = 1; }
+        // Interpolate within day using ET sine curve (see #14: helper clamps to [0,1]).
+        var etFrac = getEtFraction(h, m);
 
         var etDailyPct = (etcMm / tawMm) * 100;
         var rainDailyPct = (rainMm / tawMm) * 100;
@@ -520,17 +637,27 @@ function generateRealData2026(zoneId, liveData) {
 
         moisture = startPct - etDailyPct * etFrac;
 
-        // Rain proportional to hourly weather
+        // Rain credit: proportional to hourly weather if available,
+        // else spread evenly across daylight (#11: don't drop balance.rain_mm when hourly==0).
         var rainSoFar = 0, totalHourlyRain = 0;
         for (var rh = di * 24; rh < di * 24 + 24; rh++) {
           var p = (rh < wx.hourly.precipitation.length) ? (wx.hourly.precipitation[rh] || 0) : 0;
           totalHourlyRain += p;
           if (rh < di * 24 + h) rainSoFar += p;
         }
-        if (totalHourlyRain > 0) moisture += rainDailyPct * (rainSoFar / totalHourlyRain);
+        if (totalHourlyRain > 0) {
+          moisture += rainDailyPct * (rainSoFar / totalHourlyRain);
+        } else if (rainDailyPct > 0 && h >= 8) {
+          var rainFrac = Math.min(1, (h - 8 + m/60) / 12);
+          moisture += rainDailyPct * rainFrac;
+        }
 
-        // Irrigation (assume 4-6AM window)
-        if (irrigDailyPct > 0) {
+        // Irrigation: per-event credit (matches bar timing exactly — see #7).
+        // Fallback to 4-6AM ramp only if balance recorded irrigation but no event rows exist
+        // (manual /api/rain entries, external sources).
+        if (dayHasEvents) {
+          moisture += irrigCumulative[step];
+        } else if (irrigDailyPct > 0) {
           if (h >= 6) moisture += irrigDailyPct;
           else if (h >= 4) moisture += irrigDailyPct * ((h - 4) / 2);
         }
@@ -543,12 +670,15 @@ function generateRealData2026(zoneId, liveData) {
           moisture = lastBalPct;
         }
 
-        var kc = (month >= 3 && month <= 11) ? 0.90 : 0.40;
-        var etPctDay = (et0_in / rootDepth) * 100 * kc;
+        // TAW = rootDepth * awc (inches of plant-available water). awc=0.15 matches engine default for spray zones.
+        var awc = 0.15;
+        var bucketIn = rootDepth * awc;
+        var kc = getSeasonalKc(zone, month);
+        var etPctDay = (et0_in * kc / bucketIn) * 100;
 
-        // ET drain per 15-min step (sine curve during daylight 6AM-8PM)
+        // ET drain per 15-min step (sine curve over 06:00–20:00 daylight). Bounded (#14).
         var etStep = 0;
-        if (h >= 6 && h <= 20) {
+        if (h >= 6 && h < 20) {
           var phase = (h + m/60 - 6) / 14 * Math.PI;
           etStep = Math.sin(phase) * etPctDay / (56 * 0.637);
         }
@@ -557,20 +687,25 @@ function generateRealData2026(zoneId, liveData) {
         // Rain credit per step (spread 8AM-8PM)
         var fcstRainIn = wx.daily.precipitation_sum[di] || 0;
         if (fcstRainIn > 0 && h >= 8 && h <= 20) {
-          var rainPctDay = (fcstRainIn * 0.65 / rootDepth) * 100;
+          var rainPctDay = (fcstRainIn * 0.65 / bucketIn) * 100;
           moisture += rainPctDay / 48; // 48 steps in 8AM-8PM window
         }
 
         // Predicted auto-watering: if below MAD during 4-7AM window
         // Only predict for FUTURE time — don't show watering that hasn't happened yet today
+        // Enforce engine's max_runtime_min cap (config.yaml) — engine runs one cycle then same-day guard blocks more
         var stepTime = new Date(startDate.getTime() + di * 86400000 + h * 3600000 + m * 60000);
         var isInFuture = stepTime.getTime() > Date.now();
-        if (h >= 4 && h < 7 && moisture < madPct && isInFuture) {
+        if (h >= 4 && h < 7 && moisture < madPct && isInFuture && minutesWateredToday < zone.maxRuntimeMin) {
+          // Minutes still available under the cap (max 15 per step)
+          var minutesThisStep = Math.min(15, zone.maxRuntimeMin - minutesWateredToday);
+          var fracOfStep = minutesThisStep / 15;
           var waterTarget = Math.min(100, madPct + 20);
-          var waterPerStep = (zone.precipRate / 4) * (100 / rootDepth);
+          var waterPerStep = (zone.precipRate / 4) * (100 / bucketIn) * fracOfStep;
           if (moisture + waterPerStep > waterTarget) waterPerStep = waterTarget - moisture;
           moisture += waterPerStep;
-          sprinklerBar = (zone.precipRate / 4);
+          sprinklerBar = (zone.precipRate / 4) * fracOfStep;
+          minutesWateredToday += minutesThisStep;
         }
 
         moisture = Math.max(0, Math.min(100, moisture));
@@ -619,25 +754,35 @@ function generateBrainData(zoneId, days, year, actualWaterings) {
   var points = [], decisions = [];
 
   // Build lookup of actual irrigation by 15-min slot (for 2026 live mode)
-  // Convert actual watering events into moisture % credit per timestep
-  var actualIrrigMap = {}; // key: globalStep -> moisture % to add
+  // Convert actual watering events into moisture % credit per timestep.
+  // Fixes (#16 partial — defects 1 & 2):
+  //   - step-overlap math (NOT Math.round/Math.max snapping — #15)
+  //   - parseLocalTs (NOT new Date, which interprets naive ts as UTC)
+  // Scale kept as "% of root depth in inches" to match this function's internal units
+  // (ET drain, rain, sprinkler all use same scale at lines 867/877/986). Reconciling
+  // brain-scale vs engine-TAW-scale is a deeper architectural fix — see #16 defect 3.
+  var actualIrrigMap = {}; // key: globalStep -> moisture % to add (% of root depth)
   var startDate0 = new Date(wx.daily.time[0] + 'T00:00:00');
   if (actualWaterings && actualWaterings.length > 0) {
     actualWaterings.forEach(function(w) {
       if (!w.start_ts || !w.duration_sec || w.duration_sec <= 0) return;
-      var wStart = new Date(w.start_ts);
-      var wDurSteps = Math.max(1, Math.round(w.duration_sec / 900)); // 15-min steps
-      var rootD = zone.rootDepthIn;
-      // Moisture % per step = (precipRate * 0.25hr) / rootDepth * 100
-      var pctPerStep = (zone.precipRate / 4) * (100 / rootD);
-      for (var si = 0; si < wDurSteps; si++) {
-        var stepTime = new Date(wStart.getTime() + si * 900000);
+      var wStart = parseLocalTs(w.start_ts);
+      var wEndMs = wStart.getTime() + w.duration_sec * 1000;
+      var firstStepStart = Math.floor(wStart.getTime() / 900000) * 900000;
+      for (var stepStartMs = firstStepStart; stepStartMs < wEndMs; stepStartMs += 900000) {
+        var overlapStart = Math.max(stepStartMs, wStart.getTime());
+        var overlapEnd = Math.min(stepStartMs + 900000, wEndMs);
+        var overlapSec = (overlapEnd - overlapStart) / 1000;
+        if (overlapSec <= 0) continue;
+        var stepTime = new Date(stepStartMs);
         var dayOff = Math.floor((stepTime.getTime() - startDate0.getTime()) / 86400000);
-        var h = stepTime.getHours();
-        var m = stepTime.getMinutes();
-        var stepInDay = Math.floor((h * 60 + m) / 15);
+        if (dayOff < 0) continue;
+        var stepInDay = Math.floor((stepTime.getHours() * 60 + stepTime.getMinutes()) / 15);
         var gs = dayOff * 96 + stepInDay;
-        if (gs >= 0) actualIrrigMap[gs] = (actualIrrigMap[gs] || 0) + pctPerStep;
+        // inches applied during this step's overlap = precipRate (in/hr) * (overlapSec/3600)
+        var inchesThisStep = zone.precipRate * (overlapSec / 3600);
+        var pctThisStep = (inchesThisStep / zone.rootDepthIn) * 100;
+        actualIrrigMap[gs] = (actualIrrigMap[gs] || 0) + pctThisStep;
       }
     });
   }
@@ -649,12 +794,9 @@ function generateBrainData(zoneId, days, year, actualWaterings) {
     });
   }
 
-  // FAO-56 compliant: Kc = 0.90 constant for cool-season turf
-  var KC_ACTIVE = 0.90;
-  var KC_DORMANT = 0.40;
+  // FAO-56 compliant: Kc now comes from per-zone config via getSeasonalKc() (was hardcoded 0.90 — #8).
 
-  // Seasonal root depth (inches)
-  var rootDepthSchedule = { 3: 4, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 6, 10: 5 };
+  // Seasonal root depth pulled from shared ROOT_DEPTH_SCHEDULE (#12).
   var MAD_BASE_CONST = zone.madPct;
   var recoverSchedule = { 3: 12, 4: 12, 5: 15, 6: 18, 7: 20, 8: 20, 9: 15, 10: 12 };
   var hardenMonths = { 6: true, 7: true, 8: true };
@@ -694,8 +836,8 @@ function generateBrainData(zoneId, days, year, actualWaterings) {
     var rainTomorrow = (di + 1 < numDays && (wx.daily.precipitation_sum[di + 1] || 0) >= RAIN_SKIP_THRESHOLD);
     var prevRainTomorrow = (di > 0 && (wx.daily.precipitation_sum[di] || 0) >= RAIN_SKIP_THRESHOLD);
     var month = parseInt(wx.daily.time[di].split('-')[1]);
-    var kc = (month >= 3 && month <= 11) ? KC_ACTIVE : KC_DORMANT;
-    var rootDepth = rootDepthSchedule[month] || zone.rootDepthIn;
+    var kc = getSeasonalKc(zone, month);
+    var rootDepth = getSeasonalRootDepth(zone, month);
     var seasonalRecover = recoverSchedule[month] || 20;
 
     var canHarden = !!(hardenMonths[month]);
@@ -724,7 +866,8 @@ function generateBrainData(zoneId, days, year, actualWaterings) {
       var wiltNow = Math.max(22, Math.min(madNow - 10, WILT_BASE + tempDelta * 2));
 
       var drain = 0;
-      if (h >= 6 && h <= 20) {
+      // ET sine curve over daylight 06:00–20:00. Bounded (#14: hour 20+ contributes 0 incremental drain).
+      if (h >= 6 && h < 20) {
         var phase = (h + m / 60 - 6) / 14 * Math.PI;
         var dailyET_pct = (et0_in / rootDepth) * 100 * kc;
         drain = Math.sin(phase) * dailyET_pct / (56 * 0.637);
@@ -1201,10 +1344,10 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
 
   var rd = zone.rootDepthIn;
   var rainBarData = data.filter(function(p) { return p.rain !== null; }).map(function(p) {
-    return { x: p.t, y: p.rain * rd / 100 };
+    return { x: p.t, y: p.rain };
   });
   var sprinklerBarData = data.filter(function(p) { return p.sprinkler !== null; }).map(function(p) {
-    return { x: p.t, y: p.sprinkler * rd / 100 };
+    return { x: p.t, y: p.sprinkler };
   });
 
   // Actual watering events from DB (2026 only) — exclude test blips < 60s
@@ -1268,7 +1411,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
           var barDate = new Date(p.t.getFullYear(), p.t.getMonth(), p.t.getDate(), 4, 0, 0);
           fcstSprinklerByDay[dayKey] = { totalIn: 0, date: barDate };
         }
-        fcstSprinklerByDay[dayKey].totalIn += p.sprinkler * rd / 100;
+        fcstSprinklerByDay[dayKey].totalIn += p.sprinkler;
       }
     });
     var forecastSprinklerBars = [];
@@ -1300,7 +1443,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 300 },
-      interaction: { mode: 'index', intersect: false },
+      interaction: { mode: 'nearest', intersect: true },
       plugins: { legend: { display: false },
         tooltip: {
           backgroundColor: '#1e293bf0', borderColor: '#475569', borderWidth: 1,
@@ -1317,8 +1460,21 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
             },
             label: function(ctx) {
               if (ctx.parsed.y > 0.001) {
-                var lbl = ctx.dataset.label + ' ' + ctx.parsed.y.toFixed(2) + '"';
-                if (ctx.raw && ctx.raw.duration) lbl += ' (' + Math.round(ctx.raw.duration / 60) + ' min)';
+                var inches = ctx.parsed.y;
+                var moistPct = (inches / rd) * 100;
+                var lbl = ctx.dataset.label;
+                // Actual sprinkler event — show runtime + depth + moisture impact
+                if (ctx.raw && ctx.raw.duration) {
+                  var mins = Math.round(ctx.raw.duration / 60);
+                  lbl = '💧 Ran ' + mins + ' min · ' + inches.toFixed(2) + '" · +' + moistPct.toFixed(1) + '% moisture';
+                // Predicted sprinkler — estimate runtime from precip rate
+                } else if (lbl.indexOf('Predicted') >= 0) {
+                  var estMins = Math.round(inches / (zone.precipRate || 1.3) * 60);
+                  lbl = '📅 Predicted ~' + estMins + ' min · ' + inches.toFixed(2) + '" · +' + moistPct.toFixed(1) + '% moisture';
+                // Rain
+                } else {
+                  lbl += ' ' + inches.toFixed(2) + '" · +' + moistPct.toFixed(1) + '% moisture';
+                }
                 return lbl;
               }
               return null;
@@ -1550,6 +1706,18 @@ function updateNextWateringBanner(data, liveData) {
   var banner = document.getElementById('next-water-banner');
   var now = Date.now();
 
+  // Manual-mode short circuit: engine won't auto-water, so don't predict a date
+  var curZ = getCurrentZone();
+  if (curZ && (curZ.auto_mode === false || !curZ.installed)) {
+    banner.style.display = 'flex';
+    document.getElementById('nw-value').textContent = curZ.installed ? '✋ Manual mode' : '⛔ Not installed';
+    document.getElementById('nw-value').style.color = '#94a3b8';
+    document.getElementById('nw-detail').textContent = curZ.installed
+      ? 'Engine will not auto-water this zone. Toggle to Automatic to follow the chart.'
+      : 'Zone is not installed — no auto-watering.';
+    return;
+  }
+
   if (selectedYear === '2026' && data.isRealData) {
     // Real data mode: estimate from current moisture and ET forecast
     // Use last non-forecast point for current moisture (bug #16/#20 fix)
@@ -1642,10 +1810,76 @@ function updateNextWateringBanner(data, liveData) {
 // ═══════════════════════════════════
 // CONTROLS & REFRESH
 // ═══════════════════════════════════
+
+// Mode toggle (Manual / Automatic) — reflects + mutates ZONES[].auto_mode
+function getCurrentZone() {
+  for (var zi = 0; zi < ZONES.length; zi++) {
+    if (ZONES[zi].id === currentZoneId) return ZONES[zi];
+  }
+  return null;
+}
+function renderModeToggle() {
+  var btn = document.getElementById('mode-toggle');
+  var lbl = document.getElementById('mode-toggle-label');
+  if (!btn || !lbl) return;
+  var z = getCurrentZone();
+  if (!z) { btn.style.display = 'none'; return; }
+  // Drip / non-installed zones: no toggle — engine never auto-waters them
+  if (!z.installed) {
+    btn.disabled = true;
+    btn.style.opacity = '0.55';
+    btn.style.cursor = 'not-allowed';
+    btn.style.background = '#1f2937';
+    btn.style.color = '#94a3b8';
+    btn.style.borderColor = '#334155';
+    lbl.textContent = (z.type === 'drip' ? '💧 Drip — Manual only' : '⛔ Not installed');
+    return;
+  }
+  btn.disabled = false;
+  btn.style.cursor = 'pointer';
+  var isAuto = z.auto_mode !== false; // default true
+  if (isAuto) {
+    lbl.textContent = '🤖 Automatic';
+    btn.style.background = 'rgba(34,197,94,0.15)';
+    btn.style.color = '#22c55e';
+    btn.style.borderColor = '#22c55e';
+  } else {
+    lbl.textContent = '✋ Manual';
+    btn.style.background = 'rgba(245,158,11,0.15)';
+    btn.style.color = '#f59e0b';
+    btn.style.borderColor = '#f59e0b';
+  }
+}
+document.getElementById('mode-toggle').addEventListener('click', function() {
+  var z = getCurrentZone();
+  if (!z || !z.installed) return;
+  var newMode = !(z.auto_mode !== false);
+  var lbl = document.getElementById('mode-toggle-label');
+  var prev = lbl.textContent;
+  lbl.textContent = '…saving';
+  fetch('/api/zone-config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({zone_id: z.id, auto_mode: newMode})
+  }).then(function(r) { return r.json(); }).then(function(resp) {
+    if (resp && resp.ok) {
+      z.auto_mode = newMode;
+      renderModeToggle();
+    } else {
+      lbl.textContent = prev;
+      alert('Failed to update mode: ' + (resp && resp.error ? resp.error : 'unknown error'));
+    }
+  }).catch(function(err) {
+    lbl.textContent = prev;
+    alert('Failed to update mode: ' + err);
+  });
+});
+
 document.getElementById('zone-select').addEventListener('change', function() {
   currentZoneId = parseInt(this.value);
   liveDataCache = {};
   saveHash();
+  renderModeToggle();
   refresh();
 });
 document.querySelectorAll('#range-btns button').forEach(function(btn) {
@@ -1691,7 +1925,7 @@ function refresh() {
         }
       }
       // 2026 = real DB data only, no simulation
-      var data = generateRealData2026(currentZoneId, liveData);
+      var data = generateRealData2026(currentZoneId, liveData, liveData.waterings || []);
       if (data) {
         buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
         // Inline banner logic (bug #23: function call kept failing silently)
@@ -1925,6 +2159,7 @@ document.getElementById('tune-save').addEventListener('click', function() {
 });
 
 // Initial load
+renderModeToggle();
 refresh();
 </script>
 </body>

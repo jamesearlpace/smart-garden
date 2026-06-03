@@ -439,6 +439,7 @@ def create_app(config, engine, weather, billing):
                 "id": zone_cfg["id"],
                 "name": zone_cfg["name"],
                 "installed": zone_cfg.get("installed", False),
+                "auto_mode": zone_cfg.get("auto_mode", True),
                 "type": zone_cfg.get("type", "sprinkler"),
                 "precip_rate_iph": zone_cfg.get("precip_rate_iph", 1.0),
                 "kc": zone_cfg.get("kc", [0.90, 0.90, 0.90, 0.90]),
@@ -460,7 +461,8 @@ def create_app(config, engine, weather, billing):
     @app.route("/moisture-sim")
     def moisture_sim_page():
         """Moisture simulation chart — historical, live 2026, and forecast."""
-        zones = [z for z in config["zones"] if z.get("installed", False)]
+        # Show installed zones + all drip zones (so Garden/Grapes stay visible for monitoring even when disabled)
+        zones = [z for z in config["zones"] if z.get("installed", False) or z.get("type") == "drip"]
         return render_template("moisture_sim.html", zones=zones)
 
     @app.route("/api/zone-config", methods=["POST"])
@@ -496,6 +498,11 @@ def create_app(config, engine, weather, billing):
                 val = max(lo, min(hi, val))
                 zone_cfg[key] = round(val, 3)
                 changes[key] = zone_cfg[key]
+
+        # Boolean: Manual/Automatic mode
+        if "auto_mode" in data and data["auto_mode"] is not None:
+            zone_cfg["auto_mode"] = bool(data["auto_mode"])
+            changes["auto_mode"] = zone_cfg["auto_mode"]
 
         # Kc array (for garden/grapes)
         if "kc" in data and isinstance(data["kc"], list):
@@ -930,6 +937,7 @@ def create_app(config, engine, weather, billing):
                 "name": zone["name"],
                 "type": zone["type"],
                 "installed": installed,
+                "auto_mode": zone.get("auto_mode", True),
                 "kc": zone["kc"],
                 "dry_trigger": zone["dry_trigger"],
                 "wet_target": zone["wet_target"],

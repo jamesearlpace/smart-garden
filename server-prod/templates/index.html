@@ -3023,6 +3023,18 @@ function render(d) {
       (z.watering
         ? '<button class="btn btn-stop" onclick="zoneStop('+z.id+',this)">■ Stop</button>'
         : '<button class="btn btn-run" onclick="zoneRun('+z.id+',5,this)">▶ Run 5 min</button>') +
+      (function() {
+        var isAuto = z.auto_mode !== false;
+        var bg = isAuto ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)';
+        var col = isAuto ? '#22c55e' : '#f59e0b';
+        var lbl = isAuto ? '🤖 Auto' : '✋ Manual';
+        var title = isAuto
+          ? 'Engine waters automatically based on the moisture model. Click to switch to Manual.'
+          : 'Engine will NOT auto-water. Manual runs still work. Click to switch to Automatic.';
+        return ' <button class="btn" onclick="zoneToggleMode('+z.id+',this)" '
+          + 'title="'+title+'" '
+          + 'style="background:'+bg+';color:'+col+';border:1px solid '+col+';font-weight:600">'+lbl+'</button>';
+      })() +
       '</div></div>';
   });
   el('zone-grid').innerHTML = zgHtml;
@@ -3883,6 +3895,32 @@ function zoneStop(id,btn){
     });
 }
 
+function zoneToggleMode(id, btn) {
+  // Read the current state from button label so we don't depend on a global zones array
+  var wasAuto = btn.textContent.indexOf('Auto') !== -1;
+  var newMode = !wasAuto;
+  var prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/api/zone-config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({zone_id: id, auto_mode: newMode})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (d && d.ok) {
+      // refresh() will repaint the card with the new color + label
+      refresh();
+    } else {
+      btn.textContent = prev;
+      btn.disabled = false;
+      alert('Mode change failed: ' + (d && d.error ? d.error : 'unknown'));
+    }
+  }).catch(function(e){
+    btn.textContent = prev;
+    btn.disabled = false;
+    alert('Mode change error: ' + e);
+  });
+}
 // Load analytics when panel is shown
 var origShowPanel = showPanel;
 showPanel = function(id) {

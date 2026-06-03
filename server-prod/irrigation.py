@@ -381,6 +381,14 @@ class IrrigationEngine:
             return self._decision("skip", zone_id, "Dormant season ΓÇö no irrigation",
                                   {})
 
+        # Zone-level Manual/Automatic mode (default: automatic for backward compat).
+        # Manual mode disables ALL auto-decision watering; only explicit `reason="manual"`
+        # calls to start_zone_watering still run.
+        if not zone.get("auto_mode", True):
+            return self._decision("skip", zone_id,
+                                  "Manual mode — auto-watering disabled for this zone",
+                                  {"auto_mode": False})
+
         # Get weather conditions
         current_wx = self.weather.get_current()
         rain_forecast = self.weather.get_rain_forecast_24h()
@@ -421,7 +429,28 @@ class IrrigationEngine:
 
         if balance_mm is not None and balance_mm > mad_mm:
             return self._decision("skip", zone_id,
-                                  f"Water balance {balance_mm:.1f}mm > MAD {mad_mm:.1f}mm ΓÇö soil has enough water",
+                                  f"Water balance {balance_mm:.1f}mm > MAD {mad_mm:.1f}mm — soil has enough water",
+                                  conditions)
+
+        # 2. Same-day watering guard — skip only if today's accumulated runtime is
+        #    already a substantial fraction of the daily cap. Short manual test runs
+        #    (e.g. 5 min spot-check) should NOT block the scheduled nighttime cycle.
+        #    Threshold: 50% of max_runtime_min.
+        max_runtime_min = zone.get("max_runtime_min", 24)
+        skip_threshold_sec = max_runtime_min * 60 * 0.5
+        conn = db.get_conn()
+        today_total = conn.execute(
+            "SELECT COALESCE(SUM(duration_sec), 0) as total_sec FROM watering_event "
+            "WHERE zone_id = ? AND duration_sec > 60 "
+            "AND date(start_ts) = date('now', 'localtime')",
+            (zone_id,),
+        ).fetchone()
+        conn.close()
+        total_sec_today = today_total["total_sec"] if today_total else 0
+        if total_sec_today >= skip_threshold_sec:
+            mins_today = total_sec_today / 60
+            return self._decision("skip", zone_id,
+                                  f"Already watered {mins_today:.1f} min today (>={skip_threshold_sec/60:.0f} min threshold) — waiting for 11 PM balance update",
                                   conditions)
 
         # 3. Significant rain in last 24h

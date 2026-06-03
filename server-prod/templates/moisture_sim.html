@@ -131,6 +131,28 @@ h2 { margin: 0; font-size: 1.05rem; }
 .next-water-banner .nw-value { font-size: 1.2rem; font-weight: 700; }
 .next-water-banner .nw-detail { font-size: .72rem; color: var(--text2); margin-top: 2px; }
 
+/* All-zones schedule view tables */
+.az-table { border-collapse: collapse; font-size: .82rem; width: 100%; min-width: 720px; }
+.az-table th, .az-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border-light); white-space: nowrap; }
+.az-table thead th { background: var(--border-light); font-weight: 600; color: var(--text2); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; border-bottom: 2px solid var(--border); }
+.az-table tbody tr:hover { background: var(--green-bg); }
+.az-table td.az-num { text-align: right; font-variant-numeric: tabular-nums; }
+.az-table td.az-name a { color: var(--text); text-decoration: none; font-weight: 600; }
+.az-table td.az-name a:hover { color: var(--green-dark); text-decoration: underline; }
+.az-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .68rem; font-weight: 600; }
+.az-pill.auto { background: var(--green-light); color: var(--green-dark); }
+.az-pill.manual { background: #fef3c7; color: #b45309; }
+.az-pill.drip { background: #dbeafe; color: #1d4ed8; }
+.az-pill.off { background: var(--border-light); color: var(--text3); }
+.az-cell-run { background: rgba(16,185,129,0.18); color: var(--green-dark); font-weight: 700; text-align: center; }
+.az-cell-urgent { background: rgba(239,68,68,0.18); color: #b91c1c; font-weight: 700; text-align: center; }
+.az-cell-soon { background: rgba(245,158,11,0.18); color: #b45309; font-weight: 700; text-align: center; }
+.az-cell-none { color: var(--text3); text-align: center; }
+.az-cell-skip { color: var(--text3); font-style: italic; text-align: center; font-size: .72rem; }
+.az-status-good { color: var(--green-dark); font-weight: 600; }
+.az-status-soon { color: var(--amber); font-weight: 600; }
+.az-status-now { color: var(--red); font-weight: 700; }
+
 .decision-log { margin-top: 12px; }
 .decision-log h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
 .decision-entry { display: flex; gap: 10px; padding: 6px 0; font-size: .75rem; border-bottom: 1px solid var(--border); }
@@ -242,6 +264,7 @@ h2 { margin: 0; font-size: 1.05rem; }
 
   <div class="controls">
     <select id="zone-select">
+      <option value="all">🌿 All Zones — Schedule View</option>
       {% for z in zones %}
       <option value="{{ z.id }}">Zone {{ z.id + 1 }} — {{ z.name }}</option>
       {% endfor %}
@@ -272,7 +295,7 @@ h2 { margin: 0; font-size: 1.05rem; }
     <span id="loading-msg" style="color:var(--amber); font-size:.75rem; display:none">Loading…</span>
   </div>
 
-  <div class="legend">
+  <div class="legend" id="legend-main">
     <span class="legend-item"><span class="legend-swatch" style="background:var(--green)"></span> <b>Moisture %</b></span>
     <span class="legend-item"><span class="legend-bar" style="background:rgba(59,130,246,0.6)"></span> <b>Rain</b> (in)</span>
     <span class="legend-item"><span class="legend-bar" style="background:rgba(16,185,129,0.6)"></span> <b>Sprinkler</b> (in)</span>
@@ -295,12 +318,32 @@ h2 { margin: 0; font-size: 1.05rem; }
   </div>
 
   <!-- Two stacked charts: precip bars on top, moisture line below -->
-  <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
-  <div style="height:280px; position:relative; margin-top:-6px"><canvas id="moisture-chart"></canvas></div>
+  <div id="chart-section">
+    <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
+    <div style="height:280px; position:relative; margin-top:-6px"><canvas id="moisture-chart"></canvas></div>
 
-  <div class="stats" id="stats-row"></div>
-  <div class="summary-row" id="summary-row"></div>
-  <div class="decision-log" id="decision-log"></div>
+    <div class="stats" id="stats-row"></div>
+    <div class="summary-row" id="summary-row"></div>
+    <div class="decision-log" id="decision-log"></div>
+  </div>
+
+  <!-- All-zones schedule view (hidden unless zone-select=='all') -->
+  <div id="all-zones-view" style="display:none">
+    <div id="az-summary" style="margin:8px 0 16px; padding:12px 14px; background:var(--green-bg); border-left:4px solid var(--green); border-radius:6px; font-size:.85rem; color:var(--text)"></div>
+
+    <h3 style="font-size:.95rem; margin:16px 0 8px; color:var(--text)">Zone status</h3>
+    <div style="overflow-x:auto">
+      <table class="az-table" id="az-status-table"></table>
+    </div>
+
+    <h3 style="font-size:.95rem; margin:20px 0 8px; color:var(--text)">7-night schedule — predicted runtime per night</h3>
+    <div style="overflow-x:auto">
+      <table class="az-table" id="az-schedule-table"></table>
+    </div>
+    <div style="font-size:.7rem; color:var(--text2); margin-top:8px">
+      Predictions use today's moisture balance, FAO‑56 ET₀ from the 7-day forecast, and forecast rainfall (65% effective). Manual‑mode zones never auto‑water; drip zones water manually only. Click a zone name to drill in.
+    </div>
+  </div>
 
   <!-- Tuning Panel -->
   <div class="tune-panel" id="tune-panel">
@@ -379,11 +422,12 @@ function parseHash() {
   return h;
 }
 function saveHash() {
-  location.hash = 'zone=' + currentZoneId + '&days=' + currentDays + '&year=' + selectedYear;
+  location.hash = 'zone=' + (allZonesMode ? 'all' : currentZoneId) + '&days=' + currentDays + '&year=' + selectedYear;
 }
 var hashParams = parseHash();
 
-var currentZoneId = hashParams.zone ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
+var allZonesMode = (hashParams.zone === 'all');
+var currentZoneId = (hashParams.zone && hashParams.zone !== 'all') ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
 var currentDays = hashParams.days ? parseInt(hashParams.days) : 9999;
 var selectedYear = hashParams.year || '2026';
 var weatherCache = {};
@@ -393,7 +437,7 @@ var precipChart = null, moistureChart = null;
 // Set UI controls to match restored state
 document.addEventListener('DOMContentLoaded', function() {
   var zoneSelect = document.getElementById('zone-select');
-  if (zoneSelect) zoneSelect.value = currentZoneId;
+  if (zoneSelect) zoneSelect.value = allZonesMode ? 'all' : String(currentZoneId);
   var yearSelect = document.getElementById('year-select');
   if (yearSelect) yearSelect.value = selectedYear;
   document.querySelectorAll('#range-btns button').forEach(function(btn) {
@@ -1975,8 +2019,13 @@ document.getElementById('mode-toggle').addEventListener('click', function() {
 });
 
 document.getElementById('zone-select').addEventListener('change', function() {
-  currentZoneId = parseInt(this.value);
-  liveDataCache = {};
+  if (this.value === 'all') {
+    allZonesMode = true;
+  } else {
+    allZonesMode = false;
+    currentZoneId = parseInt(this.value);
+    liveDataCache = {};
+  }
   saveHash();
   renderModeToggle();
   refresh();
@@ -2000,8 +2049,266 @@ document.getElementById('btn-reset-zoom').addEventListener('click', function() {
   if (precipChart) precipChart.resetZoom();
 });
 
+// ═══════════════════════════════════
+// ALL-ZONES SCHEDULE VIEW
+// ═══════════════════════════════════
+// Forecasts each zone's moisture out 7 nights using the same balance + ET₀
+// shortcut the single-zone "next watering" banner uses. For each crossing
+// night, runtime = max_runtime_min (engine runs one cycle per day then the
+// same-day guard blocks more — see config.yaml).
+function predictZoneSchedule(zoneId, liveData, forecast7) {
+  var balances = (liveData && liveData.balances) || [];
+  if (balances.length === 0) return null;
+  var brain = getZoneBrainConfig(zoneId);
+  var rootDepth = brain.rootDepthIn;
+
+  // Current moisture % = last balance row, derived from balance_mm / taw_mm.
+  var last = balances[balances.length - 1];
+  var tawMm = last.taw_mm || 1;
+  var curM = Math.max(0, Math.min(100, ((last.balance_mm || 0) / tawMm) * 100));
+  var madPct = tawMm > 0 ? ((last.mad_mm || 0) / tawMm) * 100 : (brain.madPct || 50);
+
+  var z = null;
+  for (var zi = 0; zi < ZONES.length; zi++) { if (ZONES[zi].id === zoneId) { z = ZONES[zi]; break; } }
+  var maxRun = (z && z.max_runtime_min) || brain.maxRuntimeMin || 24;
+  var isDrip = z && z.type === 'drip';
+  var isAuto = z && z.auto_mode !== false && z.installed;
+
+  // Predict each of the next 7 nights. Engine waters early AM; we treat
+  // today's index 0 as "tonight/tomorrow 4 AM", index 1 as next night, etc.
+  var m = curM;
+  var nights = [];
+  for (var di = 0; di < 7; di++) {
+    var fc = forecast7[di] || { et0: 0.18, rain: 0 };
+    // Drain through the day from previous night to this night's decision point.
+    m = m - ((fc.et0 || 0) * 0.90 / rootDepth) * 100 + ((fc.rain || 0) * 0.65 / rootDepth) * 100;
+    var willWater = false;
+    var skipReason = null;
+    if (m <= madPct) {
+      if (!isAuto) {
+        skipReason = isDrip ? 'drip · manual' : 'manual mode';
+        willWater = false;
+      } else if ((fc.rain || 0) >= 0.25) {
+        skipReason = 'rain skip';
+        willWater = false;
+      } else {
+        willWater = true;
+        // Refill bumps moisture back up by max-cycle credit.
+        // irrigation_in = max_run / 60 * precip_rate ; moisture bump % = irrigation_in / rootDepth * 100
+        var refillPct = (maxRun / 60) * brain.precipRate / rootDepth * 100;
+        m = Math.min(100, m + refillPct);
+      }
+    }
+    nights.push({ willWater: willWater, runtimeMin: willWater ? maxRun : 0, skipReason: skipReason, projM: m, mad: madPct });
+  }
+  return { curM: curM, madPct: madPct, nights: nights, isDrip: isDrip, isAuto: isAuto, installed: z && z.installed };
+}
+
+function fmtNight(offset) {
+  // Matches single-zone banner logic: if past 7 AM, "next water" is tomorrow's 4 AM, else today's 4 AM.
+  var d = new Date();
+  if (d.getHours() >= 7) d.setDate(d.getDate() + 1);
+  d.setDate(d.getDate() + offset);
+  var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return dn[d.getDay()] + ' ' + (d.getMonth() + 1) + '/' + d.getDate();
+}
+function fmtLastWatered(waterings) {
+  if (!waterings || waterings.length === 0) return '—';
+  var last = waterings[waterings.length - 1];
+  if (!last.start_ts) return '—';
+  var d = new Date(last.start_ts);
+  var hoursAgo = (Date.now() - d.getTime()) / 3600000;
+  if (hoursAgo < 24) return hoursAgo.toFixed(0) + 'h ago';
+  return (hoursAgo / 24).toFixed(1) + 'd ago';
+}
+function gallonsThisWeek(zone, waterings) {
+  if (!waterings || waterings.length === 0) return 0;
+  var weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+  var gpm = (zone && zone.est_gpm) || 4.0;
+  var totalGal = 0;
+  waterings.forEach(function(w) {
+    if (!w.start_ts || !w.duration_sec) return;
+    var t = new Date(w.start_ts).getTime();
+    if (t < weekAgo) return;
+    totalGal += gpm * (w.duration_sec / 60);
+  });
+  return totalGal;
+}
+
+function refreshAllZones() {
+  var loadMsg = document.getElementById('loading-msg');
+  loadMsg.style.display = 'inline';
+  loadMsg.textContent = 'Loading all zones…';
+
+  var fetches = [fetch2026Weather()];
+  ZONES.forEach(function(z) { fetches.push(fetchLiveData(z.id)); });
+
+  Promise.all(fetches).then(function(results) {
+    loadMsg.style.display = 'none';
+    var perZone = {};
+    for (var i = 0; i < ZONES.length; i++) {
+      perZone[ZONES[i].id] = results[i + 1];
+    }
+    // Pull forecast_7day from first available zone (same source for all)
+    var forecast7 = [];
+    for (var zk in perZone) {
+      if (perZone[zk] && perZone[zk].forecast_7day && perZone[zk].forecast_7day.length > 0) {
+        forecast7 = perZone[zk].forecast_7day;
+        break;
+      }
+    }
+
+    // ── Build status table ──
+    var statusHtml = '<thead><tr>'
+      + '<th>Zone</th><th>Mode</th><th class="az-num">Moisture</th><th class="az-num">MAD</th>'
+      + '<th>Status</th><th class="az-num">Next water</th><th class="az-num">Last run</th><th class="az-num">Gal / 7d</th>'
+      + '</tr></thead><tbody>';
+    var zonesNeedingNow = 0, zonesSoon = 0, totalGalWeek = 0;
+    var firingByNight = [0, 0, 0, 0, 0, 0, 0]; // # zones watering each of next 7 nights
+
+    ZONES.forEach(function(z) {
+      var ld = perZone[z.id];
+      var pred = predictZoneSchedule(z.id, ld, forecast7);
+      if (!pred) {
+        statusHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
+          + '<td colspan="7" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
+        return;-1)
+      var firstFire = -1;
+      for (var ni = 0; ni < pred.nights.length; ni++) {
+        if (pred.nights[ni].willWater) { firstFire = ni; break; }h; ni++) {
+        if (pred.nights[ni].willWater) { firstFire = ni; break; }
+        if (pred.nights[ni].willWater) break;
+      }
+      pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
+
+      var modePill;
+      if (!z.installed) modePill = '<span class="az-pill off">Not installed</span>';
+      else if (z.type === 'drip') modePill = '<span class="az-pill drip">Drip</span>';
+      else if (z.auto_mode === false) modePill = '<span class="az-pill manual">Manual</span>';
+      else modePill = '<span class="az-pill auto">Auto</span>';
+
+      var statusTxt, statusCls;
+      if (pred.curM <= pred.madPct) { statusTxt = '⚠ Below MAD'; statusCls = 'az-status-now'; zonesNeedingNow++; }
+      else if (firstFire >= 0 && firstFire <= 2) { statusTxt = 'Soon (' + (firstFire + 1) + 'd)'; statusCls = 'az-status-soon'; zonesSoon++; }
+      else { statusTxt = 'OK'; statusCls = 'az-status-good'; }
+
+      var nextTxt = '—';
+      if (pred.isAuto) {
+        if (firstFire >= 0) nextTxt = fmtNight(firstFire);
+        else nextTxt = '> 7d';
+      } else {
+        nextTxt = pred.isDrip ? 'manual only' : 'manual mode';
+      }
+      var gal = gallonsThisWeek(z, ld.waterings || []);
+      totalGalWeek += gal;
+
+      statusHtml += '<tr>'
+        + '<td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
+        + '<td>' + modePill + '</td>'
+        + '<td class="az-num">' + Math.round(pred.curM) + '%</td>'
+        + '<td class="az-num" style="color:var(--text3)">' + Math.round(pred.madPct) + '%</td>'
+        + '<td class="' + statusCls + '">' + statusTxt + '</td>'
+        + '<td class="az-num">' + nextTxt + '</td>'
+        + '<td class="az-num" style="color:var(--text2)">' + fmtLastWatered(ld.waterings || []) + '</td>'
+        + '<td class="az-num">' + (gal > 0 ? Math.round(gal) : '—') + '</td>'
+        + '</tr>';
+    });
+    statusHtml += '</tbody>';
+    document.getElementById('az-status-table').innerHTML = statusHtml;
+
+    // ── Build 7-night schedule grid ──
+    var schedHtml = '<thead><tr><th>Zone</th>';
+    for (var ni2 = 0; ni2 < 7; ni2++) schedHtml += '<th class="az-num">' + fmtNight(ni2) + '</th>';
+    schedHtml += '<th class="az-num">Week total</th></tr></thead><tbody>';
+
+    ZONES.forEach(function(z) {
+      var ld = perZone[z.id];
+      var pred = predictZoneSchedule(z.id, ld, forecast7);
+      schedHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>';
+      if (!pred) {
+        for (var nx = 0; nx < 7; nx++) schedHtml += '<td class="az-cell-none">—</td>';
+        schedHtml += '<td class="az-cell-none">—</td></tr>';
+        return;
+      }
+      var weekMin = 0;
+      pred.nights.forEach(function(n, idx) {
+        if (n.willWater) {
+          var cls = 'az-cell-run';
+          if (idx === 0) cls = 'az-cell-urgent';
+          else if (idx <= 2) cls = 'az-cell-soon';
+          schedHtml += '<td class="' + cls + '">' + n.runtimeMin + 'm</td>';
+          weekMin += n.runtimeMin;
+        } else if (n.skipReason) {
+          schedHtml += '<td class="az-cell-skip">' + n.skipReason + '</td>';
+        } else {
+          schedHtml += '<td class="az-cell-none">—</td>';
+        }
+      });
+      schedHtml += '<td class="az-num"><b>' + (weekMin > 0 ? weekMin + 'm' : '—') + '</b></td></tr>';
+    });
+
+    // Footer row: zones firing per night
+    schedHtml += '<tr style="background:var(--border-light); font-weight:600">'
+      + '<td style="color:var(--text2); font-size:.72rem; text-transform:uppercase; letter-spacing:.03em">Zones firing</td>';
+    for (var fn = 0; fn < 7; fn++) {
+      schedHtml += '<td class="az-num">' + (firingByNight[fn] > 0 ? firingByNight[fn] : '—') + '</td>';
+    }
+    schedHtml += '<td class="az-num">—</td></tr></tbody>';
+    document.getElementById('az-schedule-table').innerHTML = schedHtml;
+
+    // ── Summary banner ──
+    var sumParts = [];
+    if (zonesNeedingNow > 0) sumParts.push('<b style="color:var(--red)">' + zonesNeedingNow + ' zone' + (zonesNeedingNow > 1 ? 's' : '') + ' below MAD now</b>');
+    if (zonesSoon > 0) sumParts.push('<b style="color:var(--amber)">' + zonesSoon + ' watering in next 3 days</b>');
+    if (zonesNeedingNow === 0 && zonesSoon === 0) sumParts.push('<b style="color:var(--green-dark)">All zones above MAD for the next 7 days</b>');
+    sumParts.push('~' + Math.round(totalGalWeek) + ' gal used in last 7 days across all zones');
+    document.getElementById('az-summary').innerHTML = sumParts.join(' &nbsp;·&nbsp; ');
+
+    // Wire zone-name links → switch to single-zone view
+    document.querySelectorAll('#all-zones-view a[data-zone]').forEach(function(a) {
+      a.addEventListener('click', function(e) {
+        e.preventDefault();
+        var zid = parseInt(a.getAttribute('data-zone'));
+        allZonesMode = false;
+        currentZoneId = zid;
+        document.getElementById('zone-select').value = String(zid);
+        saveHash();
+        renderModeToggle();
+        refresh();
+      });
+    });
+  }).catch(function(err) {
+    loadMsg.textContent = 'Error: ' + err;
+    console.error('All-zones refresh error:', err);
+  });
+}
+
 function refresh() {
   var loadMsg = document.getElementById('loading-msg');
+
+  // Show/hide single-zone vs all-zones UI
+  var singleZoneEls = ['chart-section', 'legend-main', 'legend-sim', 'next-water-banner', 'tune-panel', 'mode-toggle'];
+  var rangeBtns = document.getElementById('range-btns');
+  var yearSelect = document.getElementById('year-select');
+  var resetZoom = document.getElementById('btn-reset-zoom');
+  if (allZonesMode) {
+    singleZoneEls.forEach(function(id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    if (rangeBtns) rangeBtns.style.display = 'none';
+    if (yearSelect) yearSelect.style.display = 'none';
+    if (resetZoom) resetZoom.style.display = 'none';
+    document.getElementById('all-zones-view').style.display = 'block';
+    return refreshAllZones();
+  } else {
+    document.getElementById('all-zones-view').style.display = 'none';
+    document.getElementById('chart-section').style.display = '';
+    document.getElementById('legend-main').style.display = '';
+    document.getElementById('tune-panel').style.display = '';
+    document.getElementById('mode-toggle').style.display = '';
+    if (rangeBtns) rangeBtns.style.display = '';
+    if (yearSelect) yearSelect.style.display = '';
+    if (resetZoom) resetZoom.style.display = '';
+    // next-water-banner shown by inline logic below; legend-sim toggled by year check
+  }
 
   // Toggle legend: hide sim decision markers for real-data mode
   document.getElementById('legend-sim').style.display = selectedYear === '2026' ? 'none' : 'flex';

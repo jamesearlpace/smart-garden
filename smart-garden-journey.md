@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Irrigation brain mockup complete with real weather backtesting (2021-2025). FAO-56 audited. Next: deploy to real server dashboard with live 2026 data + forecast.
-**Last Updated:** 2026-06-01
+**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done.
+**Last Updated:** 2026-06-02
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -195,7 +195,57 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 ---
 
-## Session Log: 2026-06-01 (ET₀-Only Mode + Water Budget Chart)
+## Session Log: 2026-06-02 (Auto-mode shipped + Water cost backtest + Grass starvation audit)
+
+### Per-zone Auto/Manual toggle — DEPLOYED (commit `965f994`)
+Each zone now has an `auto_mode` field in config.yaml. When `false`, the engine's `evaluate_zone()` short-circuits and the dashboard shows a "Manual mode — engine will not water this zone" banner. UI: toggle button next to each zone card on index.html + moisture_sim.html. Server-confirmed state: zones 0-6 (sprinklers) = `auto_mode: true`, zones 7-8 (Garden/Grapes drip) = `auto_mode: false`, zone 9 (Spare) = `false`.
+
+### Backtest: how much water this system would have used 2015-2025
+Built three analysis scripts in `C:\MyCode\smart-garden\` (now committed):
+- `sim_2025_water_usage.py` — runs the engine's water-balance model against Open-Meteo historical ET₀ + rain for one year, prints gallons per zone + total events
+- `sim_2025_water_cost.py` — converts gallons → WD119 and City of Duvall tier rates, marginal cost over a $10 CCF/bill baseline
+- `sim_multiyear_water.py` — same but across 2015-2025
+
+**Results (7 sprinkler zones, Apr-Oct, marginal cost over baseline):**
+
+| | 2025 | 11-yr avg | Driest (2015) | Wettest (2019) |
+|---|---|---|---|---|
+| Gallons | 20,928 | 17,943 | 22,152 | 12,984 |
+| Events | 228 | ~200 | ~240 | ~150 |
+| WD119 cost | $175 | $151 | $193 | $106 |
+| Duvall cost | $220 | $188 | $241 | $133 |
+
+**Caveats** (this is what makes the $175 number SUSPICIOUSLY low):
+1. Drip zones (Garden 7 + Grapes 8) not included — they're manual now anyway
+2. Baseline of $10 CCF/bill is a guess; if real bimonthly baseline is 8-12 CCF, marginal cost is understated
+3. The "naive dumb-timer comparison" of $400-$700 assumes you'd run 30 min × 4 days/week × 7 zones × 24 weeks regardless of weather — that's the true alternative
+4. **The biggest issue: `precip_rate_iph` in config is uncalibrated** — see audit below
+
+### Grass starvation audit — `audit_grass_starvation.py` (now committed)
+Four independent checks asking: "is the engine's water-balance accounting realistic, or is it lying to itself and starving the grass?"
+
+| Check | Result | Verdict |
+|---|---|---|
+| 1. Weekly net water per zone (peak Jun-Aug 2025) | 4 deficit weeks, 1 severe (-0.37 in) for Front Yard A | 🟡 Tight but OK *by engine's own math* |
+| 2. Precip-rate sanity: implied coverage area | All 7 zones imply 257-296 sq ft coverage | ⚠️ **TOO SMALL** — typical 4-head zone is 400-800 sq ft |
+| 3. Industry rule (1.0-1.5 in/wk net peak) | Net 0.23-0.38 in/wk | 💧 "lush" *by engine's math*, but only if Check 2 is right |
+| 4. Model assumptions (root, AWC, MAD, Kc) | All within FAO-56 ranges | ✅ Conservative |
+
+**The bug, stated clearly:** the engine computes `irrigation_mm = (runtime_min/60) × precip_rate_iph × 25.4`. If config says 1.5 in/hr and reality is 0.6 in/hr (likely on a typical 600 sq ft zone), engine credits the soil bucket 2.5× more inches than actually fell on the grass. Soil never reaches MAD trigger as often as it should → engine under-waters → grass stresses.
+
+**The math:** 4 GPM × 96.3 / 1.5 in/hr = 257 sq ft. For 4 spray heads with 10-15 ft radius, real coverage is 500-800 sq ft → real precip rate is 0.5-0.8 in/hr. Engine math believes each 24-min cycle deposits 0.60 in; reality is closer to 0.20-0.32 in. Real net during peak July ≈ **negative 0.25 in/week** instead of the "lush +0.38" the model claims.
+
+**Fix path:**
+1. Catch-can test (6-8 tuna cans, run 15 min, measure depth in mm, multiply by 4) — gives the real number
+2. Update `precip_rate_iph` per zone in config.yaml — engine will water more often
+3. Re-run multi-year sim with calibrated rates — true water usage probably ~35-50K gal/yr, true cost ~$300-500/season
+4. **Open issue for follow-up:** engine should size *runtime* to actual soil deficit, not always run fixed `cycle_run_min × cycle_count`. Right now adjusting precip_rate_iph only changes *frequency* of watering, not depth — that's a weaker lever than it should be.
+
+### Pre-flight checklist before letting it run tomorrow (2026-06-03)
+See bottom of this doc — "Pre-flight before auto-watering kicks in".
+
+---
+
 
 ### Switched to ET₀ water balance decisions (no soil sensors)
 
@@ -825,3 +875,64 @@ The mockup is validated. The next session should:
 `f5139b1` Year selector 2021-2025
 `2b03f87` Drag-to-zoom + scroll-to-pan
 (and 15+ more — see `git log`)
+
+---
+
+## Pre-flight before auto-watering kicks in
+
+Run this checklist any time you're about to flip the engine on for a new season or after a long pause. The goal is to confirm the engine, the hardware, and the calibration story all agree before grass health depends on it.
+
+### Tier 1 — Must do before tomorrow's first run
+
+1. **Confirm all sprinkler zones are `auto_mode: true` on the server.**
+   ```powershell
+   ssh jamesearlpace@192.168.0.109 "grep -E '  (auto_mode|name):' ~/smart-garden-server/config.yaml"
+   ```
+   Expected: zones 0-6 = true, zones 7-9 = false (drip + spare).
+
+2. **Check the watering window in [config.yaml](server-prod/config.yaml).**
+   Currently `04:00-07:00`. With 7 zones × 24 min runtime = 168 min = 2:48 → fits in the 3-hour window with no margin. If a zone soaks longer than expected or one starts late, the window can run out and the next zone won't fire. Consider widening to `04:00-08:00` for safety.
+
+3. **Verify the engine actually has a current soil balance for each zone.**
+   ```powershell
+   ssh jamesearlpace@192.168.0.109 "curl -s http://localhost:5125/api/dashboard | python3 -c 'import sys,json; d=json.load(sys.stdin); [print(z[\"name\"], z.get(\"balance_mm\"), z.get(\"mad_mm\")) for z in d.get(\"zones\",[])]'"
+   ```
+   If balance is `null` or stale, the engine won't decide correctly on day 1.
+
+4. **Open the dashboard ([http://192.168.0.109:5125](http://192.168.0.109:5125)) and verify each zone's "Next watering" prediction is reasonable.**
+   No prediction = engine doesn't know what to do. Wildly soon (today) on a recently-wet zone = stale balance. Far-future = balance might be inflated.
+
+### Tier 2 — Should do within first week
+
+5. **Catch-can calibration test** (15 min, ~$5 worth of tuna cans). This is the highest-leverage thing on the whole list. Steps:
+   - Distribute 6-8 empty straight-sided cans randomly across a single zone
+   - From dashboard, run that zone for exactly 15 minutes (Manual mode → Run)
+   - Measure water depth in each can with a ruler (mm). Average them.
+   - Real precip rate (in/hr) = average mm × 4 ÷ 25.4
+   - Compare to `precip_rate_iph` in config. If real is much lower (likely 0.5-0.8 vs config's 1.0-1.5), **update config** and redeploy. The audit predicted this; confirm it.
+   - Repeat per zone — different head models and pressure give different rates.
+
+6. **Walk the lawn at sunset every 2-3 days for the first 2 weeks.**
+   First stress signals: dull blue-green color, yellow tips, footprints staying visible (lack of turgor). If you see any: switch the affected zone to Manual, run a long soak, and lower its `precip_rate_iph` to force more frequent automatic cycles.
+
+7. **Confirm the daily 8 AM ntfy digest is firing** (the same one that reports ESP32 health). It should also show last 24h irrigation events. If watering decisions aren't showing up there, the engine's not actually triggering anything — check `journalctl -u smart-garden-server.service -f`.
+
+### Tier 3 — Optional / nice to have
+
+8. **Set a conservative `precip_rate_iph` floor temporarily.** Until catch-can numbers are in, override config to multiply current rates by ~0.6 (e.g. 1.5 → 0.9, 1.3 → 0.8, 1.0 → 0.6). This makes the engine assume *less* water is being deposited, so it will water *more* often — safer error direction while uncalibrated.
+
+9. **File two GitHub issues from the audit:**
+   - "Calibrate `precip_rate_iph` per zone via catch-can test" — captures the calibration TODO and links results back to config.yaml
+   - "Engine should size runtime to soil deficit, not run fixed cycle_run_min × cycle_count" — currently the only lever to change watering depth is `cycle_run_min`; engine should compute runtime as `(TAW - balance) / precip_rate_iph` clamped to `max_runtime_min`
+
+10. **Set a manual rollback plan in your head.** If grass starts browning fast: flip all auto-mode zones to Manual on the dashboard, run each one for 30-45 min once, then troubleshoot config rather than letting another auto cycle make it worse.
+
+### Quick rollback if something looks wrong tomorrow morning
+
+```powershell
+# Flip ALL zones to manual immediately
+ssh jamesearlpace@192.168.0.109 "sed -i 's/auto_mode: true/auto_mode: false/g' ~/smart-garden-server/config.yaml && sudo systemctl restart smart-garden-server.service"
+```
+
+This stops the engine from making any further automatic decisions until you've diagnosed. Re-enable per-zone via the dashboard.
+

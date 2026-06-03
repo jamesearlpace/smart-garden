@@ -197,6 +197,16 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 ## Session Log: 2026-06-02 (Auto-mode shipped + Water cost backtest + Grass starvation audit + UX polish)
 
+### Seasonal Outlook panel — SHIPPED (commit `39c5b62`)
+James asked whether summer 2026 was leaning hotter than usual. NOAA CPC's May 14 advisory says 82% chance of El Niño emerging May–Jul 2026 (96% by DJF), and the JJA outlook tilts PNW warmer/drier than normal. Instead of a vibe, built a panel that gives a real number.
+- New module `server-prod/seasonal.py`: pulls 180-day ECMWF SEAS5 ensemble-mean forecast from Open-Meteo's free seasonal API, then pulls 5-year ERA5 archive (one batched request per year) covering the same calendar months, computes per-month tmax / ET₀ / precip anomaly. 24h disk cache at `$TEMP/smart_garden_seasonal_cache.json`.
+- New route `/api/seasonal-outlook` in `dashboard.py` (`?refresh=1` to force).
+- New "🌡️ Seasonal Outlook" card in `moisture_sim.html` below the All-Zones schedule: one-line summary classifying the season (close-to-normal / warmer / significantly warmer / drier), then a tile per month with color-coded anomaly badges (red = hot/wet-deficit, blue = cool/wet, amber = warmer-than-normal).
+- Smoke result for Duvall: **Jun +5.4°F / −39% precip · Jul +6.2°F / −17% · Aug +7.6°F / −56% · Sep +6.8°F / −27%**. ET₀ avg only +1–11% (heat alone doesn't move ET as much as humidity/wind), but precip deficits are big. Expect to lean harder on auto-watering than the last few summers.
+- Source endpoints (no API key needed):
+  - SEAS5 forecast: `https://seasonal-api.open-meteo.com/v1/seasonal` with `models=ecmwf_seas5_ensemble_mean`
+  - ERA5 normal: `https://archive-api.open-meteo.com/v1/archive`
+
 ### Banner forecast walker: mm-as-inches unit bug — FIXED (commit `09d7b01`, issue [#16](https://github.com/jamesearlpace/smart-garden-server/issues/16))
 
 Zone 5 at 76% / MAD 50% — banner predicted next watering in ~4 hours; chart showed moisture staying above 70% all 7 days. The disagreement exposed a unit bug.

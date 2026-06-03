@@ -1895,12 +1895,13 @@ function updateNextWateringBanner(data, liveData) {
       var m = lastMoisture;
       var rootD = zone.rootDepthIn;
       var hitDay = null;
+      var MM_PER_IN = 25.4;
       for (var fi = 0; fi < forecast.length; fi++) {
-        var dayEt0 = forecast[fi].et0 || 0;
-        var dayRain = forecast[fi].rain || 0;
+        var dayEt0Mm = forecast[fi].et0 || 0;   // Open-Meteo returns mm
+        var dayRainMm = forecast[fi].rain || 0; // Open-Meteo returns mm
         var kc = 0.90;
-        var etPct = (dayEt0 * kc / rootD) * 100;
-        var rainPct = (dayRain * 0.65 / rootD) * 100;
+        var etPct = (dayEt0Mm / MM_PER_IN * kc / rootD) * 100;
+        var rainPct = (dayRainMm / MM_PER_IN * 0.65 / rootD) * 100;
         m = m - etPct + rainPct;
         if (m <= madPct) { hitDay = fi; break; }
       }
@@ -2081,10 +2082,14 @@ function predictZoneSchedule(zoneId, liveData, forecast7) {
   // today's index 0 as "tonight/tomorrow 4 AM", index 1 as next night, etc.
   var m = curM;
   var nights = [];
+  var MM_PER_IN_P = 25.4;
   for (var di = 0; di < 7; di++) {
-    var fc = forecast7[di] || { et0: 0.18, rain: 0 };
+    var fc = forecast7[di] || { et0: 4.5, rain: 0 }; // 4.5 mm/day ~ 0.18 in/day fallback
     // Drain through the day from previous night to this night's decision point.
-    m = m - ((fc.et0 || 0) * 0.90 / rootDepth) * 100 + ((fc.rain || 0) * 0.65 / rootDepth) * 100;
+    // Open-Meteo returns ET0 and rain in mm — convert to inches before dividing by rootDepth (in).
+    var et0In = (fc.et0 || 0) / MM_PER_IN_P;
+    var rainIn = (fc.rain || 0) / MM_PER_IN_P;
+    m = m - (et0In * 0.90 / rootDepth) * 100 + (rainIn * 0.65 / rootDepth) * 100;
     var willWater = false;
     var skipReason = null;
     if (m <= madPct) {
@@ -2359,8 +2364,10 @@ function refresh() {
             // Above MAD — estimate when it will cross
             var _fc = (liveData && liveData.forecast_7day) || [];
             var _m = _curM, _hit = null, _rd = getZoneBrainConfig(currentZoneId).rootDepthIn;
+            var _MM = 25.4;
             for (var _fi = 0; _fi < _fc.length; _fi++) {
-              _m = _m - ((_fc[_fi].et0 || 0) * 0.90 / _rd) * 100 + ((_fc[_fi].rain || 0) * 0.65 / _rd) * 100;
+              // Open-Meteo returns mm — convert to inches before dividing by root depth (in).
+              _m = _m - (((_fc[_fi].et0 || 0) / _MM) * 0.90 / _rd) * 100 + (((_fc[_fi].rain || 0) / _MM) * 0.65 / _rd) * 100;
               if (_m <= _madM) { _hit = _fi; break; }
             }
             if (_hit !== null) {

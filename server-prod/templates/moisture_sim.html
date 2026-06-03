@@ -153,6 +153,34 @@ h2 { margin: 0; font-size: 1.05rem; }
 .az-status-soon { color: var(--amber); font-weight: 600; }
 .az-status-now { color: var(--red); font-weight: 700; }
 
+/* Seasonal Outlook panel */
+.seasonal-panel { margin-top: 20px; padding: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.seasonal-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.seasonal-title { font-size: .95rem; font-weight: 700; color: var(--text); }
+.seasonal-sub { font-size: .72rem; color: var(--text2); margin-top: 2px; }
+.seasonal-refresh { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: .8rem; color: var(--text2); }
+.seasonal-refresh:hover { background: var(--green-light); color: var(--green-dark); border-color: var(--green); }
+.seasonal-summary { padding: 10px 12px; background: var(--green-bg); border-left: 3px solid var(--green); border-radius: 4px; font-size: .8rem; color: var(--text); margin-bottom: 12px; }
+.seasonal-summary.warn { background: var(--amber-bg); border-left-color: var(--amber); }
+.seasonal-summary.hot { background: var(--red-bg); border-left-color: var(--red); }
+.seasonal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.season-card { padding: 10px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+.season-month { font-size: .78rem; font-weight: 700; color: var(--text); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .03em; }
+.season-row { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 0; font-size: .72rem; }
+.season-label { color: var(--text2); }
+.season-val { font-weight: 600; color: var(--text); }
+.season-anom { font-size: .68rem; padding: 1px 6px; border-radius: 8px; margin-left: 4px; font-weight: 600; }
+.season-anom.hot { background: var(--red-bg); color: var(--red); }
+.season-anom.warm { background: var(--amber-bg); color: var(--amber); }
+.season-anom.cool { background: rgba(59,130,246,.10); color: #2563eb; }
+.season-anom.dry { background: rgba(180,83,9,.10); color: #b45309; }
+.season-anom.wet { background: rgba(59,130,246,.10); color: #2563eb; }
+.season-anom.norm { color: var(--text3); }
+.season-partial { font-size: .65rem; color: var(--text3); font-style: italic; margin-top: 4px; }
+.seasonal-footer { margin-top: 12px; font-size: .65rem; color: var(--text3); }
+.seasonal-footer a { color: var(--text2); text-decoration: none; border-bottom: 1px dotted var(--text3); }
+.seasonal-footer a:hover { color: var(--green-dark); }
+
 .decision-log { margin-top: 12px; }
 .decision-log h3 { margin: 0 0 8px; font-size: .85rem; color: var(--text); }
 .decision-entry { display: flex; gap: 10px; padding: 6px 0; font-size: .75rem; border-bottom: 1px solid var(--border); }
@@ -342,6 +370,22 @@ h2 { margin: 0; font-size: 1.05rem; }
     </div>
     <div style="font-size:.7rem; color:var(--text2); margin-top:8px">
       Predictions use today's moisture balance, FAO‑56 ET₀ from the 7-day forecast, and forecast rainfall (65% effective). Manual‑mode zones never auto‑water; drip zones water manually only. Click a zone name to drill in.
+    </div>
+  </div>
+
+  <!-- Seasonal Outlook Panel -->
+  <div class="seasonal-panel" id="seasonal-panel">
+    <div class="seasonal-head">
+      <div>
+        <div class="seasonal-title">🌡️ Seasonal Outlook</div>
+        <div class="seasonal-sub" id="seasonal-sub">Loading 6-month forecast vs 5-yr normal…</div>
+      </div>
+      <button class="seasonal-refresh" id="seasonal-refresh" title="Force refresh (skips 24h cache)">↻</button>
+    </div>
+    <div class="seasonal-summary" id="seasonal-summary"></div>
+    <div class="seasonal-grid" id="seasonal-grid"></div>
+    <div class="seasonal-footer">
+      Source: <a href="https://open-meteo.com/en/docs/seasonal-forecast-api" target="_blank" rel="noopener">ECMWF SEAS5</a> ensemble mean (forecast) vs <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener">ERA5</a> reanalysis (normal). Cached 24 h.
     </div>
   </div>
 
@@ -2578,9 +2622,116 @@ document.getElementById('tune-save').addEventListener('click', function() {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// Seasonal Outlook
+// ═══════════════════════════════════════════════════════════════
+function classifyTempAnom(d) {
+  if (d == null) return ['norm', '—'];
+  if (d >= 4) return ['hot', '+' + d.toFixed(1) + '°F'];
+  if (d >= 1.5) return ['warm', '+' + d.toFixed(1) + '°F'];
+  if (d <= -1.5) return ['cool', d.toFixed(1) + '°F'];
+  return ['norm', (d >= 0 ? '+' : '') + d.toFixed(1) + '°F'];
+}
+function classifyPctAnom(p, posLabel, negLabel) {
+  if (p == null) return ['norm', '—'];
+  var s = (p >= 0 ? '+' : '') + p.toFixed(0) + '%';
+  if (posLabel === 'hot') {
+    if (p >= 10) return ['hot', s];
+    if (p >= 4) return ['warm', s];
+    if (p <= -4) return ['cool', s];
+  } else {
+    if (p <= -15) return ['dry', s];
+    if (p >= 15) return ['wet', s];
+  }
+  return ['norm', s];
+}
+function buildSeasonalSummary(months) {
+  if (!months || !months.length) return ['', ''];
+  var hot = 0, dry = 0;
+  var sumT = 0, sumE = 0, sumP = 0, n = 0;
+  months.forEach(function(m) {
+    if (m.anomaly.delta_tmax_f != null) { sumT += m.anomaly.delta_tmax_f; n++; }
+    if (m.anomaly.delta_tmax_f != null && m.anomaly.delta_tmax_f >= 3) hot++;
+    if (m.anomaly.precip_pct != null && m.anomaly.precip_pct <= -15) dry++;
+    if (m.anomaly.et0_pct != null) sumE += m.anomaly.et0_pct;
+    if (m.anomaly.precip_pct != null) sumP += m.anomaly.precip_pct;
+  });
+  var avgT = n ? (sumT / n) : 0;
+  var avgE = n ? (sumE / n) : 0;
+  var avgP = n ? (sumP / n) : 0;
+  var cls = 'good';
+  var msg;
+  if (avgT >= 4 || hot >= 3) {
+    cls = 'hot';
+    msg = '🔥 Forecast leans <strong>significantly warmer</strong> (avg ' + (avgT >= 0 ? '+' : '') + avgT.toFixed(1) + '°F vs normal)';
+  } else if (avgT >= 1.5 || hot >= 2) {
+    cls = 'warn';
+    msg = '🌡️ Forecast leans <strong>warmer than normal</strong> (avg ' + (avgT >= 0 ? '+' : '') + avgT.toFixed(1) + '°F)';
+  } else {
+    msg = '✓ Forecast tracks close to normal (avg ' + (avgT >= 0 ? '+' : '') + avgT.toFixed(1) + '°F)';
+  }
+  if (dry >= 2) {
+    msg += ' and <strong>drier than normal</strong> (avg precip ' + avgP.toFixed(0) + '%)';
+    if (cls === 'good') cls = 'warn';
+  }
+  msg += '. Expect ET₀ <strong>' + (avgE >= 0 ? '+' : '') + avgE.toFixed(0) + '%</strong> vs the last ' + (months[0].normal.years_used || 5) + ' years.';
+  return [cls, msg];
+}
+function renderSeasonalOutlook(data) {
+  var sub = document.getElementById('seasonal-sub');
+  var summary = document.getElementById('seasonal-summary');
+  var grid = document.getElementById('seasonal-grid');
+  if (data.error || !data.months || !data.months.length) {
+    sub.textContent = 'Unavailable: ' + (data.error || 'no data');
+    summary.style.display = 'none';
+    grid.innerHTML = '';
+    return;
+  }
+  sub.textContent = 'Next ' + data.months.length + ' months · ECMWF SEAS5 vs ERA5 ' + data.normal_year_range + ' normal';
+  var s = buildSeasonalSummary(data.months);
+  summary.className = 'seasonal-summary ' + s[0];
+  summary.innerHTML = s[1];
+  summary.style.display = '';
+  grid.innerHTML = data.months.map(function(m) {
+    var t = classifyTempAnom(m.anomaly.delta_tmax_f);
+    var e = classifyPctAnom(m.anomaly.et0_pct, 'hot');
+    var p = classifyPctAnom(m.anomaly.precip_pct, 'wet');
+    var partial = (m.days_forecast < m.days_in_month)
+      ? '<div class="season-partial">' + m.days_forecast + '/' + m.days_in_month + ' days (scaled)</div>'
+      : '';
+    return '<div class="season-card">' +
+      '<div class="season-month">' + m.label + '</div>' +
+      '<div class="season-row"><span class="season-label">Tmax</span>' +
+        '<span><span class="season-val">' + m.forecast.tmax_avg_f.toFixed(0) + '°F</span>' +
+        '<span class="season-anom ' + t[0] + '">' + t[1] + '</span></span></div>' +
+      '<div class="season-row"><span class="season-label">ET₀</span>' +
+        '<span><span class="season-val">' + m.forecast.et0_total_in.toFixed(1) + ' in</span>' +
+        '<span class="season-anom ' + e[0] + '">' + e[1] + '</span></span></div>' +
+      '<div class="season-row"><span class="season-label">Rain</span>' +
+        '<span><span class="season-val">' + m.forecast.precip_total_in.toFixed(1) + ' in</span>' +
+        '<span class="season-anom ' + p[0] + '">' + p[1] + '</span></span></div>' +
+      partial +
+    '</div>';
+  }).join('');
+}
+function loadSeasonalOutlook(force) {
+  var sub = document.getElementById('seasonal-sub');
+  if (force) sub.textContent = 'Refreshing (this takes ~30 s)…';
+  fetch('/api/seasonal-outlook' + (force ? '?refresh=1' : ''))
+    .then(function(r) { return r.json(); })
+    .then(renderSeasonalOutlook)
+    .catch(function(err) {
+      sub.textContent = 'Failed to load: ' + err;
+    });
+}
+document.getElementById('seasonal-refresh').addEventListener('click', function() {
+  loadSeasonalOutlook(true);
+});
+
 // Initial load
 renderModeToggle();
 refresh();
+loadSeasonalOutlook();
 </script>
 
 </div><!-- /.main -->

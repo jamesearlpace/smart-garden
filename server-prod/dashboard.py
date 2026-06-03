@@ -20,6 +20,7 @@ from flask import make_response, Response, Flask, render_template, request, json
 import database as db
 from irrigation import ESP32_MANUAL_TIMEOUT
 from cam_ocr import MeterReader
+import seasonal
 
 
 def create_app(config, engine, weather, billing):
@@ -311,6 +312,20 @@ def create_app(config, engine, weather, billing):
     @app.route("/forecast")
     def forecast_page():
         return render_template("forecast_merged.html")
+
+    @app.route("/api/seasonal-outlook")
+    def api_seasonal_outlook():
+        """6-month SEAS5 forecast vs ERA5 5-yr normal. 24h cache."""
+        force = request.args.get("refresh") == "1"
+        loc = config.get("location", {})
+        lat = loc.get("lat", loc.get("latitude", 47.74))
+        lon = loc.get("lon", loc.get("longitude", -121.99))
+        tz = loc.get("timezone", "America/Los_Angeles")
+        try:
+            out = seasonal.get_seasonal_outlook(lat, lon, tz, force_refresh=force)
+            return jsonify(out)
+        except Exception as e:
+            return jsonify({"error": str(e), "months": []}), 500
 
     @app.route("/api/forecast")
     def api_forecast():

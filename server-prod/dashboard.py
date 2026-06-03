@@ -557,34 +557,6 @@ def create_app(config, engine, weather, billing):
     def zone_map():
         return render_template("map.html")
 
-    @app.route("/history")
-    def history():
-        days = query_int("days", 30, min_value=1, max_value=3650)
-        waterings = db.get_watering_history(days)
-        skips = db.get_skip_history(days)
-        daily = db.get_daily_summaries(days)
-        return render_template("history.html",
-                               waterings=waterings,
-                               skips=skips,
-                               daily=daily,
-                               days=days,
-                               zones=config["zones"])
-
-    @app.route("/sensors")
-    def sensors():
-        zone_data = []
-        for zone in config["zones"]:
-            soil_hist = db.get_soil_history(zone["soil_sensor"], days=7)
-            latest = db.get_latest_soil(zone["soil_sensor"])
-            zone_data.append({
-                "zone": zone,
-                "latest": latest,
-                "history": soil_hist,
-            })
-        return render_template("sensors.html",
-                               zone_data=zone_data,
-                               weather_7day=weather.get_7day_forecast(allow_fetch=False))
-
     # ── API endpoints ──
 
     @app.route("/api/valve", methods=["POST"])

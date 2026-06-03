@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zone Map — Smart Garden</title>
+  <style>
+    :root {
+      --z0: #ef4444; --z1: #f97316; --z2: #eab308; --z3: #22c55e;
+      --z4: #06b6d4; --z5: #3b82f6; --z6: #8b5cf6; --z7: #ec4899;
+      --z8: #94a3b8;
+      --bg: #0f172a; --card: #1e293b; --text1: #f1f5f9; --text2: #94a3b8;
+      --blue: #3b82f6; --green: #22c55e;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text1); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+    header { background: var(--card); padding: 12px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid rgba(255,255,255,.06); }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    nav { display: flex; gap: 8px; margin-left: auto; }
+    nav a { color: var(--text2); text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: .85rem; }
+    nav a:hover, nav a.active { background: rgba(255,255,255,.08); color: var(--text1); }
+
+    .map-container {
+      display: flex; gap: 0; height: calc(100vh - 52px); overflow: hidden;
+    }
+
+    /* ── Map Panel ── */
+    .map-panel {
+      flex: 1; position: relative; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      background: #000;
+    }
+    .map-wrap {
+      position: relative; display: inline-block;
+      max-width: 100%; max-height: 100%;
+    }
+    .map-wrap img {
+      display: block; max-width: 100%; max-height: calc(100vh - 52px);
+      object-fit: contain;
+    }
+
+    /* Sprinkler head dots — positioned absolutely over the image */
+    .head-dot {
+      position: absolute; width: 16px; height: 16px; border-radius: 50%;
+      transform: translate(-50%, -50%);
+      border: 2px solid rgba(255,255,255,.9);
+      cursor: pointer; z-index: 10;
+      transition: transform .2s, box-shadow .2s;
+    }
+    .head-dot:hover { transform: translate(-50%, -50%) scale(1.4); z-index: 20; }
+    .head-dot .dot-label {
+      position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; font-weight: 700; color: #fff; white-space: nowrap;
+      text-shadow: 0 1px 3px rgba(0,0,0,.8);
+      pointer-events: none; opacity: 0; transition: opacity .15s;
+    }
+    .head-dot:hover .dot-label { opacity: 1; }
+
+    /* Watering pulse animation */
+    .head-dot.watering {
+      animation: pulse-head 1.5s ease-in-out infinite;
+      box-shadow: 0 0 12px 4px rgba(59, 130, 246, .6);
+    }
+    @keyframes pulse-head {
+      0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 12px 4px rgba(59,130,246,.6); }
+      50% { transform: translate(-50%, -50%) scale(1.5); box-shadow: 0 0 24px 8px rgba(59,130,246,.9); }
+    }
+
+    /* Zone coverage overlay */
+    .zone-overlay {
+      position: absolute; border-radius: 50%; opacity: 0;
+      pointer-events: none; z-index: 5;
+      transition: opacity .3s;
+    }
+    .zone-overlay.visible { opacity: .15; }
+    .zone-overlay.watering { opacity: .25; animation: pulse-zone 2s ease-in-out infinite; }
+    @keyframes pulse-zone {
+      0%, 100% { opacity: .25; }
+      50% { opacity: .4; }
+    }
+
+    /* ── Side Panel ── */
+    .side-panel {
+      width: 280px; background: var(--card); overflow-y: auto;
+      border-left: 1px solid rgba(255,255,255,.06);
+      padding: 16px; flex-shrink: 0;
+    }
+    .side-panel h2 { font-size: .9rem; color: var(--text2); margin-bottom: 12px; text-transform: uppercase; letter-spacing: .05em; }
+
+    .zone-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 8px; margin-bottom: 6px;
+      cursor: pointer; transition: background .15s;
+      border: 1px solid transparent;
+    }
+    .zone-item:hover { background: rgba(255,255,255,.05); }
+    .zone-item.active { border-color: var(--blue); background: rgba(59,130,246,.1); }
+    .zone-item.watering { border-color: var(--blue); background: rgba(59,130,246,.15); }
+
+    .zone-dot {
+      width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+      border: 2px solid rgba(255,255,255,.3);
+    }
+    .zone-label { flex: 1; }
+    .zone-name { font-size: .85rem; font-weight: 600; }
+    .zone-sub { font-size: .72rem; color: var(--text2); }
+
+    .zone-badge {
+      font-size: .65rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .badge-off { background: rgba(255,255,255,.06); color: var(--text2); }
+    .badge-watering { background: rgba(59,130,246,.2); color: var(--blue); animation: pulse-badge 2s infinite; }
+    .badge-planned { background: rgba(255,255,255,.04); color: var(--text2); }
+    @keyframes pulse-badge {
+      0%, 100% { opacity: 1; } 50% { opacity: .5; }
+    }
+
+    .zone-btn {
+      font-size: .7rem; font-weight: 600; padding: 4px 10px; border-radius: 4px;
+      border: none; cursor: pointer; margin-top: 6px; display: inline-block;
+    }
+    .btn-run { background: rgba(34,197,94,.15); color: var(--green); }
+    .btn-run:hover { background: rgba(34,197,94,.3); }
+    .btn-stop { background: rgba(239,68,68,.15); color: #ef4444; }
+    .btn-stop:hover { background: rgba(239,68,68,.3); }
+
+    .vb-label {
+      font-size: .7rem; color: var(--text2); margin: 14px 0 6px;
+      padding-top: 10px; border-top: 1px solid rgba(255,255,255,.06);
+      font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+    }
+
+    .status-bar {
+      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+      background: rgba(255,255,255,.03); border-radius: 8px; margin-bottom: 16px;
+      font-size: .8rem;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-dot.online { background: var(--green); }
+    .status-dot.offline { background: #ef4444; }
+
+    footer {
+      padding: 12px; text-align: center; font-size: .72rem; color: var(--text2);
+      border-top: 1px solid rgba(255,255,255,.06);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌱 Smart Garden — Zone Map</h1>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/history">History</a>
+      <a href="/sensors">Sensors</a>
+      <a href="/map" class="active">Map</a>
+    </nav>
+  </header>
+
+  <div class="map-container">
+    <div class="map-panel">
+      <div class="map-wrap" id="map-wrap">
+        <img src="/static/yard-aerial.jpg" alt="Yard aerial view" id="yard-img" draggable="false">
+        <!-- Dots rendered by JS -->
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="status-bar">
+        <span class="status-dot" id="esp-dot"></span>
+        <span id="esp-status">Connecting…</span>
+        <span style="margin-left:auto;font-size:.7rem;color:var(--text2)" id="esp-time"></span>
+      </div>
+      <h2>Zones</h2>
+      <div id="zone-list"></div>
+      <footer>Smart Garden · Duvall, WA</footer>
+    </div>
+  </div>
+
+<script>
+// ── Zone colors ──
+var ZONE_COLORS = [
+  '#ef4444', '#f97316', '#eab308', '#22c55e',
+  '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
+  '#94a3b8'
+];
+
+// ── Sprinkler head positions (x%, y% relative to image) ──
+// Detected from aerial photo red dots. Adjust coordinates as needed.
+var SPRINKLER_HEADS = [
+  // Zone 1 (id 0) — Front Yard A — 4 heads, far east by road
+  {zone: 0, x: 79.8, y: 53.4},
+  {zone: 0, x: 92.1, y: 53.4},
+  {zone: 0, x: 80.6, y: 70.7},
+  {zone: 0, x: 93.3, y: 68.7},
+
+  // Zone 2 (id 1) — Front Yard B — 4 heads, south-east lawn
+  {zone: 1, x: 62.4, y: 65.2},
+  {zone: 1, x: 62.7, y: 75.4},
+  {zone: 1, x: 63.2, y: 85.9},
+  {zone: 1, x: 76.8, y: 85.5},
+
+  // Zone 3 (id 2) — Enclosed Backyard A — 4 heads, right of house
+  {zone: 2, x: 44.2, y: 65.6},
+  {zone: 2, x: 59.9, y: 65.2},
+  {zone: 2, x: 48.0, y: 74.9},
+  {zone: 2, x: 59.7, y: 74.5},
+
+  // Zone 4 (id 3) — Enclosed Backyard B — 4 heads, south edge
+  {zone: 3, x: 28.0, y: 82.9},
+  {zone: 3, x: 37.2, y: 77.1},
+  {zone: 3, x: 46.0, y: 82.7},
+  {zone: 3, x: 60.3, y: 82.4},
+
+  // Zone 5 (id 4) — Peonies — 4 heads, enclosed area left
+  {zone: 4, x: 30.9, y: 55.7},
+  {zone: 4, x: 20.7, y: 65.7},
+  {zone: 4, x: 32.5, y: 67.2},
+  {zone: 4, x: 20.1, y: 75.5},
+
+  // Zone 6 (id 5) — Garden — 3 heads, center
+  {zone: 5, x: 34.4, y: 38.5},
+  {zone: 5, x: 31.1, y: 44.9},
+  {zone: 5, x: 17.0, y: 53.7},
+
+  // Zone 7 (id 6) — South Lawn A — 4 heads, northwest
+  {zone: 6, x: 16.0, y: 24.5},
+  {zone: 6, x: 32.4, y: 23.8},
+  {zone: 6, x: 21.4, y: 33.3},
+  {zone: 6, x: 18.6, y: 43.3},
+
+  // Zone 8 (id 7) — South Lawn B — 1 head (drip)
+  {zone: 7, x: 32.4, y: 51.7},
+
+  // Zone 9 (id 8) — South Lawn C — 1 head (drip)
+  {zone: 8, x: 22.2, y: 80.9}
+];
+
+// ── Zone metadata (populated from API) ──
+var ZONES = [];
+var PLANNED = [];
+var highlightedZone = null;
+
+function el(id) { return document.getElementById(id); }
+
+// ── Render head dots on the map ──
+function renderHeadDots() {
+  // Remove existing dots
+  document.querySelectorAll('.head-dot').forEach(function(d) { d.remove(); });
+
+  var wrap = el('map-wrap');
+  SPRINKLER_HEADS.forEach(function(h, i) {
+    var dot = document.createElement('div');
+    dot.className = 'head-dot';
+    dot.style.left = h.x + '%';
+    dot.style.top = h.y + '%';
+    dot.style.background = ZONE_COLORS[h.zone] || '#888';
+    dot.dataset.zone = h.zone;
+    dot.dataset.idx = i;
+
+    var zone = ZONES.find(function(z) { return z.id === h.zone; }) ||
+               PLANNED.find(function(z) { return z.id === h.zone; });
+    var label = zone ? zone.name : 'Zone ' + (h.zone + 1);
+    dot.innerHTML = '<span class="dot-label">' + label + '</span>';
+
+    dot.addEventListener('click', function() { toggleHighlight(h.zone); });
+    wrap.appendChild(dot);
+  });
+}
+
+// ── Update dots with watering status ──
+function updateDotStatus() {
+  document.querySelectorAll('.head-dot').forEach(function(dot) {
+    var zid = parseInt(dot.dataset.zone);
+    var zone = ZONES.find(function(z) { return z.id === zid; });
+    var isWatering = zone && zone.watering;
+    var isHighlighted = highlightedZone === null || highlightedZone === zid;
+
+    dot.classList.toggle('watering', !!isWatering);
+    dot.style.opacity = isHighlighted ? '1' : '0.25';
+  });
+}
+
+// ── Toggle zone highlight ──
+function toggleHighlight(zoneId) {
+  highlightedZone = highlightedZone === zoneId ? null : zoneId;
+  updateDotStatus();
+  updateZoneList();
+}
+
+// ── Render side panel zone list ──
+function updateZoneList() {
+  var html = '';
+  var allZones = ZONES.concat(PLANNED);
+
+  // Group by valve box
+  var vb1 = allZones.filter(function(z) { return z.id <= 3; });
+  var vb2 = allZones.filter(function(z) { return z.id >= 4; });
+
+  html += '<div class="vb-label">Valve Box 1 — East side · Zones 1–4</div>';
+  vb1.forEach(function(z) { html += zoneItemHtml(z); });
+  html += '<div class="vb-label">Valve Box 2 — SE corner · Zones 5–9</div>';
+  vb2.forEach(function(z) { html += zoneItemHtml(z); });
+
+  el('zone-list').innerHTML = html;
+
+  // Bind click handlers
+  document.querySelectorAll('.zone-item').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+      if (e.target.closest('.zone-btn')) return; // don't toggle on button click
+      toggleHighlight(parseInt(item.dataset.zone));
+    });
+  });
+}
+
+function zoneItemHtml(z) {
+  var isPlanned = !z.installed;
+  var isWatering = z.watering;
+  var isActive = highlightedZone === z.id;
+  var color = ZONE_COLORS[z.id] || '#888';
+  var headCount = SPRINKLER_HEADS.filter(function(h) { return h.zone === z.id; }).length;
+  var typeLabel = z.type === 'drip' ? 'drip' : headCount + ' heads';
+
+  var cls = 'zone-item' + (isActive ? ' active' : '') + (isWatering ? ' watering' : '');
+  var badgeCls = isWatering ? 'badge-watering' : isPlanned ? 'badge-planned' : 'badge-off';
+  var badgeTxt = isWatering ? 'WATERING' : isPlanned ? 'PLANNED' : 'OFF';
+
+  var btnHtml = '';
+  if (!isPlanned) {
+    if (isWatering) {
+      btnHtml = '<button class="zone-btn btn-stop" onclick="ctrlValve(' + z.id + ',\'close\')">■ Stop</button>';
+    } else {
+      btnHtml = '<button class="zone-btn btn-run" onclick="ctrlRun(' + z.id + ', 5)">▶ Run 5m</button>';
+    }
+  }
+
+  return '<div class="zone-item ' + cls + '" data-zone="' + z.id + '">' +
+    '<div class="zone-dot" style="background:' + color + '"></div>' +
+    '<div class="zone-label">' +
+      '<div class="zone-name">Zone ' + (z.id + 1) + ' — ' + z.name + '</div>' +
+      '<div class="zone-sub">' + typeLabel + '</div>' +
+      btnHtml +
+    '</div>' +
+    '<span class="zone-badge ' + badgeCls + '">' + badgeTxt + '</span>' +
+  '</div>';
+}
+
+// ── Valve control ──
+function ctrlValve(zoneId, action) {
+  fetch('/api/valve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id: zoneId, action: action})
+  }).then(function() { poll(); });
+}
+
+function ctrlRun(zoneId, minutes) {
+  fetch('/api/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id: zoneId, minutes: minutes})
+  }).then(function() { poll(); });
+}
+
+// ── Poll for live data ──
+function poll() {
+  fetch('/api/dashboard')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var online = !!d.esp32;
+      el('esp-dot').className = 'status-dot ' + (online ? 'online' : 'offline');
+      el('esp-status').textContent = online ? 'ESP32 Online' : 'ESP32 Offline';
+      el('esp-time').textContent = new Date().toLocaleTimeString();
+
+      ZONES = d.zones || [];
+      PLANNED = d.planned_zones || [];
+      renderHeadDots();
+      updateDotStatus();
+      updateZoneList();
+    })
+    .catch(function() {
+      el('esp-dot').className = 'status-dot offline';
+      el('esp-status').textContent = 'Server error';
+    });
+}
+
+// ── Init ──
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>

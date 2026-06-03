@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done.
-**Last Updated:** 2026-06-02
+**Last Updated:** 2026-06-03
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -476,18 +476,30 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 | smart-garden-server | (closed) | — | Chip-temp false positives — fixed 2026-04-22. |
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji, #12 reboot wiring — closed 2026-04-21. |
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
-| smart-garden-server | [#15](https://github.com/jamesearlpace/smart-garden-server/issues/15) | (fixed) | Moisture-sim banner showed past 4 AM time when above-MAD branch predicted same-day crossing — fixed `1a37f65` (2026-06-02). Roll target forward one day if `< now`. |
-| smart-garden-server | (fixed) | — | Moisture-sim JS parse error blocked all rendering after edit left `return;-1)` garbage in `refreshAllZones` — fixed `3d70b58` (2026-06-02). |
-| smart-garden-server | [#16](https://github.com/jamesearlpace/smart-garden-server/issues/16) | (fixed) | Moisture-sim banner forecast walker treated Open-Meteo ET0/rain as inches (actual = mm), making moisture appear to crash 25.4× too fast — fixed `09d7b01` (2026-06-02). Three duplicated walker copies all patched; consolidation TODO. |
-| smart-garden-server | [#17](https://github.com/jamesearlpace/smart-garden-server/issues/17) | Med | `forecast_merged.html` still uses old dark theme — flips entire color scheme when navigating to /forecast. Other pages migrated to light in commit `5da10d9`, this one was missed. |
-| smart-garden-server | [#18](https://github.com/jamesearlpace/smart-garden-server/issues/18) | **High** | Four templates exist only on server, never committed to git: `login.html`, `map.html`, `history.html`, `sensors.html`. Risk: scp wholesale or rebuild from git → 500 errors, login locks everyone out. Same drift pattern that bit Heritage Vault 2026-06-01. |
-| smart-garden-server | [#19](https://github.com/jamesearlpace/smart-garden-server/issues/19) | Low | Orphan routes `/map`, `/history`, `/sensors` registered in dashboard.py but not linked from any nav. Either add to sidebar or delete. |
-| smart-garden-server | [#20](https://github.com/jamesearlpace/smart-garden-server/issues/20) | Low | Dead templates in repo — `forecast.html` (replaced by `forecast_merged.html`) and `forecast_vs_actual.html` (route now redirects to /forecast). Delete from repo + server. |
-| smart-garden-server | [#21](https://github.com/jamesearlpace/smart-garden-server/issues/21) | Med | `forecast_merged.html` has no sidebar on desktop — only a max-width 900px centered layout with mobile bottom nav. Pairs with #17 (theme migration). |
-| smart-garden-server | [#22](https://github.com/jamesearlpace/smart-garden-server/issues/22) | Low | Mobile bottom nav drift — three different versions across index/moisture_sim/forecast_merged: different item counts, different active color (`--green` vs `--green-dark`), different link mechanism (`#anchor` vs `localStorage.setItem`). Consolidate into a Jinja include. |
-| smart-garden-server | [#23](https://github.com/jamesearlpace/smart-garden-server/issues/23) | Low | Server `templates/` cluttered: 3 stray .py files (dashboard/database/irrigation, not used by Flask) and 4 .bak files (one from April, three from today). |
-| smart-garden-server | [#24](https://github.com/jamesearlpace/smart-garden-server/issues/24) | Low | Redundant breadcrumb on moisture-sim — "← Dashboard · Forecast · Moisture Sim" duplicates info already in the sidebar. |
-| smart-garden-server | [#25](https://github.com/jamesearlpace/smart-garden-server/issues/25) | Low | Sidebar footer drift — index.html shows live status dot + auto-refresh hint, moisture_sim.html shows static "Soil Moisture Simulation" label with no status. |
+| smart-garden-server | ✅ closed | — | #15 banner past-time, #16 mm-as-inches, #17 forecast dark theme, #18 missing templates, #19 orphan routes, #20 dead templates, #21 forecast no sidebar, #22 mobile nav drift, #23 server clutter, #24 redundant breadcrumb, #25 sidebar footer drift — all SHIPPED 2026-06-03. See session log below. |
+
+---
+
+## Session Log: 2026-06-03 (Site Polish Sweep — 11 issues closed)
+
+Audited the whole web UI for drift, filed 9 issues (#17–#25), shipped fixes for all of them plus closed-out #15/#16 from yesterday. Commits: `1f5af36` (#18), `7b38392` (#17/#20/#21/#24/#25), `30d4a7e` (#19), `3442287` (#22).
+
+**What shipped:**
+
+- **#18 (HIGH)** Committed the 4 server-only templates (`login.html`, `map.html`, `history.html`, `sensors.html`) into git. Same drift pattern that bit Heritage Vault 2026-06-01 — risk was real.
+- **#20** Deleted dead `forecast.html` + `forecast_vs_actual.html` from repo and server.
+- **#17 + #21** Forecast page rewritten: dark theme → shared light-theme palette, added cloned sidebar + `<div class="main">` wrapper, added ESP32 status poller hitting `/api/health` every 30s.
+- **#24** Removed redundant breadcrumb at top of moisture-sim.
+- **#25** Moisture-sim sidebar footer now mirrors dashboard (ESP32 status dot + auto-refresh hint), same status poller.
+- **#23** Moved server's `templates/dashboard.py`, `database.py`, `irrigation.py` (stale Apr 11 copies, not used by Flask) + all `*.bak` files into `~/smart-garden-server/_backups/`. templates dir is now .html only.
+- **#19** Kept `/map` (added to every sidebar + index mobile nav as "Zone Map" — the fullscreen aerial-photo view with pulsing sprinkler heads is unique). Deleted `/history` and `/sensors` routes + templates (dashboard panels cover them).
+- **#22** All three pages now share an identical 8-item mobile bottom nav: Home / Zones / Map / History / Settings / Forecast / Moisture / Cam. Same classes, same active color (`--green-dark`).
+
+**Discovered + fixed mid-session:** `scp` flattened paths sent template files to `~/smart-garden-server/` root instead of `templates/` — caught immediately via `ls`, cleaned up, redeployed correctly. Lesson reinforced from the heritage-vault memory: always `scp templates/foo.html ... :~/svc/templates/`.
+
+**Closed:** #15 (banner past-time roll-forward), #16 (mm-as-inches 25.4× bug), #17, #18, #19, #20, #21, #22, #23, #24, #25 — 11 issues.
+
+**Remaining open:** firmware-side wedge issues #5 / #6 / #2 + meta #4 / #1. None UI-related.
 
 ---
 

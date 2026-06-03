@@ -1906,8 +1906,11 @@ function updateNextWateringBanner(data, liveData) {
       }
       if (hitDay !== null) {
         var estDate2 = new Date();
-        estDate2.setDate(estDate2.getDate() + hitDay);
         estDate2.setHours(4, 0, 0, 0);
+        estDate2.setDate(estDate2.getDate() + hitDay);
+        // If target is already in the past (hitDay=0 and it's past 4 AM today),
+        // roll forward one day. Engine fires at the next 4-7 AM window.
+        if (estDate2.getTime() < now) estDate2.setDate(estDate2.getDate() + 1);
         var dn2 = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         var mn2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         var hoursAway2 = (estDate2.getTime() - now) / 3600000;
@@ -2362,7 +2365,11 @@ function refresh() {
               if (_m <= _madM) { _hit = _fi; break; }
             }
             if (_hit !== null) {
-              var _d2 = new Date(); _d2.setDate(_d2.getDate() + _hit); _d2.setHours(4, 0, 0, 0);
+              var _d2 = new Date();
+              _d2.setHours(4, 0, 0, 0);
+              _d2.setDate(_d2.getDate() + _hit);
+              // Roll to next day's 4 AM if target already passed (e.g. it's 11 PM and _hit=0)
+              if (_d2.getTime() < Date.now()) _d2.setDate(_d2.getDate() + 1);
               var _ha2 = (_d2.getTime() - Date.now()) / 3600000;
               var _ts2 = _ha2 < 1 ? 'now' : _ha2 < 24 ? _ha2.toFixed(0) + ' hours' : (_ha2 / 24).toFixed(1) + ' days';
               _banner.style.display = 'flex';

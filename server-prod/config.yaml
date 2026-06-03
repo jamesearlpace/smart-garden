@@ -175,7 +175,7 @@ zones:
 - id: 7
   name: Garden
   type: drip
-  installed: false
+  installed: true
   auto_mode: false
   heads: 1
   description: Vegetable garden drip (visible in moisture sim but auto-watering disabled)
@@ -195,7 +195,7 @@ zones:
 - id: 8
   name: Grapes
   type: drip
-  installed: false
+  installed: true
   auto_mode: false
   heads: 1
   description: Grape vine drip

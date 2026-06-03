@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Moisture Simulation — Smart Garden</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root {
   /* Light theme — matches dashboard (index.html) */
@@ -459,9 +459,28 @@ function parseLocalTs(ts) {
 // ═══════════════════════════════════
 // OPEN-METEO ARCHIVE (historical)
 // ═══════════════════════════════════
+// sessionStorage cache — survives page reloads. Archive data only changes
+// once per day at midnight UTC, so a 6h TTL is safe. Forecast is shorter
+// since it updates hourly upstream.
+function ssGet(key, ttlSec) {
+  try {
+    var raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    var obj = JSON.parse(raw);
+    if (!obj || !obj.t || (Date.now() - obj.t) > ttlSec * 1000) return null;
+    return obj.v;
+  } catch(e) { return null; }
+}
+function ssSet(key, value) {
+  try { sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), v: value })); }
+  catch(e) { /* quota exceeded — ignore */ }
+}
+
 function fetchArchiveWeather(year) {
   return new Promise(function(resolve, reject) {
     if (weatherCache[year]) { resolve(weatherCache[year]); return; }
+    var cached = ssGet('wxArchive_' + year, 6 * 3600);
+    if (cached) { weatherCache[year] = cached; resolve(cached); return; }
     var lat = 47.7382, lon = -121.9856;
     var url = 'https://archive-api.open-meteo.com/v1/archive?' +
       'latitude=' + lat + '&longitude=' + lon +
@@ -473,6 +492,7 @@ function fetchArchiveWeather(year) {
     fetch(url).then(function(r) { return r.json(); }).then(function(wx) {
       if (!wx.daily || !wx.hourly) { reject('Archive API error'); return; }
       weatherCache[year] = wx;
+      ssSet('wxArchive_' + year, wx);
       resolve(wx);
     }).catch(reject);
   });
@@ -484,6 +504,9 @@ function fetchArchiveWeather(year) {
 function fetch2026Weather() {
   return new Promise(function(resolve, reject) {
     if (weatherCache['2026']) { resolve(weatherCache['2026']); return; }
+    // 30 min TTL — forecast portion changes hourly upstream, archive portion daily.
+    var cached = ssGet('wx2026Merged', 30 * 60);
+    if (cached) { weatherCache['2026'] = cached; resolve(cached); return; }
 
     var lat = 47.7382, lon = -121.9856;
     var today = new Date();
@@ -546,6 +569,7 @@ function fetch2026Weather() {
 
       // Mark which daily indices are forecast (for dashed line rendering)
       weatherCache['2026'] = merged;
+      ssSet('wx2026Merged', merged);
       resolve(merged);
     }).catch(reject);
   });
@@ -554,14 +578,20 @@ function fetch2026Weather() {
 // ═══════════════════════════════════
 // LIVE DATA FROM SERVER (2026 only)
 // ═══════════════════════════════════
+// Short-TTL sessionStorage cache so navigating back to this page is instant.
+// 5 min is short enough that a fresh sprinkler run shows up quickly, long
+// enough that a quick zone-flip + page-back is cached.
 function fetchLiveData(zoneId) {
   return new Promise(function(resolve, reject) {
     var cacheKey = 'z' + zoneId;
     if (liveDataCache[cacheKey]) { resolve(liveDataCache[cacheKey]); return; }
+    var cached = ssGet('liveData_' + cacheKey, 5 * 60);
+    if (cached) { liveDataCache[cacheKey] = cached; resolve(cached); return; }
     fetch('/api/moisture-data?zone_id=' + zoneId + '&days=365')
       .then(function(r) { return r.json(); })
       .then(function(data) {
         liveDataCache[cacheKey] = data;
+        ssSet('liveData_' + cacheKey, data);
         resolve(data);
       }).catch(reject);
   });
@@ -2212,8 +2242,9 @@ document.getElementById('tune-save').addEventListener('click', function() {
     if (resp.ok) {
       status.textContent = '✅ Saved — balance will recalculate at 11 PM';
       status.style.color = '#22c55e';
-      // Clear cache so next refresh picks up new config
+      // Clear cache so next refresh picks up new config (in-memory + sessionStorage)
       liveDataCache = {};
+      try { sessionStorage.removeItem('liveData_z' + currentZoneId); } catch(e) {}
       setTimeout(function() { btn.disabled = false; }, 2000);
     } else {
       status.textContent = '❌ ' + (resp.error || 'Failed');

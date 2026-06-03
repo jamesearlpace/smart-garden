@@ -43,6 +43,9 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', syst
 .sidebar .nav-item.active { background: rgba(34,197,94,.18); color: #4ade80; font-weight: 600 }
 .sidebar .nav-item .icon { font-size: 1.15rem; width: 24px; text-align: center }
 .sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.08); font-size: .72rem; color: rgba(255,255,255,.35) }
+.sidebar-footer .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px }
+.sidebar-footer .status-dot.online { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.5) }
+.sidebar-footer .status-dot.offline { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,.5) }
 
 /* ── Main content offset ── */
 .main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; }
@@ -261,14 +264,14 @@ h2 { margin: 0; font-size: 1.05rem; }
     <a href="/moisture-sim" class="nav-item active"><span class="icon">💧</span> Moisture</a>
     <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
   </div>
-  <div class="sidebar-footer">Soil Moisture Simulation</div>
+  <div class="sidebar-footer">
+    <span class="status-dot" id="sb-dot"></span>
+    <span id="sb-status">Connecting…</span>
+    <div style="margin-top:6px">Auto-refresh 30s</div>
+  </div>
 </nav>
 
 <div class="main">
-
-<div class="nav">
-  <a href="/">← Dashboard</a> · <a href="/forecast">Forecast</a> · <b>Moisture Sim</b>
-</div>
 
 <div class="card">
   <div class="header-row">
@@ -2727,6 +2730,24 @@ function loadSeasonalOutlook(force) {
 document.getElementById('seasonal-refresh').addEventListener('click', function() {
   loadSeasonalOutlook(true);
 });
+
+// Sidebar status poller — keeps the ESP32 status dot live
+function refreshSidebarStatus() {
+  fetch('/api/health').then(function(r) { return r.json(); }).then(function(d) {
+    var online = !!d.esp32_reachable;
+    var dot = document.getElementById('sb-dot');
+    var lbl = document.getElementById('sb-status');
+    if (dot) dot.className = 'status-dot ' + (online ? 'online' : 'offline');
+    if (lbl) lbl.textContent = online ? 'ESP32 Online' : 'ESP32 Offline';
+  }).catch(function() {
+    var dot = document.getElementById('sb-dot');
+    var lbl = document.getElementById('sb-status');
+    if (dot) dot.className = 'status-dot offline';
+    if (lbl) lbl.textContent = 'Connection Error';
+  });
+}
+refreshSidebarStatus();
+setInterval(refreshSidebarStatus, 30000);
 
 // Initial load
 renderModeToggle();

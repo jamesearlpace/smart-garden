@@ -5,16 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Forecast — Smart Garden</title>
 <style>
-:root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0;
-        --text2: #94a3b8; --green: #22c55e; --blue: #3b82f6; --amber: #f59e0b;
-        --red: #ef4444; --purple: #a855f7; }
+:root {
+  /* Light theme — matches dashboard (index.html) */
+  --bg: #f5f7f9; --card: #ffffff; --bg-card: #ffffff;
+  --border: #e8ecf0; --border-light: #f0f2f5;
+  --text: #1a2b3c; --text2: #5f7082; --text3: #9ba8b5;
+  --green: #22c55e; --green-dark: #16a34a; --green-light: #dcfce7; --green-bg: rgba(34,197,94,.08);
+  --blue: #3b82f6; --blue-light: #dbeafe; --blue-bg: rgba(59,130,246,.08);
+  --amber: #f59e0b; --amber-light: #fef3c7; --amber-bg: rgba(245,158,11,.08);
+  --red: #ef4444; --red-light: #fee2e2; --red-bg: rgba(239,68,68,.08);
+  --purple: #a855f7;
+  --bg-sidebar: #1b2e1f; --bg-sidebar-hover: rgba(255,255,255,.08);
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --sidebar-w: 220px;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-       background: var(--bg); color: var(--text); padding: 16px 16px 80px; max-width: 900px; margin: 0 auto; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; }
+
+/* ── Sidebar (cloned from dashboard) ── */
+.sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-w); height: 100vh; background: var(--bg-sidebar);
+  color: #fff; display: flex; flex-direction: column; z-index: 100; }
+.sidebar-brand { padding: 24px 20px 20px; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08) }
+.sidebar-brand .logo { font-size: 1.8rem }
+.sidebar-brand .name { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em }
+.sidebar-brand .loc { font-size: .7rem; color: rgba(255,255,255,.5); margin-top: 1px }
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto }
+.sidebar .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+  cursor: pointer; transition: all .2s; color: rgba(255,255,255,.6); font-size: .88rem; font-weight: 500; margin-bottom: 2px;
+  text-decoration: none; }
+.sidebar .nav-item:hover { background: var(--bg-sidebar-hover); color: rgba(255,255,255,.85) }
+.sidebar .nav-item.active { background: rgba(34,197,94,.18); color: #4ade80; font-weight: 600 }
+.sidebar .nav-item .icon { font-size: 1.15rem; width: 24px; text-align: center }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.08); font-size: .72rem; color: rgba(255,255,255,.35) }
+.sidebar-footer .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px }
+.sidebar-footer .status-dot.online { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.5) }
+.sidebar-footer .status-dot.offline { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,.5) }
+
+/* ── Main content offset ── */
+.main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; max-width: 980px; }
+
 h1 { font-size: 1.4rem; margin-bottom: 4px; }
 .sub { color: var(--text2); font-size: .85rem; margin-bottom: 16px; }
 .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px;
-        border: 1px solid var(--border); }
+        border: 1px solid var(--border); box-shadow: var(--shadow); }
 .card h2 { font-size: 1rem; margin-bottom: 8px; }
 a { color: var(--blue); text-decoration: none; }
 .loading { text-align: center; padding: 40px; color: var(--text2); }
@@ -44,12 +79,12 @@ a { color: var(--blue); text-decoration: none; }
 .days.now { color: var(--red); }
 .days.ok { color: var(--green); }
 .next-date { font-size: .75rem; color: var(--text2); }
-.bar-wrap { height: 6px; background: #334155; border-radius: 3px; margin-top: 4px; width: 120px; }
+.bar-wrap { height: 6px; background: var(--border-light); border-radius: 3px; margin-top: 4px; width: 120px; }
 .bar { height: 100%; border-radius: 3px; }
 
 /* Forecast vs Actual tab styles */
 .accuracy-banner { display: flex; gap: 16px; flex-wrap: wrap; }
-.acc-stat { flex: 1; min-width: 100px; text-align: center; padding: 12px; background: #0f172a; border-radius: 8px; }
+.acc-stat { flex: 1; min-width: 100px; text-align: center; padding: 12px; background: var(--border-light); border-radius: 8px; }
 .acc-stat .aval { font-size: 1.6rem; font-weight: 700; }
 .acc-stat .albl { font-size: .7rem; color: var(--text2); margin-top: 2px; }
 .acc-good { color: var(--green); }
@@ -61,7 +96,7 @@ a { color: var(--blue); text-decoration: none; }
 .day-group { margin-bottom: 16px; }
 .day-header { font-size: .85rem; font-weight: 600; color: var(--text2); margin-bottom: 8px;
               padding-bottom: 4px; border-bottom: 1px solid var(--border); }
-.event-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid #1e293b; align-items: flex-start; }
+.event-row { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-light); align-items: flex-start; }
 .event-row:last-child { border-bottom: none; }
 .zone-col { width: 140px; flex-shrink: 0; }
 .zone-col .name { font-weight: 600; font-size: .9rem; }
@@ -81,14 +116,16 @@ a { color: var(--blue); text-decoration: none; }
             border: none; border-radius: 6px; cursor: pointer; font-size: .85rem; }
 
 /* Mobile bottom nav */
-.mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--card);
-              border-top: 1px solid var(--border); z-index: 100; padding: 4px 0; }
+.mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #fff;
+              border-top: 1px solid var(--border); box-shadow: 0 -2px 8px rgba(0,0,0,.05); z-index: 200; padding: 4px 0; }
 .mobile-nav-inner { display: flex; justify-content: space-around; }
 .mob-nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 8px;
                 font-size: .65rem; color: var(--text2); text-decoration: none; cursor: pointer; }
-.mob-nav-item.active { color: var(--green); }
+.mob-nav-item.active { color: var(--green-dark); }
 .mob-nav-item .mob-icon { font-size: 1.2rem; }
-@media (max-width: 800px) {
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 16px 16px 80px; }
   .mobile-nav { display: block; }
   body { padding-bottom: 80px; }
   .event-row { flex-direction: column; gap: 6px; }
@@ -99,6 +136,33 @@ a { color: var(--blue); text-decoration: none; }
 </style>
 </head>
 <body>
+
+<!-- ═══ Sidebar ═══ -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">🌱</span>
+    <div>
+      <div class="name">Smart Garden</div>
+      <div class="loc">Duvall, WA</div>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
+    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
+    <a href="/forecast" class="nav-item active"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Moisture</a>
+    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
+  </div>
+  <div class="sidebar-footer">
+    <span class="status-dot" id="sb-dot"></span>
+    <span id="sb-status">Connecting…</span>
+    <div style="margin-top:6px">Auto-refresh 30s</div>
+  </div>
+</nav>
+
+<div class="main">
 
 <h1>🌧️ Forecast</h1>
 <div class="sub">Watering predictions and accuracy tracking</div>
@@ -137,18 +201,39 @@ a { color: var(--blue); text-decoration: none; }
   <div id="comparison-content"><div class="loading">Loading...</div></div>
 </div>
 
+</div><!-- /.main -->
+
 <!-- Mobile bottom nav -->
 <div class="mobile-nav">
   <div class="mobile-nav-inner">
     <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
-    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','zones')"><span class="mob-icon">🌿</span>Zones</a>
-    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','history')"><span class="mob-icon">📊</span>History</a>
-    <a href="/" class="mob-nav-item" onclick="localStorage.setItem('sg-panel','settings')"><span class="mob-icon">⚙️</span>Settings</a>
+    <a href="/#zones" class="mob-nav-item"><span class="mob-icon">🌿</span>Zones</a>
+    <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
+    <a href="/#settings" class="mob-nav-item"><span class="mob-icon">⚙️</span>Settings</a>
     <a href="/forecast" class="mob-nav-item active"><span class="mob-icon">🌧️</span>Forecast</a>
+    <a href="/moisture-sim" class="mob-nav-item"><span class="mob-icon">💧</span>Moisture</a>
   </div>
 </div>
 
 <script>
+/* ═══ Sidebar status poller — keeps the ESP32 status dot live ═══ */
+function refreshSidebarStatus() {
+  fetch('/api/health').then(function(r) { return r.json(); }).then(function(d) {
+    var online = !!d.esp32_reachable;
+    var dot = document.getElementById('sb-dot');
+    var lbl = document.getElementById('sb-status');
+    if (dot) dot.className = 'status-dot ' + (online ? 'online' : 'offline');
+    if (lbl) lbl.textContent = online ? 'ESP32 Online' : 'ESP32 Offline';
+  }).catch(function() {
+    var dot = document.getElementById('sb-dot');
+    var lbl = document.getElementById('sb-status');
+    if (dot) dot.className = 'status-dot offline';
+    if (lbl) lbl.textContent = 'Connection Error';
+  });
+}
+refreshSidebarStatus();
+setInterval(refreshSidebarStatus, 30000);
+
 /* ═══ Tab switching ═══ */
 function switchTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));

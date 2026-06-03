@@ -197,6 +197,13 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 ## Session Log: 2026-06-02 (Auto-mode shipped + Water cost backtest + Grass starvation audit + UX polish)
 
+### Banner forecast walker: mm-as-inches unit bug — FIXED (commit `09d7b01`, issue [#16](https://github.com/jamesearlpace/smart-garden-server/issues/16))
+
+Zone 5 at 76% / MAD 50% — banner predicted next watering in ~4 hours; chart showed moisture staying above 70% all 7 days. The disagreement exposed a unit bug.
+Root cause: `weather.py` requests Open-Meteo with `precipitation_unit=mm` (and ET0 default is also mm). Three JS forecast walkers in `moisture_sim.html` (single-zone banner above-MAD branch, `predictZoneSchedule` for All Zones, inline refresh() copy) divided raw `et0` and `rain` by `rootDepthIn`. A 5 mm/day ET became `etPct = 5 * 0.9 / 6 * 100 = 75%/day` instead of ~3%/day — moisture appeared to crash past MAD in one day, banner said "tomorrow".
+Fix: divide ET and rain by 25.4 (mm → in) before dividing by rootDepthIn. Applied to all three walkers.
+Lesson: This is the THIRD bug in the banner today (issue [#15](https://github.com/jamesearlpace/smart-garden-server/issues/15) past-time, parse-error rendering blockout, now this). Three duplicated copies of the same forecast walker drifted. Should consolidate.
+
 ### Moisture-sim banner past-time bug — FIXED (commit `1a37f65`, issue [#15](https://github.com/jamesearlpace/smart-garden-server/issues/15))
 
 At 23:25 PT, Front Yard A banner showed "Tuesday Jun 2 ~4 AM" — that 4 AM is 19h in the past.

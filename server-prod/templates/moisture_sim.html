@@ -2175,12 +2175,11 @@ function refreshAllZones() {
       if (!pred) {
         statusHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
           + '<td colspan="7" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
-        return;-1)
+        return;
+      }
       var firstFire = -1;
       for (var ni = 0; ni < pred.nights.length; ni++) {
-        if (pred.nights[ni].willWater) { firstFire = ni; break; }h; ni++) {
         if (pred.nights[ni].willWater) { firstFire = ni; break; }
-        if (pred.nights[ni].willWater) break;
       }
       pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
 

@@ -195,7 +195,19 @@ This rule exists because I broke it 4 times in one session on 2026-04-21. See `/
 
 ---
 
-## Session Log: 2026-06-02 (Auto-mode shipped + Water cost backtest + Grass starvation audit)
+## Session Log: 2026-06-02 (Auto-mode shipped + Water cost backtest + Grass starvation audit + UX polish)
+
+### Moisture-sim banner past-time bug — FIXED (commit `1a37f65`, issue [#15](https://github.com/jamesearlpace/smart-garden-server/issues/15))
+
+At 23:25 PT, Front Yard A banner showed "Tuesday Jun 2 ~4 AM" — that 4 AM is 19h in the past.
+Root cause: the "above MAD → forecast crossing" branch in `updateNextWateringBanner` and the inline copy in `refresh()` both did `setDate(today + hitDay); setHours(4)` without rolling forward when the target already passed (when `hitDay = 0` and current time > 4 AM, target = today 4 AM = past).
+The "below MAD now" branch was correct (it had `if (getHours >= 7) +=1 day`); the other two branches drifted from it.
+Fix: after computing target, if `target < now`, push forward one day. Applied to both code paths.
+
+### Moisture-sim UX restyle — DEPLOYED (commits `5da10d9`, `6665d8d`, `485e668`)
+- Light theme + sidebar to match dashboard (commit `5da10d9`)
+- sessionStorage cache for Open-Meteo + `/api/moisture-data` (commit `6665d8d`) — first load same speed, reloads near-instant
+- New "🌿 All Zones — Schedule View" entry in zone dropdown (commit `485e668`): zone status table (current %, MAD, mode pill, next watering, last run, gal/7d) + 7-night schedule grid (cells = runtime per night, color-coded by urgency, footer counts zones firing per night, click zone name to drill into single-zone chart)
 
 ### Per-zone Auto/Manual toggle — DEPLOYED (commit `965f994`)
 Each zone now has an `auto_mode` field in config.yaml. When `false`, the engine's `evaluate_zone()` short-circuits and the dashboard shows a "Manual mode — engine will not water this zone" banner. UI: toggle button next to each zone card on index.html + moisture_sim.html. Server-confirmed state: zones 0-6 (sprinklers) = `auto_mode: true`, zones 7-8 (Garden/Grapes drip) = `auto_mode: false`, zone 9 (Spare) = `false`.

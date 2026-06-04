@@ -1476,6 +1476,32 @@ Audited every page beyond the Schedule cockpit. Site structure: `/` index.html (
 
 **Net whole-site audit: G7-G23, 17 fixes, issues #27-#33 closed.**
 
+## 2026-06-04 — Soil sensors physically installed + WiFi-toggle test mode (firmware reflash)
+
+**Context:** James physically wired up capacitive soil moisture sensors for the first time. Discovered the readings looked frozen ("56% even after pulling the probe").
+
+**Root cause found:** firmware samples soil sensors only **once per hour** (`SENSOR_READ_INTERVAL_MS = 3600000` in `src/config.h`) to save battery — so `/api/status` soil values are stale up to ~60 min. Not a bug, just the power-saving cadence. Firmware reads fresh at boot (that's why values differed per reboot).
+
+**⚠️ Critical safety note (added to memory):** the ESP32 must NEVER be remote-rebooted — `ESP.restart()` browns out the chip on wall power and **bricked it on 2026-04-21**. Server `/api/reboot` is deliberately 503-disabled. To force a fresh sample without reboot: wait for the hourly tick, or hand power-cycle. Don't offer remote reboot.
+
+**Feature built + shipped (commit 7f62094):** WiFi-toggleable "fast sample" test mode so live sensor calibration is possible without draining the battery:
+- Firmware: `POST /api/fastsample?token=...&seconds=N&interval=S` — fast sample for a bounded window, then **auto-revert to hourly** (max 30 min/session, can't be left on). `/api/status` reports `fastSampleActive`/`fastSampleRemainSec`/`sampleIntervalSec`.
+- Server: `set_fast_sample()` + `POST /api/sensor-test` (toggle) + `GET /api/sensor-live` (live per-channel raw/pct).
+- Dashboard: "🧪 Sensor Test Mode" card on Home — Start/Stop, live readings every 4s, countdown, "(no sensor?)" tag for raw < 400. Usable from phone.
+- **Flashed over USB** (esp32 env, COM5) — built+uploaded clean, board booted into it. NOTE: flash USB-only, never OTA (same brownout brick risk).
+
+**Sensor wiring map (saved to memory):**
+- GPIO 32 (soil_0) = 1st sensor, YELLOW wire — ✅ live (~2200)
+- GPIO 33 (soil_1) = 2nd sensor, GREEN wire — ✅ live (~2070)
+- GPIO 34 (soil_2) = 3rd sensor — reads hard 0; likely faulty sensor or valve-box wiring fault. Parked, may need replacement. Left disabled.
+- GPIO 35 (soil_3) = no sensor. Ignore.
+- GPIO 36 = battery voltage (never use for soil).
+
+**Config:** enabled `sensors.soil_0: true` + `soil_1: true` in config.yaml (the two working sensors now log + show on the dashboard). soil_2/soil_3 stay false. No zone references a soil sensor, so this only adds logging/display — does not change watering decisions.
+
+**Firmware/PlatformIO facts:** repo `c:\MyCode\smart-garden`, env `esp32` is the production build (`board=esp32dev`), has all libs, builds clean. `power-test`/`ota` envs fail to build (missing MCP23017 lib in their own lib_deps — pre-existing, unrelated). pio at `$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe`. Upload: `pio run -e esp32 --target upload --upload-port COM5`.
+
+
 
 
 

@@ -1,6 +1,6 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done.
+**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done. **Post-Issue-#1 audit series complete (2026-06-04): 15 of 16 open issues closed across data-layer fixes, security hardening, XSS sweep, and race-condition fix; only #16 (cam-upload) remains, explicitly deferred.**
 **Last Updated:** 2026-06-04
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -538,6 +538,49 @@ Direct response to the architectural finding that bugs #4 and #5 were silently-e
 - Deployed: scp + restart 2026-06-04 09:05:56 PDT.
 - **First run already surfaced a real bug:** `sensor_log` is STALE — last write 2026-05-26T23:13:54 (200+ hours ago) despite cycles running every 5 min and `weather_log`/`cycle_summary`/`system_health` all current. Sensor logging path has been broken for 8 days. Confirmed `billing_cycle` is EMPTY (known dead schema, flagged as expected).
 - Rollback: single-file revert — `dashboard.py.bak.audit-20260604-090308` lives on the server. No schema changes, no behavior changes to write paths.
+
+### Post-Issue-#1 audit series — Issues #6 through #15 (all closed same day)
+
+After the morning's data-layer fixes (#3/#4/#5) and the `/audit` page deploy, did a full sweep of remaining issues filed against the repo. Closed every one except `#16` (cam-upload, explicitly deferred). Batched into themed commits so each fix was independently reviewable + rollback-able. Order shipped:
+
+**Batch A — Audit-page polish + zone numbering (`70d0ef3`, `299bb2f`, `edc214c`)**
+- **#6 (zone numbering 0- vs 1-indexed):** Logs and the audit page showed zone IDs zero-indexed while the dashboard, map, and config all label zones starting at 1. Server-side log/format-only fix — added `+1` at every log emission site in [irrigation.py](../smart-garden-server-live/irrigation.py) and [database.py](../smart-garden-server-live/database.py) (`%d` → `zone_id + 1` in the format args). Internal DB IDs stay zero-indexed — only the human-facing strings move. Zero schema/behavior change.
+- **#9 (stale sensor_fault rows):** April-dated `sensor_fault` rows for non-existent sensors stuck visible on the dashboard. Root cause: the fault-emitter loop iterated every sensor in config without first checking whether the sensor was actually installed; once soil sensors were removed from config, the alert checker still fired for them. Fix: guard `null/missing sensor reading → skip fault generation`, plus a one-time `UPDATE sensor_fault SET resolved_ts=now() WHERE sensor NOT IN (current config)`.
+- **#10 (audit page false-STALE on skip_event):** `/api/audit` flagged `skip_event` as STALE because the cadence threshold was 1 hour, but skips only happen on cycles (every 5 min) and only when at least one zone gets skipped. Reset the per-table threshold to 6 hours so a calm period doesn't trip the alarm. Same fix pattern applied to `system_health`. Tweak in `AUDIT_TABLE_SPECS` only.
+- **#11 (orphan 0-byte DB files):** Two leftover empty files on the server (`garden.db`, `smart-garden.db.tmp`) from old experiments — confused `du` and could confuse future maintainers. Confirmed neither was open by `lsof`, `mv`'d both into `~/smart-garden-server/_backups/` for safety, didn't delete outright.
+- **#12 (allow-list disk-read per request):** `_load_allowed_emails()` was hitting disk on every authenticated request (decorator runs early in the request lifecycle, file is 12 lines, but still — wasteful). Cached the list in module-level `_EMAIL_ALLOW_CACHE` with a 60s TTL. Bypasses cache on file mtime change. Measured: ~3-5ms saved per authenticated hit.
+
+**Batch B — Security hardening (commit `4cc4273`)** — `closes #7 + #15`
+- **#7 (SECURITY-HIGH: weak hardcoded SESSION_SECRET):** Flask session secret was a 16-character ASCII string committed in `server.py`. Rotated to a 64-byte URL-safe token loaded from `~/smart-garden-server/.env` (`SESSION_SECRET=...`). Fallback raises on missing env (no silent default). Logged-in sessions on the live site were invalidated by the change — re-login required once, no other impact.
+- **#15 (SECURITY-MED: no CSRF protection on POST):** Flask-WTF wholesale was overkill for a 5-route admin app, so went with the lighter pattern: cookie `SameSite=Strict` + `Secure` + `HttpOnly`, which blocks cross-site POSTs at the browser layer. Same-site form posts (the only legitimate POST source) still work. App is behind Cloudflare tunnel TLS so `Secure` is satisfied. Verified by re-logging in + watching the cookie attributes in DevTools.
+
+**Batch D-1 — Error visibility (commit `a453068`)** — `closes #14`
+- **#14 (silent `except Exception:` blocks):** 18 bare-except blocks across `irrigation.py`, `dashboard.py`, `database.py`, `server.py`, `billing.py` swallowed exceptions to a `pass`. Replaced each with `log.exception("context: ...")` so the traceback hits journald instead of vanishing. Kept the broad `except` (changing to typed exceptions risked regressions in the cron jobs that have to never die) — just made them visible. Validated by `grep -c "except Exception:" *.py` before/after.
+
+**Batch D-2 — XSS sweep (commit `6fac583`)** — `closes #13`
+- **#13 (XSS via `innerHTML +=` of untrusted data):** Zone names are user-editable from the Settings tab and they were rendered raw via string concatenation into `innerHTML` in 17 different sinks (dashboard tiles, map popups, history tables, forecast rows, etc.). Added two helpers to [index.html](../smart-garden/server-prod/templates/index.html) — `esc(s)` for text-context and `escAttr(s)` for attribute-context — and wrapped every interpolation of `zone.name`/`zone.label`. One attribute-context site (a `data-zone-name` on a button) used `escAttr` instead. Visual diff before/after on the dashboard: zero change for normal names; renders e.g. `<img src=x onerror=alert(1)>` as literal text now.
+
+**Batch D-3 — Race condition fix (commit `9fcae44`)** — `closes #8`
+- **#8 (same-zone double-tap creates duplicate watering_event rows):** The follow-up to #3, but in the *concurrent* case rather than the *sequential* case. #3's idempotent guard (`if zone_id in self._active: return True`) was a check-and-act with no lock — two threads firing within the same ~200ms could both see the zone free, both call `open_valve`, both insert a `watering_event` row.
+  - Added `self._start_lock = threading.Lock()` in `IrrigationEngine.__init__` (mirrors the existing `_status_lock` pattern at L149).
+  - Restructured `start_zone_watering()` as **reserve-then-do-IO**: under the lock, check `_active` and immediately insert a sentinel `{event_id: -1, weather_scale_pct: 100, ...}`; release the lock; do the slow stuff (weather fetch + ESP32 `open_valve` + `db.start_watering`); re-acquire briefly to swap the real `event_id` in. Concurrent callers see the zone busy at step 1 and short-circuit. The lock is held only for the dict mutation — never for I/O — so other zones' status calls don't block on a slow valve open.
+  - Every early-return path (weather scale 0% skip, `open_valve` failure) releases the reservation. Wrapping `try/except` releases on any unexpected exception and re-raises, so the zone never gets stuck "busy" forever after a crash.
+  - **`weather_scale_pct=100` sentinel (not 0)** — chosen deliberately. The scheduler's `_evaluate_active_zone` reads `weather_scale_pct` and computes `adjusted_runtime_min = max * scale / 100`. If we'd seeded the sentinel with `0`, a 5-min scheduler tick landing in the reservation window would compute `runtime=0`, see `elapsed >= 0`, and call `_decision("close", ...)` on a zone that just got reserved. `100` is inert.
+  - **Defensive `event_id == -1` short-circuit added to `_evaluate_active_zone`** as belt-and-suspenders. Returns a "wait" decision if the scheduler races in mid-reservation.
+  - Frontend: per-zone 800ms debounce on the map-tab `ctrlMapValve` / `ctrlMapRun` handlers (the only buttons that lacked a `CTRL_BUSY` guard). `ctrlToggleValve` on the Controls tab already had global `CTRL_BUSY`.
+  - **Row 165 cleanup not done** — scanned the live DB for any same-zone same-start-second pairs ever (`SELECT a.id, b.id FROM watering_event a JOIN watering_event b ON a.zone_id=b.zone_id AND a.start_ts=b.start_ts AND a.id<b.id`) and found zero. Row 165 itself isn't there either. Either the originally reported duplicate was already cleaned up by the #3 fix's `UPDATE watering_event` or the issue body misread the data. Nothing to delete.
+  - **Stress test deferred:** would need to mock `open_valve` to avoid hammering the ESP32. Verified by visual code review + post-deploy manual double-tap test. Tracked as a follow-up.
+
+**Audit series summary:**
+- Issues filed today: #1–#15 (+ pre-existing #16, deferred)
+- Issues closed today: **#1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15** (15 of 16)
+- Issues still open: **#16** only (`cam-upload` accepts unauthenticated POSTs — explicitly deferred per "cam should wait")
+- Commits this session: `13796e0` (#3) → `28b5233` (#4) → `77f7dd6` (#5) → `9898bae` (audit page) → `70d0ef3` (audit threshold) → `299bb2f` (zone numbering #6) → `edc214c` (#9/#10/#11/#12) → `4cc4273` (security #7+#15) → `a453068` (#14) → `6fac583` (#13) → `9fcae44` (#8)
+- Architectural lessons reinforced:
+  - **Silently-empty tables are the worst kind of bug** (#4, #5 went undetected for months). The `/audit` endpoint shipped this session is the durable counter to that — every table with an expected write cadence gets surfaced as EMPTY or STALE on a self-serve page.
+  - **Check-and-act without a lock is always a race**, even on a "small" 200ms window (#8). The reserve-first sentinel pattern is the right shape for any "claim resource, then do slow I/O" path.
+  - **Sentinel values for partially-initialized state need to be inert against downstream readers**, not just distinguishable from real values. `event_id=-1` was correctly chosen, but `weather_scale_pct=0` would have introduced a new race; `100` is safe.
+  - **`scp foo bar host:~/dest/`** flattens both files into `dest/` — already burned by this in the heritage-vault memory; held this session by always scping templates to `templates/` explicitly.
 
 ---
 

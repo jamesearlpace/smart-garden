@@ -3351,7 +3351,12 @@ function refresh() {
       if (!_panelRestored) {
         _panelRestored = true;
         try {
-          var saved = localStorage.getItem('sg-panel');
+          // A URL hash (e.g. /#history from another page's nav) takes priority
+          // over the last-saved panel so cross-page deep links open the right tab.
+          var hashPanel = (location.hash || '').replace('#', '');
+          var saved = (hashPanel && document.getElementById('p-' + hashPanel))
+            ? hashPanel
+            : localStorage.getItem('sg-panel');
           if (saved && saved !== 'home' && document.getElementById('p-' + saved)) {
             showPanel(saved);
           }

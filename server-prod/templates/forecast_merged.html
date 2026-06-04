@@ -267,9 +267,9 @@ function renderForecast(d) {
   const w = d.weather || {};
   html += '<div class="card"><h2>Current Conditions</h2><div class="weather">';
   html += fstat(w.temp_f ? w.temp_f.toFixed(0) + '°F' : '?', 'Temperature');
-  html += fstat(w.humidity_pct ? w.humidity_pct + '%' : '?', 'Humidity');
+  html += fstat(w.humidity != null ? Math.round(w.humidity) + '%' : '?', 'Humidity');
   html += fstat(d.et0_today ? d.et0_today.toFixed(1) + 'mm' : '?', 'ET₀ Today');
-  html += fstat(w.rain_forecast_mm ? w.rain_forecast_mm.toFixed(1) + 'mm' : '0mm', 'Rain Forecast');
+  html += fstat(w.precip_mm != null ? w.precip_mm.toFixed(1) + 'mm' : '0mm', 'Rain Forecast');
   html += fstat(w.wind_mph ? w.wind_mph.toFixed(0) + 'mph' : '?', 'Wind');
   html += '</div></div>';
 
@@ -280,7 +280,11 @@ function renderForecast(d) {
     d.zones.forEach(z => {
       const days = z.days_until_water;
       let daysText, daysClass;
-      if (days === null || days === undefined) { daysText = '?'; daysClass = 'ok'; }
+      // Manual-mode zones are never auto-watered by the engine — don't show a
+      // predicted day (the balance can sit below MAD indefinitely on purpose).
+      const isManual = z.auto_mode === false;
+      if (isManual) { daysText = 'Manual'; daysClass = 'ok'; }
+      else if (days === null || days === undefined) { daysText = '?'; daysClass = 'ok'; }
       else if (days <= 0) { daysText = 'Today'; daysClass = 'now'; }
       else if (days <= 2) { daysText = days.toFixed(0) + 'd'; daysClass = 'soon'; }
       else { daysText = days.toFixed(0) + 'd'; daysClass = 'ok'; }
@@ -293,7 +297,7 @@ function renderForecast(d) {
       html += '<div class="bar-wrap"><div class="bar" style="width:' + pct + '%;background:' + barColor + '"></div></div>';
       html += '</div><div class="zone-forecast">';
       html += '<div class="days ' + daysClass + '">' + daysText + '</div>';
-      html += z.next_water_date ? '<div class="next-date">' + z.next_water_date + '</div>' : '';
+      html += (!isManual && z.next_water_date) ? '<div class="next-date">' + z.next_water_date + '</div>' : '';
       html += '</div></div>';
     });
   }

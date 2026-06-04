@@ -403,6 +403,7 @@ def create_app(config, engine, weather, billing):
                 "id": zid,
                 "name": zone["name"],
                 "type": zone.get("type", "sprinkler"),
+                "auto_mode": zone.get("auto_mode", True),
                 "balance_mm": round(balance_mm, 1),
                 "balance_pct": round(balance_pct, 0),
                 "taw_mm": round(taw_mm, 1),

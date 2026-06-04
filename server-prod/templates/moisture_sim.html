@@ -155,6 +155,7 @@ h2 { margin: 0; font-size: 1.05rem; }
 .az-status-good { color: var(--green-dark); font-weight: 600; }
 .az-status-soon { color: var(--amber); font-weight: 600; }
 .az-status-now { color: var(--red); font-weight: 700; }
+.az-status-manual { color: var(--text3); font-weight: 600; }
 /* Keep the zone-name column pinned while the wide table scrolls horizontally
    (esp. on mobile, where Status/Next/Run sit off-screen right and you'd
    otherwise lose track of which zone a row belongs to). */
@@ -495,7 +496,7 @@ h2 { margin: 0; font-size: 1.05rem; }
           <label>Peak</label><input type="number" id="tune-kc-2" min="0.1" max="1.5" step="0.05">
           <label>Fall</label><input type="number" id="tune-kc-3" min="0.1" max="1.5" step="0.05">
         </div>
-        <div class="tune-hint" style="margin-top:4px">Turf=0.90, Garden=0.8-1.1, Grapes=0.4-0.7</div>
+        <div class="tune-hint" style="margin-top:4px">Turf=0.85-0.95, Garden=0.5-0.7, Grapes=0.7-1.15</div>
       </div>
 
       <div class="tune-actions">
@@ -2308,6 +2309,8 @@ function refreshAllZones() {
 
       var statusTxt, statusCls;
       if (vacationOn && pred.isAuto) { statusTxt = '🏖️ Paused'; statusCls = 'az-status-good'; }
+      else if (!z.installed) { statusTxt = 'Not installed'; statusCls = 'az-status-manual'; }
+      else if (!pred.isAuto) { statusTxt = pred.isDrip ? 'Manual (drip)' : 'Manual'; statusCls = 'az-status-manual'; }
       else if (pred.curM <= pred.madPct) { statusTxt = '⚠ Below MAD'; statusCls = 'az-status-now'; zonesNeedingNow++; }
       else if (firstFire >= 0 && firstFire <= 2) { statusTxt = 'Soon (' + (firstFire + 1) + 'd)'; statusCls = 'az-status-soon'; zonesSoon++; }
       else { statusTxt = 'OK'; statusCls = 'az-status-good'; }

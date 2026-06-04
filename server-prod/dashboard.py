@@ -1359,7 +1359,7 @@ def create_app(config, engine, weather, billing):
     # ── DB-table audit (catch silently-empty / silently-stale tables) ──
     # (name, ts_col, ts_is_date, max_age_hours_or_None, label)
     AUDIT_TABLE_SPECS = [
-        ("sensor_log",        "ts",          False, 1,    "Soil/moisture sensor readings"),
+        ("sensor_log",        "ts",          False, None, "DISABLED — all soil_* gates off in config.yaml"),
         ("weather_log",       "ts",          False, 1,    "Weather observations"),
         ("watering_event",    "start_ts",    False, 168,  "Watering events (sparse — days between OK)"),
         ("skip_event",        "ts",          False, 1,    "Per-zone skip decisions"),

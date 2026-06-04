@@ -2174,6 +2174,8 @@ updateClock(); setInterval(updateClock, 1000);
 
 function el(id) { return document.getElementById(id); }
 function fmt(n, d) { if (d === undefined) d = 1; return n == null ? '—' : Number(n).toFixed(d); }
+// Format a watering duration: seconds for sub-minute runs (manual tests, drip pulses), else minutes.
+function fmtDur(sec) { if (!sec) return null; return sec < 60 ? sec + ' sec' : fmt(sec / 60, 1) + ' min'; }
 function fmtD(n) { return n == null ? '$0.00' : '$' + Number(n).toFixed(2); }
 function pct(n) { return Math.min(Math.max(n || 0, 0), 100); }
 // esc()/escAttr(): user-editable zone names flow into innerHTML and value="..." sinks — escape at sink, not at source (textContent uses elsewhere need raw text).
@@ -3719,7 +3721,7 @@ function renderDecisionLog(decisions) {
       var isW = ev.type === 'water';
       var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
-      var dur = isW && ev.duration_sec ? fmt(ev.duration_sec / 60, 1) + ' min' : '—';
+      var dur = isW ? (fmtDur(ev.duration_sec) || '—') : '—';
       var gal = ev.gallons != null ? fmt(ev.gallons, 1) : '—';
       var cond = '';
       if (ev.conditions) {
@@ -5101,7 +5103,7 @@ function renderTelemetry(t) {
   } else {
     waters.forEach(function(w) {
       var time = w.start_ts ? new Date(w.start_ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
-      var dur = w.duration_sec ? fmt(w.duration_sec / 60, 1) + ' min' : 'In progress';
+      var dur = fmtDur(w.duration_sec) || 'In progress';
       var soilDelta = (w.soil_before != null && w.soil_after != null) ? ('+' + fmt(w.soil_after - w.soil_before, 1) + '%') : '—';
       var deltaColor = (w.soil_after > w.soil_before) ? 'color:var(--green-dark)' : '';
       wbHtml += '<tr>' +

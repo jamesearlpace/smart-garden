@@ -1072,11 +1072,16 @@ def create_app(config, engine, weather, billing):
 
         recent = []
         for w in (waterings or []):
+            dur_sec = w.get("duration_sec")
+            if dur_sec:
+                # Sub-minute runs (manual tests, drip pulses) read as "0.0 min" — show seconds.
+                detail = f"{dur_sec} sec" if dur_sec < 60 else f"{round(dur_sec / 60, 1)} min"
+            else:
+                detail = "in progress"
             recent.append({
                 "type": "water", "ts": w["start_ts"],
                 "zone_id": w["zone_id"],
-                "detail": f"{round(w['duration_sec'] / 60, 1)} min"
-                          if w.get("duration_sec") else "in progress",
+                "detail": detail,
                 "gallons": round(w["est_gallons"], 1) if w.get("est_gallons") else None,
             })
         for s in (skips or []):

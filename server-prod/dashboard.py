@@ -522,7 +522,11 @@ def create_app(config, engine, weather, billing):
         zone_idx = None
         for i, z in enumerate(config["zones"]):
             if z["id"] == zone_id:
-                zone_cfg = z
+                # Work on a COPY, not the live dict. config["zones"][i] is the
+                # same object the engine reads, so mutating it here would push
+                # half-validated values into the running engine even when we
+                # later reject the request with 400. Only commit on success.
+                zone_cfg = dict(z)
                 zone_idx = i
                 break
         if zone_cfg is None:

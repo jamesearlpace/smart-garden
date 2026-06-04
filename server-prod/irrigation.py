@@ -149,6 +149,10 @@ class IrrigationEngine:
         self._status_lock = threading.Lock()
         self._badge_online = False      # debounced "is the chip reachable"
         self._consecutive_successes = 0
+        # Serialises the check-and-reserve in start_zone_watering against
+        # concurrent double-taps (#8). Held only for the dict mutation, not
+        # for the slow ESP32/DB I/O that follows.
+        self._start_lock = threading.Lock()
 
         # Recover from any watering_event rows left open by a prior crash
         # or restart — they'd otherwise sit forever with end_ts=NULL,
@@ -554,6 +558,11 @@ class IrrigationEngine:
         """Check if an actively watering zone should stop."""
         zone = self.zones[zone_id]
         active = self._active[zone_id]
+        # Reservation slot (#8): event_id=-1 means start_zone_watering reserved
+        # the slot but hasn't finished open_valve + db.start_watering yet.
+        # Don't try to evaluate runtime against a half-built record.
+        if active.get("event_id", 0) == -1:
+            return self._decision("wait", zone_id, "Zone start in progress", conditions)
         elapsed = time.time() - active["start_time"]
 
         # Apply weather-adjusted runtime
@@ -607,45 +616,72 @@ class IrrigationEngine:
         # Idempotent guard: a duplicate start (e.g. user double-taps the manual
         # button) would otherwise create a second watering_event row and
         # overwrite _active[zone_id], orphaning the original event.
-        # See https://github.com/jamesearlpace/smart-garden-server/issues/3
-        if zone_id in self._active:
-            log.info("%s: already watering (event %d) - ignoring duplicate start",
-                     self._zone_label(zone_id), self._active[zone_id]["event_id"])
-            return True
-
-        ws = self.calculate_weather_scale(allow_weather_fetch=allow_weather_fetch)
-        scale_pct = ws["scale_pct"]
-
-        # If weather scale is 0%, skip instead of opening the valve
-        # BUT: manual overrides always run regardless of weather
-        is_manual = reason.startswith("manual")
-        if scale_pct == 0 and not is_manual:
-            log.info("%s: weather scale 0%% - skipping (rain: %.1fmm)",
-                     self._zone_label(zone_id), ws["rain_last_24h_mm"])
-            return False
-        if scale_pct == 0 and is_manual:
-            log.info("%s: weather scale 0%% but manual override - running anyway",
-                     self._zone_label(zone_id))
-            scale_pct = 100  # full runtime for manual
-
-        zone = self.zones[zone_id]
-        adjusted_min = zone["max_runtime_min"] * scale_pct / 100.0
-        log.info("%s: weather scale %d%% -> runtime %.0fmin (base %dmin) "
-                 "[temp_d=%.1f hum_d=%.1f rain_d=%.1f]",
-                 self._zone_label(zone_id), scale_pct, adjusted_min, zone["max_runtime_min"],
-                 ws["temp_delta"], ws["humidity_delta"], ws["rain_delta"])
-
-        if self.open_valve(zone_id, timeout=command_timeout, retry=retry):
-            event_id = db.start_watering(zone_id, soil_before, et_demand, reason)
+        # See issues #3 (in-process dup) and #8 (concurrent-thread dup).
+        # Reserve the _active slot atomically under _start_lock BEFORE doing
+        # any slow I/O (weather fetch, ESP32 round-trip, DB insert) so a
+        # second thread sees the zone busy immediately and short-circuits.
+        with self._start_lock:
+            if zone_id in self._active:
+                log.info("%s: already watering (event %d) - ignoring duplicate start",
+                         self._zone_label(zone_id), self._active[zone_id]["event_id"])
+                return True
+            # Sentinel reservation: event_id=-1 marks "setup in progress";
+            # weather_scale_pct=100 keeps _evaluate_active_zone inert if it
+            # races in during this window. Real values written below.
             self._active[zone_id] = {
-                "event_id": event_id,
+                "event_id": -1,
                 "start_time": time.time(),
                 "soil_before": soil_before,
-                "weather_scale_pct": scale_pct,
+                "weather_scale_pct": 100,
             }
-            log.info("%s watering started (event %d)", self._zone_label(zone_id), event_id)
-            return True
-        return False
+
+        try:
+            ws = self.calculate_weather_scale(allow_weather_fetch=allow_weather_fetch)
+            scale_pct = ws["scale_pct"]
+
+            # If weather scale is 0%, skip instead of opening the valve
+            # BUT: manual overrides always run regardless of weather
+            is_manual = reason.startswith("manual")
+            if scale_pct == 0 and not is_manual:
+                log.info("%s: weather scale 0%% - skipping (rain: %.1fmm)",
+                         self._zone_label(zone_id), ws["rain_last_24h_mm"])
+                with self._start_lock:
+                    self._active.pop(zone_id, None)
+                return False
+            if scale_pct == 0 and is_manual:
+                log.info("%s: weather scale 0%% but manual override - running anyway",
+                         self._zone_label(zone_id))
+                scale_pct = 100  # full runtime for manual
+
+            zone = self.zones[zone_id]
+            adjusted_min = zone["max_runtime_min"] * scale_pct / 100.0
+            log.info("%s: weather scale %d%% -> runtime %.0fmin (base %dmin) "
+                     "[temp_d=%.1f hum_d=%.1f rain_d=%.1f]",
+                     self._zone_label(zone_id), scale_pct, adjusted_min, zone["max_runtime_min"],
+                     ws["temp_delta"], ws["humidity_delta"], ws["rain_delta"])
+
+            if self.open_valve(zone_id, timeout=command_timeout, retry=retry):
+                event_id = db.start_watering(zone_id, soil_before, et_demand, reason)
+                with self._start_lock:
+                    # Reservation may have been cleared by stop_zone_watering
+                    # during the open_valve round-trip; only update if still ours.
+                    if zone_id in self._active and self._active[zone_id]["event_id"] == -1:
+                        self._active[zone_id].update({
+                            "event_id": event_id,
+                            "weather_scale_pct": scale_pct,
+                        })
+                log.info("%s watering started (event %d)", self._zone_label(zone_id), event_id)
+                return True
+            # open_valve failed - release the reservation
+            with self._start_lock:
+                self._active.pop(zone_id, None)
+            return False
+        except Exception:
+            # Anything blowing up between reservation and completion must
+            # release the slot, otherwise the zone is stuck "busy" forever.
+            with self._start_lock:
+                self._active.pop(zone_id, None)
+            raise
 
     def stop_zone_watering(self, zone_id: int, soil_after: float):
         """Close valve and finalize the watering event."""

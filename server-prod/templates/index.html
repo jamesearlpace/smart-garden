@@ -3851,10 +3851,19 @@ function mapZoneItem(z) {
     '<span class="mz-badge '+bc+'">'+bt+'</span></div>';
 }
 
+// Per-zone debounce so a double-tap on the same zone button doesn't fire
+// two concurrent /api/valve or /api/run requests (#8 belt-and-suspenders).
+var MAP_BUSY = {};
 function ctrlMapValve(id,action){
+  if (MAP_BUSY[id]) return;
+  MAP_BUSY[id] = true;
+  setTimeout(function(){ MAP_BUSY[id] = false; }, 800);
   fetch('/api/valve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,action:action})}).then(function(){refresh();});
 }
 function ctrlMapRun(id,min){
+  if (MAP_BUSY[id]) return;
+  MAP_BUSY[id] = true;
+  setTimeout(function(){ MAP_BUSY[id] = false; }, 800);
   fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,minutes:min})}).then(function(){refresh();});
 }
 function zoneRun(id,min,btn){

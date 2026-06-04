@@ -1408,7 +1408,7 @@ function renderUI(stats, MAD, decisions, zoneCfg, actualWaterings) {
     '</div>' +
     '<div class="summary-card"><h3>🌱 Zone: ' + (z.name || '?') + '</h3>' +
       '<div class="summary-line"><span class="summary-label">Precip rate</span><span class="summary-val">' + z.precipRate + ' iph</span></div>' +
-      '<div class="summary-line"><span class="summary-label">Kc</span><span class="summary-val">0.90 (active)</span></div>' +
+      '<div class="summary-line"><span class="summary-label">Kc</span><span class="summary-val">' + getSeasonalKc(z, new Date().getMonth() + 1).toFixed(2) + ' (active)</span></div>' +
       '<div class="summary-line"><span class="summary-label">Root depth</span><span class="summary-val">' + z.rootDepthIn + '"</span></div>' +
       '<div class="summary-line"><span class="summary-label">MAD trigger</span><span class="summary-val warn">' + z.madPct + '%</span></div>' +
     '</div>';
@@ -1999,7 +1999,8 @@ function updateNextWateringBanner(data, liveData) {
       for (var fi = 0; fi < forecast.length; fi++) {
         var dayEt0Mm = forecast[fi].et0 || 0;   // Open-Meteo returns mm
         var dayRainMm = forecast[fi].rain || 0; // Open-Meteo returns mm
-        var kc = 0.90;
+        // Per-zone/season Kc (mirrors engine), per night's real date — was hardcoded 0.90.
+        var kc = getSeasonalKc(zone, new Date(Date.now() + (fi + 1) * 86400000).getMonth() + 1);
         var etPct = (dayEt0Mm / MM_PER_IN * kc / rootD) * 100;
         var rainPct = (dayRainMm / MM_PER_IN * 0.65 / rootD) * 100;
         m = m - etPct + rainPct;
@@ -2497,11 +2498,14 @@ function refresh() {
           } else {
             // Above MAD — estimate when it will cross
             var _fc = (liveData && liveData.forecast_7day) || [];
-            var _m = _curM, _hit = null, _rd = getZoneBrainConfig(currentZoneId).rootDepthIn;
+            var _brain = getZoneBrainConfig(currentZoneId);
+            var _m = _curM, _hit = null, _rd = _brain.rootDepthIn;
             var _MM = 25.4;
             for (var _fi = 0; _fi < _fc.length; _fi++) {
               // Open-Meteo returns mm — convert to inches before dividing by root depth (in).
-              _m = _m - (((_fc[_fi].et0 || 0) / _MM) * 0.90 / _rd) * 100 + (((_fc[_fi].rain || 0) / _MM) * 0.65 / _rd) * 100;
+              // Per-zone/season Kc (mirrors engine), per night's real date — was hardcoded 0.90.
+              var _kc = getSeasonalKc(_brain, new Date(Date.now() + (_fi + 1) * 86400000).getMonth() + 1);
+              _m = _m - (((_fc[_fi].et0 || 0) / _MM) * _kc / _rd) * 100 + (((_fc[_fi].rain || 0) / _MM) * 0.65 / _rd) * 100;
               if (_m <= _madM) { _hit = _fi; break; }
             }
             if (_hit !== null) {
@@ -2627,7 +2631,10 @@ function updateTuneCalcs() {
   var root = parseFloat(document.getElementById('tune-root').value) || 6;
   if (precip > 0) {
     var peakET = 0.20; // typical peak day ET₀ inches
-    var minsToReplace = (peakET * 0.90 / precip) * 60; // Kc=0.90
+    // Peak-season Kc for THIS zone (kc array index 2), read live from the tune form — was hardcoded 0.90.
+    var _pkEl = document.getElementById('tune-kc-2');
+    var peakKc = (_pkEl && parseFloat(_pkEl.value)) || 0.90;
+    var minsToReplace = (peakET * peakKc / precip) * 60;
     var areaHint = document.querySelector('#tune-panel .tune-field:nth-child(5) .tune-hint');
     if (areaHint) areaHint.textContent = '= 96.25 × GPM ÷ area · ~' + Math.round(minsToReplace) + ' min replaces peak day ET';
   }

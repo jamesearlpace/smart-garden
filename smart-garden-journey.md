@@ -1400,4 +1400,30 @@ When in doubt, the system should water (skip the rain credit). Worst case of fal
 - Hardware: capacitive soil probes already in the kit (no purchase needed)
 - Related: `weather.py::get_current()` provides the cloud_cover + humidity for Layer 3 (no changes needed there)
 
+---
+
+## 2026-06-04 — Batch G: scheduling-cockpit (moisture_sim.html) audit & engine-parity fixes
+
+**Context:** Post-ship audit of the "batch G" cockpit work under the standing "no more issues" mandate. Started as UX polish, became a deep parity audit between the **client-side schedule predictor** in `moisture_sim.html` and the real **`irrigation.py` engine**. The predictor runs entirely in the browser and does NOT know engine state — any constant it hardcodes that diverges from the engine makes the UI silently lie.
+
+**Changes (all deployed to 192.168.0.109:5125 + pushed to `jamesearlpace/smart-garden`):**
+
+| Tag | What | Commit | Issue |
+|-----|------|--------|-------|
+| G7 | Mobile sticky first column on `.az-table` (zone name stays visible while scrolling the all-zones table horizontally) | `f8291e5` | — |
+| G8 | `predictZoneSchedule()` hardcoded `et0 * 0.90` Kc → now `getSeasonalKc(brain, nightMonth)` per forecast night. The 0.90 was only correct for sprinkler zones in June; wrong for Garden/Grapes drip year-round and all zones in peak summer. | `4e95b1b` | #27 |
+| G9 | Three MORE hardcoded-0.90 spots found by grep: two additional next-watering projections + two display strings ("Kc 0.90 (active)" card, tune-panel hint). All now use real per-zone/season Kc. | `373ff75` | #27 |
+| G10 | Single-zone "Next Expected Watering" banner showed a fake date for **manual-mode** zones (Garden, `auto_mode=false`). The banner has TWO implementations — `updateNextWateringBanner()` (has the guard, but is effectively dead) and an INLINE copy in the `Promise.all().then` (live, but dropped the guard when bug #23 inlined it). Added the manual/not-installed guard to the inline copy. | `7026138` | #28 |
+
+**Verified live (Playwright):** Garden (manual) → "✋ Manual mode"; Front Yard A (auto) → predicted date. Garden summary card shows Kc 0.60 (drip early-summer), zero leftover `0.90` patterns, `getSeasonalKc` called in 8 places.
+
+**Dormant-season parity (checked, no bug):** engine skips all irrigation when `season_idx < 0` (Nov-Feb, irrigation.py:453), so `zone["kc"][-1]` (Python negative-index wrap) is never reached. Predictor's `getSeasonalKc` returns `0` for dormant → both produce "no watering." Match.
+
+**Lessons (→ memory `/memories/repo/smart-garden-mirror-layout.md`):**
+- **A client-side predictor must mirror engine constants (Kc per zone/season) or the UI lies.** Three duplicated copies of the next-watering projection ALL shared the same Kc bug; two also had the manual-guard bug. Duplicated logic drifts.
+- **A throw early in a `.then()` callback silently aborts all later UI updates** via `.catch`. The inline banner runs after `buildChart()`; if Chart.js (CDN) fails to load, `buildChart` throws and the banner stays blank. Pre-existing fragility, left as-is (Chart.js failing breaks the whole page anyway).
+- **Playwright testing trap:** don't hammer `?nc=Date.now()` cache-buster reloads — they race the Chart.js CDN load and produce transient `Chart is not defined`, which looks like a real bug but isn't. Reload once cleanly and check `typeof Chart === 'function'`.
+
+**Still open (flagged, awaiting James's horticulture call):** static tune-hint text (`moisture_sim.html` ~line 498) reads `"Turf=0.90, Garden=0.8-1.1, Grapes=0.4-0.7"` — Garden/Grapes ranges are SWAPPED vs actual config (Garden drip 0.5-0.7, Grapes drip 0.7-1.15). Cosmetic hint only; left for James to confirm the intended ranges.
+
 

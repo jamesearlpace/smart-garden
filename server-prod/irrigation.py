@@ -324,6 +324,30 @@ class IrrigationEngine:
                                 timeout=timeout)
             resp.raise_for_status()
             log.warning("Emergency close all valves")
+            # Finalize any tracked watering events so _active doesn't drift
+            # out of sync with reality. The valves are already physically
+            # closed by the bulk closeall above; without this the dashboard
+            # keeps showing zones as "running" and the scheduler's safety
+            # loop thinks they're still active. Mirrors stop_zone_watering's
+            # bookkeeping but skips the per-zone close_valve round-trip.
+            with self._start_lock:
+                active_snapshot = list(self._active.items())
+                self._active.clear()
+            for zone_id, active in active_snapshot:
+                try:
+                    if active.get("event_id", -1) < 0:
+                        continue  # reservation sentinel, nothing persisted yet
+                    duration_sec = int(time.time() - active["start_time"])
+                    zone = self.zones[zone_id]
+                    est_gallons = (duration_sec / 60.0) * zone.get("est_gpm", 0)
+                    soil = db.get_latest_soil(zone_id)
+                    soil_after = soil["soil_pct"] if soil else active.get("soil_before", 0)
+                    db.end_watering(active["event_id"], soil_after, duration_sec, est_gallons)
+                    log.info("close_all: finalized %s event %d (%ds, ~%.1f gal)",
+                             self._zone_label(zone_id), active["event_id"],
+                             duration_sec, est_gallons)
+                except Exception as e:
+                    log.error("close_all: failed to finalize zone %d: %s", zone_id, e)
             return True
         except Exception as e:
             log.error("Failed to close all: %s", e)

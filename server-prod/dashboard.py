@@ -9,6 +9,7 @@ Serves a web UI at http://acer:5125 with:
 """
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -21,6 +22,8 @@ import database as db
 from irrigation import ESP32_MANUAL_TIMEOUT
 from cam_ocr import MeterReader
 import seasonal
+
+log = logging.getLogger("smart-garden")
 
 
 def create_app(config, engine, weather, billing):
@@ -103,13 +106,15 @@ def create_app(config, engine, weather, billing):
     def cached_esp32_status():
         try:
             return getattr(engine, "get_cached_esp32_status", lambda: None)()
-        except Exception:
+        except Exception as e:
+            log.warning("cached_esp32_status failed: %s", e)
             return None
 
     def esp32_online_status():
         try:
             return bool(getattr(engine, "is_esp32_online", lambda: False)())
-        except Exception:
+        except Exception as e:
+            log.warning("esp32_online_status failed: %s", e)
             return False
 
     def status_summary():
@@ -131,7 +136,8 @@ def create_app(config, engine, weather, billing):
                 "get_status_summary",
                 lambda **kwargs: fallback,
             )(allow_weather_fetch=False) or fallback
-        except Exception:
+        except Exception as e:
+            log.warning("status_summary failed, using fallback: %s", e)
             return fallback
 
     def fresh_valves():
@@ -140,7 +146,8 @@ def create_app(config, engine, weather, billing):
             status = getattr(engine, "get_esp32_status", lambda **kwargs: None)(
                 force_fresh=True
             )
-        except Exception:
+        except Exception as e:
+            log.warning("fresh_valves: ESP32 status fetch failed: %s", e)
             status = None
         return apply_inversion((status or {}).get("valves", []))
 
@@ -150,7 +157,8 @@ def create_app(config, engine, weather, billing):
             return False
         try:
             return bool(method(*args, **kwargs))
-        except Exception:
+        except Exception as e:
+            log.warning("engine_command(%s) failed: %s", name, e)
             return False
 
     def write_config_atomic(next_config):
@@ -230,7 +238,8 @@ def create_app(config, engine, weather, billing):
                         e["email"].lower() for e in auth_json.load(f)
                     )
                 _allowed_emails_cache["mtime"] = mtime
-            except Exception:
+            except Exception as e:
+                log.warning("_load_allowed_emails: failed to parse %s: %s", ALLOWED_EMAILS_FILE, e)
                 return frozenset()
         return _allowed_emails_cache["emails"]
 
@@ -251,7 +260,9 @@ def create_app(config, engine, weather, billing):
             if time.time() - int(ts) > SESSION_MAX_AGE:
                 return None
             return email
-        except Exception:
+        except Exception as e:
+            # Debug because malformed/garbage cookies from scanners hit this regularly.
+            log.debug("_verify_session_token rejected: %s", e)
             return None
 
     def _verify_google_token(credential):
@@ -263,7 +274,8 @@ def create_app(config, engine, weather, billing):
             if data.get("aud") != GOOGLE_CLIENT_ID:
                 return None
             return data.get("email", "").lower()
-        except Exception:
+        except Exception as e:
+            log.warning("_verify_google_token failed: %s", e)
             return None
 
     @app.before_request
@@ -1408,8 +1420,8 @@ def create_app(config, engine, weather, billing):
                         f"SELECT COUNT(*) FROM {name} "
                         f"WHERE {ts_col} >= datetime('now','localtime','-1 day')"
                     ).fetchone()[0]
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("audit(%s): MAX/COUNT failed: %s", name, e)
         age_hours = None
         if last_ts:
             try:
@@ -1423,8 +1435,8 @@ def create_app(config, engine, weather, billing):
                     age_hours = max(0.0, (today_midnight - last_dt).total_seconds() / 3600)
                 else:
                     age_hours = (datetime.now() - datetime.strptime(last_ts[:19], "%Y-%m-%dT%H:%M:%S")).total_seconds() / 3600
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("audit(%s): timestamp parse failed for %r: %s", name, last_ts, e)
         if row_count == 0:
             status = "EMPTY"
         elif max_age_h is not None and age_hours is not None and age_hours > max_age_h:

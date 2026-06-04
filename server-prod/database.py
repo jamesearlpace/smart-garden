@@ -1,8 +1,11 @@
 """SQLite database schema and helpers for Smart Garden Server."""
 
+import logging
 import sqlite3
 import os
 from datetime import datetime, date
+
+log = logging.getLogger("smart-garden")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "smart-garden.db")
 
@@ -973,17 +976,17 @@ def log_server_health():
     try:
         usage = shutil.disk_usage(os.path.dirname(DB_PATH))
         disk_pct = round(usage.used / usage.total * 100, 2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("log_server_health: disk_usage failed: %s", e)
     try:
         db_size = round(os.path.getsize(DB_PATH) / (1024**2), 3)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("log_server_health: db_size read failed: %s", e)
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:
             cpu_temp = round(int(f.read().strip()) / 1000, 1)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("log_server_health: cpu_temp unavailable: %s", e)
     conn = get_conn()
     conn.execute(
         "INSERT INTO server_health_log (disk_pct, db_size_mb, cpu_temp_c) VALUES (?,?,?)",
@@ -1027,22 +1030,22 @@ def get_server_health() -> dict:
         result["disk_used_gb"] = round(usage.used / (1024**3), 1)
         result["disk_free_gb"] = round(usage.free / (1024**3), 1)
         result["disk_pct"] = round(usage.used / usage.total * 100, 1)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("get_server_health: disk_usage failed: %s", e)
     # DB file size
     try:
         result["db_size_mb"] = round(os.path.getsize(DB_PATH) / (1024**2), 2)
         wal = DB_PATH + "-wal"
         if os.path.exists(wal):
             result["db_wal_mb"] = round(os.path.getsize(wal) / (1024**2), 2)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("get_server_health: db_size read failed: %s", e)
     # Pi CPU temp (Linux thermal zone)
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:
             result["cpu_temp_c"] = round(int(f.read().strip()) / 1000, 1)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("get_server_health: cpu_temp unavailable: %s", e)
     # Table row counts
     conn = get_conn()
     counts = {}
@@ -1051,7 +1054,8 @@ def get_server_health() -> dict:
         try:
             row = conn.execute(f"SELECT COUNT(*) as n FROM {tbl}").fetchone()
             counts[tbl] = row["n"]
-        except Exception:
+        except Exception as e:
+            log.warning("get_server_health: COUNT(%s) failed: %s", tbl, e)
             counts[tbl] = 0
     result["table_rows"] = counts
     # Rows added today
@@ -1062,7 +1066,8 @@ def get_server_health() -> dict:
                 f"SELECT COUNT(*) as n FROM {tbl} WHERE ts >= date('now','localtime')"
             ).fetchone()
             today_counts[tbl] = row["n"]
-        except Exception:
+        except Exception as e:
+            log.warning("get_server_health: today-count(%s) failed: %s", tbl, e)
             today_counts[tbl] = 0
     result["rows_today"] = today_counts
     conn.close()

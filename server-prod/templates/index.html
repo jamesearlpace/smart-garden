@@ -2176,6 +2176,9 @@ function el(id) { return document.getElementById(id); }
 function fmt(n, d) { if (d === undefined) d = 1; return n == null ? '—' : Number(n).toFixed(d); }
 function fmtD(n) { return n == null ? '$0.00' : '$' + Number(n).toFixed(2); }
 function pct(n) { return Math.min(Math.max(n || 0, 0), 100); }
+// esc()/escAttr(): user-editable zone names flow into innerHTML and value="..." sinks — escape at sink, not at source (textContent uses elsewhere need raw text).
+function esc(s) { if (s == null) return ''; var e = document.createElement('span'); e.textContent = String(s); return e.innerHTML; }
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
 
 var ZONE_NAMES = {};
 
@@ -2364,9 +2367,9 @@ function buildSoilCard(z, faults, isPlanned) {
 
   if (isPlanned) {
     card.innerHTML =
-      '<div class="hc-header"><span class="hc-icon">🌱</span><span class="hc-label">' + z.name + '</span><span class="planned-tag">PLANNED</span></div>' +
+      '<div class="hc-header"><span class="hc-icon">🌱</span><span class="hc-label">' + esc(z.name) + '</span><span class="planned-tag">PLANNED</span></div>' +
       '<div class="hc-value" style="color:var(--text3)">Not installed</div>' +
-      '<div class="hc-sub">Zone ' + (z.id + 1) + ' · ' + z.type + '</div>';
+      '<div class="hc-sub">Zone ' + (z.id + 1) + ' · ' + esc(z.type) + '</div>';
     return card;
   }
 
@@ -2380,7 +2383,7 @@ function buildSoilCard(z, faults, isPlanned) {
   else if (a.flatline) { badgeTxt = '⚠ Constant'; badgeCls += ' flatline'; }
 
   card.innerHTML =
-    '<div class="hc-header"><span class="hc-icon">🌱</span><span class="hc-label">' + z.name + '</span><span class="' + badgeCls + '">' + badgeTxt + '</span></div>' +
+    '<div class="hc-header"><span class="hc-icon">🌱</span><span class="hc-label">' + esc(z.name) + '</span><span class="' + badgeCls + '">' + badgeTxt + '</span></div>' +
     '<div class="hc-value" id="soil-live-' + z.id + '">—</div>' +
     '<div class="hc-sub" id="soil-sub-' + z.id + '"></div>';
 
@@ -2940,7 +2943,7 @@ function render(d) {
     var typeIcon = z.type === 'drip' ? '💧' : '🔫';
     zsHtml += '<div class="zone-summary-row">' +
       '<span style="font-size:.85rem">'+typeIcon+'</span>' +
-      '<span class="zs-name">'+z.name+'</span>' +
+      '<span class="zs-name">'+esc(z.name)+'</span>' +
       '<div class="zs-bar-wrap"><div class="zs-bar"><div class="fill" style="width:'+pct(sp)+'%;background:'+color+'"></div></div></div>' +
       '<span class="zs-pct" style="color:'+color+'">'+fmt(sp,0)+'%</span>' +
       '<span class="zs-badge '+statusCls+'">'+statusTxt+'</span></div>';
@@ -2954,7 +2957,7 @@ function render(d) {
     mfHtml = '<div class="empty-state" style="padding:24px">No activity yet</div>';
   } else {
     recent.slice(0, 8).forEach(function(ev) {
-      var zn = ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1);
+      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var isW = ev.type === 'water';
       mfHtml += '<div class="mini-feed-item"><span class="mini-feed-icon">'+(isW ? '💧' : '🧠')+'</span>' +
@@ -2989,7 +2992,7 @@ function render(d) {
 
     zgHtml += '<div class="card zone-card">' +
       '<div class="zone-header"><div class="zone-info">' +
-      '<div class="zone-name">Zone '+(z.id+1)+' — '+z.name+'</div>' +
+      '<div class="zone-name">Zone '+(z.id+1)+' — '+esc(z.name)+'</div>' +
       '<div class="zone-type"><span class="type-icon">'+(z.type==='drip'?'💧':'🔫')+'</span> '+typeLabel+' · Kc '+kc+'</div>' +
       '</div><span class="zone-badge '+statusCls+'">'+statusTxt+'</span></div>' +
       '<div class="soil-bar-wrap"><div class="soil-bar-labels">' +
@@ -3047,7 +3050,7 @@ function render(d) {
   } else {
     recent.forEach(function(ev) {
       var isW = ev.type === 'water';
-      var zn = ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1);
+      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var detail = isW ? 'Watered for '+ev.detail+(ev.gallons ? ' · '+ev.gallons+' gal' : '') : 'Skipped: '+ev.detail;
       var savedLine = !isW && ev.gallons_saved ? '<div class="act-saved">↗ '+ev.gallons_saved+' gal saved</div>' : '';
@@ -3080,7 +3083,7 @@ function render(d) {
     var zoneInfo = '';
     if (needsWater && !willRain) {
       var dryZones = d.zones.filter(function(z) { return z.soil_pct != null && z.soil_pct < z.wet_target; });
-      zoneInfo = dryZones.length > 0 ? dryZones.map(function(z) { return z.name.split(' ').slice(0,2).join(' '); }).join(', ') : 'All zones adequate';
+      zoneInfo = dryZones.length > 0 ? dryZones.map(function(z) { return esc(z.name.split(' ').slice(0,2).join(' ')); }).join(', ') : 'All zones adequate';
     } else if (willRain) { zoneInfo = 'Skip likely – rain'; }
     schedHtml += '<div class="card schedule-day'+(isToday?' today':'')+'">' +
       '<div class="dow">'+dow+'</div><div class="date">'+dateStr+'</div><div>' +
@@ -3176,7 +3179,7 @@ function render(d) {
     var cbHtml = '';
     cbHtml += cfgRow('Morning Window', ww.start+' – '+ww.end);
     if (ww.evening_start) cbHtml += cfgRow('Evening Window (drip)', ww.evening_start+' – '+ww.evening_end);
-    if (ww.evening_zones) cbHtml += cfgRow('Evening Zones', ww.evening_zones.map(function(id) { return ZONE_NAMES[id] || 'Zone '+id; }).join(', '));
+    if (ww.evening_zones) cbHtml += cfgRow('Evening Zones', ww.evening_zones.map(function(id) { return esc(ZONE_NAMES[id] || 'Zone '+id); }).join(', '));
     if (sr) {
       cbHtml += cfgRow('Rain Forecast Skip', '≥ '+sr.rain_forecast_mm+' mm & ≥ '+sr.rain_probability_pct+'% prob');
       cbHtml += cfgRow('Recent Rain Skip', '≥ '+sr.recent_rain_mm+' mm in 24h');
@@ -3189,7 +3192,7 @@ function render(d) {
   var zcHtml = '';
   d.zones.forEach(function(z) {
     var kc = z.kc ? (Array.isArray(z.kc) ? z.kc[si] : z.kc) : '?';
-    zcHtml += '<tr><td style="font-weight:600">'+z.name+'</td><td>'+z.type+'</td>' +
+    zcHtml += '<tr><td style="font-weight:600">'+esc(z.name)+'</td><td>'+esc(z.type)+'</td>' +
       '<td>'+z.dry_trigger+'%</td><td>'+z.wet_target+'%</td><td>'+z.max_runtime_min+' min</td>' +
       '<td>'+kc+'</td><td>'+z.est_gpm+'</td><td>'+(z.cycle_soak?'✅':'—')+'</td></tr>';
   });
@@ -3727,7 +3730,7 @@ function renderDecisionLog(decisions) {
   } else {
     decisions.forEach(function(ev) {
       var isW = ev.type === 'water';
-      var zn = ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1);
+      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var dur = isW && ev.duration_sec ? fmt(ev.duration_sec / 60, 1) + ' min' : '—';
       var gal = ev.gallons != null ? fmt(ev.gallons, 1) : '—';
@@ -3844,7 +3847,7 @@ function mapZoneItem(z) {
   }
   return '<div class="mz-item '+cls+'" data-zone="'+z.id+'">' +
     '<div class="mz-dot" style="background:'+MAP_COLORS[z.id]+'"></div>' +
-    '<div style="flex:1"><div class="mz-name">Zone '+(z.id+1)+' — '+z.name+'</div><div class="mz-sub">'+tl+'</div>'+btn+'</div>' +
+    '<div style="flex:1"><div class="mz-name">Zone '+(z.id+1)+' — '+esc(z.name)+'</div><div class="mz-sub">'+tl+'</div>'+btn+'</div>' +
     '<span class="mz-badge '+bc+'">'+bt+'</span></div>';
 }
 
@@ -4917,8 +4920,8 @@ function renderValveCardsFallback(zones) {
 
     html += '<div class="card valve-card' + openCls + '">' +
       '<div class="valve-hdr">' +
-        '<div><div class="valve-name">' + z.name + '</div>' +
-        '<div class="valve-id">Zone ' + (z.id + 1) + ' · ' + z.type + '</div></div>' +
+        '<div><div class="valve-name">' + esc(z.name) + '</div>' +
+        '<div class="valve-id">Zone ' + (z.id + 1) + ' · ' + esc(z.type) + '</div></div>' +
         '<span class="valve-badge ' + (isWatering ? 'v-open' : 'v-closed') + '">' +
           (isWatering ? 'WATERING' : 'OFF') + '</span>' +
       '</div>' +
@@ -5062,7 +5065,7 @@ function renderTelemetry(t) {
     });
   } else {
     valveList.forEach(function(v, i) {
-      var name = ZONE_NAMES[i] || v.name || 'Zone ' + i;
+      var name = esc(ZONE_NAMES[i] || v.name || 'Zone ' + i);
       vbHtml += '<tr><td style="font-weight:600">Valve ' + i + '</td>' +
         '<td>' + name + '</td>' +
         '<td style="font-size:.75rem;color:var(--text3)">' + valvePinStr(i) + '</td>' +
@@ -5107,7 +5110,7 @@ function renderTelemetry(t) {
       var deltaColor = (w.soil_after > w.soil_before) ? 'color:var(--green-dark)' : '';
       wbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + (w.zone_name || 'Zone ' + w.zone_id) + '</td>' +
+        '<td style="font-weight:600">' + esc(w.zone_name || 'Zone ' + w.zone_id) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;' +
           (w.trigger_reason === 'manual' ? 'background:var(--purple);color:white' : 'background:var(--blue-light);color:var(--blue)') +
           '">' + (w.trigger_reason || '—') + '</span></td>' +
@@ -5147,7 +5150,7 @@ function renderTelemetry(t) {
       }
       sbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + (s.zone_name || 'Zone ' + s.zone_id) + '</td>' +
+        '<td style="font-weight:600">' + esc(s.zone_name || 'Zone ' + s.zone_id) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;background:var(--amber-light);color:#b45309">' + (s.reason || '—') + '</span></td>' +
         '<td>' + (s.est_gallons_saved != null ? fmt(s.est_gallons_saved, 1) : '—') + '</td>' +
         '<td>' + (s.est_cf_saved != null ? fmt(s.est_cf_saved, 2) : '—') + '</td>' +
@@ -5325,7 +5328,7 @@ function loadConfig() {
       var installed = z.installed !== false;
       html += '<tr data-zid="' + z.id + '">' +
         '<td>' + (z.id + 1) + '</td>' +
-        '<td><input class="cfg-input" data-field="name" value="' + (z.name || '') + '" style="width:140px"></td>' +
+        '<td><input class="cfg-input" data-field="name" value="' + escAttr(z.name || '') + '" style="width:140px"></td>' +
         '<td><select class="cfg-input" data-field="type">' +
           '<option value="sprinkler"' + (z.type === 'sprinkler' ? ' selected' : '') + '>Sprinkler</option>' +
           '<option value="drip"' + (z.type === 'drip' ? ' selected' : '') + '>Drip</option>' +

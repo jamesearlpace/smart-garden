@@ -2461,10 +2461,14 @@ function refresh() {
     if (rangeBtns) rangeBtns.style.display = 'none';
     if (yearSelect) yearSelect.style.display = 'none';
     if (resetZoom) resetZoom.style.display = 'none';
+    var hdrBadge = document.getElementById('current-badge');
+    if (hdrBadge) hdrBadge.style.display = 'none'; // per-zone moisture has no meaning across all zones
     document.getElementById('all-zones-view').style.display = 'block';
     return refreshAllZones();
   } else {
     document.getElementById('all-zones-view').style.display = 'none';
+    var hdrBadge2 = document.getElementById('current-badge');
+    if (hdrBadge2) hdrBadge2.style.display = '';
     document.getElementById('chart-section').style.display = '';
     document.getElementById('legend-main').style.display = '';
     document.getElementById('tune-panel').style.display = '';

@@ -1426,4 +1426,23 @@ When in doubt, the system should water (skip the rain credit). Worst case of fal
 
 **Still open (flagged, awaiting James's horticulture call):** static tune-hint text (`moisture_sim.html` ~line 498) reads `"Turf=0.90, Garden=0.8-1.1, Grapes=0.4-0.7"` — Garden/Grapes ranges are SWAPPED vs actual config (Garden drip 0.5-0.7, Grapes drip 0.7-1.15). Cosmetic hint only; left for James to confirm the intended ranges.
 
+### G11-G15 (2026-06-04 cont.) — "just make the website good" cockpit polish
+
+Continued the audit. Five more real issues found and fixed (all deployed + pushed + issue-tracked):
+
+| Tag | What | Commit | Issue |
+|-----|------|--------|-------|
+| G11 | Kc tune-hint text was wrong AND Garden/Grapes swapped → corrected to `Turf=0.85-0.95, Garden=0.5-0.7, Grapes=0.7-1.15` (matches config). Resolves the G10 open item above. | `6dd0052` | #30 |
+| G12 | All-zones status table flagged manual/drip zones (Garden, Grapes) with alarming red "⚠ Below MAD" even though the engine never auto-waters them, and counted them in the "N zones below MAD now" total. Now neutral "Manual (drip)"/"Manual"/"Not installed" (new `.az-status-manual` class), excluded from the red count. Summary went from "3 zones below MAD" → "1 zone" (just the real auto zone). | `6dd0052` | #30 |
+| G13 | Per-zone "📅 Watering" card's "Est. next" row was PERMANENTLY blank — `nextEst` was initialized to '—' and never computed. Removed the dead field (+ unused var); the top banner is the authoritative next-watering display. | `61df94f` | #30 |
+| G14 | Next-watering banner intermittently blanked ("—") with a blank chart. Chart.js loads via `<script defer>` CDN; the inline script isn't deferred, so its `fetch().then()` could beat Chart.js → `buildChart` threw `Chart is not defined` → aborted the `.then` → banner never updated. Fix: buildChart retries instead of throwing + call site try/catch-wrapped. | `35d3914` | #29 |
+| G15 | All-zones "Last run" column showed wrong times (Front Yard A "10.8d ago" when it watered 1h ago). `fmtLastWatered` took `waterings[length-1]` assuming sorted order, but `/api/moisture-data` returns waterings UNSORTED. Fixed to reduce-by-max-`start_ts`. | `b7a916b` | #29 |
+
+**Verified live (Playwright):** all-zones "Last run" now matches single-zone "Last watered" for every zone; 5+4 rapid cache-busted reloads of Garden/Front Yard A all render banner+chart (previously flaky); manual zones show neutral status; Kc values correct (0.90 sprinkler / 0.60 drip).
+
+**Data ordering facts (verified):** `/api/moisture-data` → `balances` is date-ASC sorted (safe to index `[length-1]`), but `waterings` is NOT sorted (always reduce by `start_ts`). Client `ZONES` global includes real `est_gpm` per zone, so gallon math is accurate.
+
+**Lessons:** (1) A throw early in a `.then()` callback silently aborts every later UI update in that chain — wrap risky calls (like chart rendering) so they can't take down unrelated UI. (2) Never assume API array ordering — sort/reduce explicitly. (3) The "manual zone shouldn't look like it needs water" theme recurred across the banner (G10), status badge (G12), and was the root reason the hint/fields were misleading.
+
+
 

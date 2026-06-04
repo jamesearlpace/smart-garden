@@ -1346,8 +1346,8 @@ function computeStats(data, MAD, actualWaterings) {
     deepStressPerCycle = '—';
   }
 
-  // Last watered / next estimate
-  var lastWatered = '—', nextEst = '—';
+  // Last watered
+  var lastWatered = '—';
   if (actualWaterings && actualWaterings.length > 0) {
     var lastW = actualWaterings.reduce(function(a, b) { return a.start_ts > b.start_ts ? a : b; });
     if (lastW && lastW.start_ts) {
@@ -1375,7 +1375,7 @@ function computeStats(data, MAD, actualWaterings) {
     cycleDays: cycleDays > 0 ? cycleDays.toFixed(1) : '—',
     stressPerCycle: stressPerCycle, deepStressPerCycle: deepStressPerCycle,
     depthIn: depthIn > 0 ? depthIn.toFixed(2) : '—',
-    cycles: cycles.length, lastWatered: lastWatered, nextEst: nextEst,
+    cycles: cycles.length, lastWatered: lastWatered,
     curMoisture: curMoisture.toFixed(1)
   };
 }
@@ -1405,7 +1405,6 @@ function renderUI(stats, MAD, decisions, zoneCfg, actualWaterings) {
     '<div class="summary-card"><h3>📅 Watering</h3>' +
       '<div class="summary-line"><span class="summary-label">Cycles in period</span><span class="summary-val">' + stats.cycles + '</span></div>' +
       '<div class="summary-line"><span class="summary-label">Last watered</span><span class="summary-val">' + stats.lastWatered + '</span></div>' +
-      '<div class="summary-line"><span class="summary-label">Est. next</span><span class="summary-val good">' + stats.nextEst + '</span></div>' +
     '</div>' +
     '<div class="summary-card"><h3>🌱 Zone: ' + (z.name || '?') + '</h3>' +
       '<div class="summary-line"><span class="summary-label">Precip rate</span><span class="summary-val">' + z.precipRate + ' iph</span></div>' +

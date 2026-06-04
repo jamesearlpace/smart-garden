@@ -525,6 +525,7 @@ var currentDays = hashParams.days ? parseInt(hashParams.days) : 9999;
 var selectedYear = hashParams.year || '2026';
 var weatherCache = {};
 var liveDataCache = {};
+var vacationOn = false; // mirrors config.vacation_mode; gates schedule predictions
 var precipChart = null, moistureChart = null;
 
 // Set UI controls to match restored state
@@ -2280,7 +2281,9 @@ function refreshAllZones() {
       for (var ni = 0; ni < pred.nights.length; ni++) {
         if (pred.nights[ni].willWater) { firstFire = ni; break; }
       }
-      pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
+      if (!(vacationOn && pred.isAuto)) {
+        pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
+      }
 
       var modePill;
       if (!z.installed) modePill = '<span class="az-pill off">Not installed</span>';
@@ -2289,12 +2292,15 @@ function refreshAllZones() {
       else modePill = '<span class="az-pill auto">Auto</span>';
 
       var statusTxt, statusCls;
-      if (pred.curM <= pred.madPct) { statusTxt = '⚠ Below MAD'; statusCls = 'az-status-now'; zonesNeedingNow++; }
+      if (vacationOn && pred.isAuto) { statusTxt = '🏖️ Paused'; statusCls = 'az-status-good'; }
+      else if (pred.curM <= pred.madPct) { statusTxt = '⚠ Below MAD'; statusCls = 'az-status-now'; zonesNeedingNow++; }
       else if (firstFire >= 0 && firstFire <= 2) { statusTxt = 'Soon (' + (firstFire + 1) + 'd)'; statusCls = 'az-status-soon'; zonesSoon++; }
       else { statusTxt = 'OK'; statusCls = 'az-status-good'; }
 
       var nextTxt = '—';
-      if (pred.isAuto) {
+      if (vacationOn && pred.isAuto) {
+        nextTxt = 'paused';
+      } else if (pred.isAuto) {
         if (firstFire >= 0) nextTxt = fmtNight(firstFire);
         else nextTxt = '> 7d';
       } else {
@@ -2346,6 +2352,11 @@ function refreshAllZones() {
         return;
       }
       var weekMin = 0;
+      if (vacationOn && pred.isAuto) {
+        for (var pv = 0; pv < 7; pv++) schedHtml += '<td class="az-cell-none" title="Vacation mode — auto-watering paused">🏖️</td>';
+        schedHtml += '<td class="az-num"><b>paused</b></td></tr>';
+        return;
+      }
       pred.nights.forEach(function(n, idx) {
         if (n.willWater) {
           var cls = 'az-cell-run';
@@ -2373,6 +2384,7 @@ function refreshAllZones() {
 
     // ── Summary banner ──
     var sumParts = [];
+    if (vacationOn) sumParts.push('<b style="color:#b45309">🏖️ Vacation mode ON — auto-watering paused</b>');
     if (zonesNeedingNow > 0) sumParts.push('<b style="color:var(--red)">' + zonesNeedingNow + ' zone' + (zonesNeedingNow > 1 ? 's' : '') + ' below MAD now</b>');
     if (zonesSoon > 0) sumParts.push('<b style="color:var(--amber)">' + zonesSoon + ' watering in next 3 days</b>');
     if (zonesNeedingNow === 0 && zonesSoon === 0) sumParts.push('<b style="color:var(--green-dark)">All zones above MAD for the next 7 days</b>');
@@ -2864,7 +2876,9 @@ function setVacationButton(enabled) {
 
 function loadVacationState() {
   fetch('/api/vacation').then(function(r) { return r.json(); }).then(function(d) {
-    setVacationButton(!!(d && d.enabled));
+    vacationOn = !!(d && d.enabled);
+    setVacationButton(vacationOn);
+    if (allZonesMode) refreshAllZones();
   }).catch(function() { /* silent */ });
 }
 
@@ -2886,8 +2900,10 @@ document.getElementById('btn-vacation').addEventListener('click', function() {
   })
     .then(function(r) { return r.json(); })
     .then(function(resp) {
-      setVacationButton(!!(resp && resp.enabled));
+      vacationOn = !!(resp && resp.enabled);
+      setVacationButton(vacationOn);
       flashActionStatus(resp.enabled ? '🏖️ Vacation mode ON' : '☀️ Vacation mode OFF');
+      if (allZonesMode) refreshAllZones();
     })
     .catch(function(err) { flashActionStatus('❌ ' + err, true); })
     .finally(function() { btn.disabled = false; });

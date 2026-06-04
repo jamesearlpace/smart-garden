@@ -155,6 +155,12 @@ h2 { margin: 0; font-size: 1.05rem; }
 .az-status-good { color: var(--green-dark); font-weight: 600; }
 .az-status-soon { color: var(--amber); font-weight: 600; }
 .az-status-now { color: var(--red); font-weight: 700; }
+/* Keep the zone-name column pinned while the wide table scrolls horizontally
+   (esp. on mobile, where Status/Next/Run sit off-screen right and you'd
+   otherwise lose track of which zone a row belongs to). */
+.az-table th:first-child { position: sticky; left: 0; z-index: 3; background: var(--border-light); }
+.az-table td.az-name { position: sticky; left: 0; z-index: 2; background: var(--card); box-shadow: 1px 0 0 var(--border); }
+.az-table tbody tr:hover td.az-name { background: var(--green-bg); }
 
 /* Seasonal Outlook panel */
 .seasonal-panel { margin-top: 20px; padding: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }

@@ -1543,6 +1543,19 @@ var forecastZonePlugin = {
 // CHART BUILDER
 // ═══════════════════════════════════
 function buildChart(zoneId, days, data, actualWaterings, liveData) {
+  if (typeof Chart === 'undefined') {
+    // Chart.js loads via <script defer> from a CDN; its execution can lose a race
+    // with this fetch().then() callback. Retry shortly instead of throwing a
+    // ReferenceError that would abort the whole .then (and the banner update).
+    buildChart._retries = (buildChart._retries || 0) + 1;
+    if (buildChart._retries <= 30) {
+      setTimeout(function() { buildChart(zoneId, days, data, actualWaterings, liveData); }, 150);
+    } else {
+      console.error('Chart.js never loaded after 30 retries — chart will be blank.');
+    }
+    return;
+  }
+  buildChart._retries = 0;
   var zone = getZoneBrainConfig(zoneId);
   var MAD = zone.madPct;
   var isReal = data.isRealData === true;
@@ -2477,7 +2490,13 @@ function refresh() {
       // 2026 = real DB data only, no simulation
       var data = generateRealData2026(currentZoneId, liveData, liveData.waterings || []);
       if (data) {
-        buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
+        // Chart failure must NOT block the banner below — wrap it so a Chart.js
+        // load race can't abort the .then and leave the banner blank.
+        try {
+          buildChart(currentZoneId, currentDays, data, liveData.waterings || [], liveData);
+        } catch (_chartErr) {
+          console.error('buildChart failed (banner still updates):', _chartErr);
+        }
         // Inline banner logic (bug #23: function call kept failing silently)
         try {
           var _banner = document.getElementById('next-water-banner');

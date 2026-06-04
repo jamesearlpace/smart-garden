@@ -725,8 +725,8 @@ def create_app(config, engine, weather, billing):
         caps the window and reverts on its own (cannot drain the battery)."""
         body = request.get_json(silent=True) or {}
         on = bool(body.get("on", True))
-        # Default: 10 min window at 5s interval. 0 seconds = turn off.
-        seconds = int(body.get("seconds", 600)) if on else 0
+        # Default: 5 min window at 5s interval. 0 seconds = turn off.
+        seconds = int(body.get("seconds", 300)) if on else 0
         interval = int(body.get("interval", 5))
         ok, msg = engine.set_fast_sample(seconds, interval)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 502)

@@ -718,6 +718,44 @@ def create_app(config, engine, weather, billing):
         ok, msg = engine.reboot_esp32()
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 502)
 
+    @app.route("/api/sensor-test", methods=["POST"])
+    def api_sensor_test():
+        """Toggle the ESP32's fast-sample test mode so soil sensors update
+        quickly while testing, then auto-revert to hourly. Safe — the firmware
+        caps the window and reverts on its own (cannot drain the battery)."""
+        body = request.get_json(silent=True) or {}
+        on = bool(body.get("on", True))
+        # Default: 10 min window at 5s interval. 0 seconds = turn off.
+        seconds = int(body.get("seconds", 600)) if on else 0
+        interval = int(body.get("interval", 5))
+        ok, msg = engine.set_fast_sample(seconds, interval)
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 502)
+
+    @app.route("/api/sensor-live")
+    def api_sensor_live():
+        """Live soil readings straight from the ESP32 (bypasses the DB), plus
+        the fast-sample status. Used by the dashboard's Sensor Test panel."""
+        status = engine.get_esp32_status(force_fresh=True) or {}
+        soil = status.get("soil", []) or []
+        sysd = status.get("system", {}) or {}
+        pins = [32, 33, 34, 35]
+        sensors = []
+        for i, s in enumerate(soil):
+            sensors.append({
+                "index": i,
+                "gpio": pins[i] if i < len(pins) else None,
+                "name": s.get("name"),
+                "raw": s.get("raw"),
+                "pct": s.get("pct"),
+            })
+        return jsonify({
+            "ok": bool(status),
+            "sensors": sensors,
+            "fast_active": sysd.get("fastSampleActive", False),
+            "remain_sec": sysd.get("fastSampleRemainSec", 0),
+            "interval_sec": sysd.get("sampleIntervalSec"),
+        })
+
     @app.route("/api/run", methods=["POST"])
     def api_run_zone():
         """Run a zone for X minutes (manual override)."""

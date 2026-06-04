@@ -106,16 +106,16 @@ struct FallbackZone {
 // Conservative defaults: every zone every 48h, staggered by 1h.
 // Survival watering, not optimal \u2014 enough to keep plants alive for weeks.
 const FallbackZone FALLBACK_SCHEDULE[NUM_VALVES] = {
-    {48, 15, 0},   // Zone 1 - Garden (drip)
-    {48, 20, 1},   // Zone 2 - Grapes (drip)
-    {48, 25, 2},   // Zone 3 - Fruit Trees
-    {48, 12, 3},   // Zone 4 - South Lawn
-    {48, 15, 4},   // Zone 5 - East Lawn
-    {48, 15, 5},   // Zone 6 - West/NW Lawn
-    {48, 15, 6},   // Zone 7 - NE Lawn
-    {48, 10, 7},   // Zone 8 - Peonies (drip)
-    {48, 15, 8},   // Zone 9 - Garden (drip)
-    { 0,  0, 0},   // Zone 10 - Spare (disabled)
+    {48, 15, 0},   // Valve 1 (id 0) - Front Yard A (sprinkler)
+    {48, 15, 1},   // Valve 2 (id 1) - Front Yard B (sprinkler)
+    {48, 15, 2},   // Valve 3 (id 2) - Enclosed Backyard A (sprinkler, fruit trees side)
+    {48, 15, 3},   // Valve 4 (id 3) - Enclosed Backyard B (sprinkler, garden side)
+    {48, 15, 4},   // Valve 5 (id 4) - Southeast (sprinkler)
+    {48, 15, 5},   // Valve 6 (id 5) - South (sprinkler)
+    {48, 15, 6},   // Valve 7 (id 6) - Southwest (sprinkler)
+    { 0,  0, 0},   // Valve 8 (id 7) - Garden (drip, DISABLED in config.yaml)
+    { 0,  0, 0},   // Valve 9 (id 8) - Grapes (drip, UNINSTALLED in config.yaml)
+    { 0,  0, 0},   // Valve 10 (id 9) - Spare (disabled)
 };
 
 // Per-zone runtime tracking (not persisted; resets at boot)
@@ -313,6 +313,20 @@ int soilValues[NUM_SOIL_SENSORS] = {0};
 int soilPercent[NUM_SOIL_SENSORS] = {0};
 unsigned long lastSensorRead = 0;
 
+// Fast-sample "test mode" state. When millis() < fastSampleUntilMs the sensor
+// loop uses fastSampleIntervalMs instead of the hourly SENSOR_READ_INTERVAL_MS,
+// then auto-reverts. Set via POST /api/fastsample. fastSampleUntilMs==0 = off.
+unsigned long fastSampleUntilMs = 0;
+unsigned long fastSampleIntervalMs = SENSOR_READ_INTERVAL_FAST_MS;
+
+// Effective sensor sampling interval: fast while a test window is active, else hourly.
+unsigned long effectiveSensorIntervalMs() {
+    if (fastSampleUntilMs != 0 && (long)(fastSampleUntilMs - millis()) > 0) {
+        return fastSampleIntervalMs;
+    }
+    return SENSOR_READ_INTERVAL_MS;
+}
+
 // Calibration values for capacitive soil moisture sensor
 // Dry air = ~3500-4095, Fully wet = ~1200-1800
 // Adjust after testing YOUR sensors
@@ -420,6 +434,14 @@ void handleApiStatus() {
     sys["mac"] = WiFi.macAddress();
     sys["eventCount"] = eventCount;
 
+    // Fast-sample test mode status (so the dashboard can show it's active + time left)
+    {
+        bool fast = (fastSampleUntilMs != 0 && (long)(fastSampleUntilMs - millis()) > 0);
+        sys["fastSampleActive"] = fast;
+        sys["fastSampleRemainSec"] = fast ? (long)((fastSampleUntilMs - millis()) / 1000) : 0;
+        sys["sampleIntervalSec"] = (int)(effectiveSensorIntervalMs() / 1000);
+    }
+
     // Health insights
     JsonObject health = doc["health"].to<JsonObject>();
     health["crashCount"] = crashCount;
@@ -515,6 +537,50 @@ void handleApiReboot() {
     server.send(200, "text/plain", msg);
     delay(500);  // let the response flush
     ESP.restart();
+}
+
+// API: Fast-sample "test mode". POST /api/fastsample?token=...&seconds=600&interval=5
+//   seconds  = how long to stay in fast mode (clamped 0..FAST_SAMPLE_MAX_SECONDS).
+//              0 cancels test mode and reverts to hourly immediately.
+//   interval = seconds between samples while active (>= 1s; default 5s).
+// Auto-reverts to the hourly interval when the window expires, so a forgotten
+// test session can never drain the battery. No reflash needed to toggle.
+void handleApiFastSample() {
+    lastServerContactMs = millis();  // server heartbeat
+    lastApiActivityMs = millis();    // keep awake during testing
+    if (server.arg("token") != API_REBOOT_TOKEN) {
+        server.send(401, "text/plain", "unauthorized");
+        return;
+    }
+
+    long seconds = server.hasArg("seconds") ? server.arg("seconds").toInt() : 600;
+    if (seconds < 0) seconds = 0;
+    if (seconds > FAST_SAMPLE_MAX_SECONDS) seconds = FAST_SAMPLE_MAX_SECONDS;
+
+    long intervalMs = (server.hasArg("interval") ? server.arg("interval").toInt() : 5) * 1000L;
+    if (intervalMs < (long)FAST_SAMPLE_MIN_INTERVAL_MS) intervalMs = FAST_SAMPLE_MIN_INTERVAL_MS;
+    fastSampleIntervalMs = (unsigned long)intervalMs;
+
+    JsonDocument doc;
+    if (seconds == 0) {
+        fastSampleUntilMs = 0;
+        lastSensorRead = 0;  // force one immediate read so the cancel is visible
+        doc["active"] = false;
+        doc["message"] = "Fast sample cancelled — back to hourly";
+        Serial.println("[FASTSAMPLE] Cancelled, reverting to hourly");
+    } else {
+        fastSampleUntilMs = millis() + (unsigned long)seconds * 1000UL;
+        lastSensorRead = 0;  // force an immediate first sample
+        doc["active"] = true;
+        doc["seconds"] = seconds;
+        doc["intervalSec"] = fastSampleIntervalMs / 1000;
+        doc["message"] = "Fast sample active";
+        Serial.printf("[FASTSAMPLE] Active for %lds at %lus interval\n",
+                      seconds, fastSampleIntervalMs / 1000);
+    }
+    String json;
+    serializeJson(doc, json);
+    server.send(200, "application/json", json);
 }
 
 // API: Get event log as JSON array (newest first)
@@ -830,6 +896,7 @@ void setup() {
     server.on("/api/valve", HTTP_POST, handleApiValve);
     server.on("/api/closeall", HTTP_POST, handleApiCloseAll);
     server.on("/api/reboot", HTTP_POST, handleApiReboot);
+    server.on("/api/fastsample", HTTP_POST, handleApiFastSample);
     server.on("/api/events", HTTP_GET, handleApiEvents);
     server.on("/api/valvestats", HTTP_GET, handleApiValveStats);
     server.on("/api/scan", HTTP_GET, handleApiScan);
@@ -1080,11 +1147,13 @@ void loop() {
     }
     #endif
 
-    // Read sensors periodically
-    if (millis() - lastSensorRead >= SENSOR_READ_INTERVAL_MS) {
+    // Read sensors periodically (hourly normally; fast while test mode is active)
+    if (millis() - lastSensorRead >= effectiveSensorIntervalMs()) {
         readSensors();
         lastSensorRead = millis();
-        Serial.printf("[HOURLY] Battery=%.2fV RSSI=%d Heap=%u Temp=%.1fC\n",
+        bool fast = (fastSampleUntilMs != 0 && (long)(fastSampleUntilMs - millis()) > 0);
+        Serial.printf("[%s] Battery=%.2fV RSSI=%d Heap=%u Temp=%.1fC\n",
+                      fast ? "FAST" : "HOURLY",
                       cachedBatteryV, WiFi.RSSI(), ESP.getFreeHeap(), temperatureRead());
 
         #if MQTT_ENABLED

@@ -549,6 +549,23 @@ a{color:var(--blue);text-decoration:none}
 
     <!-- Sensor Cards -->
     <div class="section-header"><h2>📡 Sensors</h2></div>
+
+    <!-- Sensor Test Mode — live soil readings on demand, auto-reverts to hourly -->
+    <div class="card" id="sensor-test-card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-weight:700;font-size:.95rem">🧪 Sensor Test Mode</div>
+          <div style="font-size:.75rem;color:var(--text3)">Live soil readings every 5s. Auto-stops after 10 min so it never drains the battery.</div>
+        </div>
+        <button id="sensor-test-btn" onclick="toggleSensorTest()"
+          style="padding:10px 18px;border-radius:8px;border:none;background:var(--green);color:#fff;font-weight:700;font-size:.9rem;cursor:pointer;min-width:150px">
+          ▶ Start Test Mode
+        </button>
+      </div>
+      <div id="sensor-test-status" style="font-size:.78rem;color:var(--text2);margin-top:8px;display:none"></div>
+      <div id="sensor-test-live" style="display:none;margin-top:12px"></div>
+    </div>
+
     <div class="sensor-grid">
       <div class="card health-card" style="cursor:pointer" onclick="showPanel('history')">
         <div class="hc-header"><span class="hc-icon">🌡️</span><span class="hc-label">Temp / Humidity</span></div>
@@ -2173,6 +2190,94 @@ function updateClock() {
 updateClock(); setInterval(updateClock, 1000);
 
 function el(id) { return document.getElementById(id); }
+
+// ─── Sensor Test Mode ───────────────────────────────────────────
+// Toggles the ESP32's fast-sample firmware mode (5s readings, auto-reverts to
+// hourly). While active, polls /api/sensor-live every 4s and shows raw + %.
+var _sensorTestPoll = null;
+var _sensorTestActive = false;
+
+function toggleSensorTest() {
+  if (_sensorTestActive) { stopSensorTest(); return; }
+  var btn = el('sensor-test-btn');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  fetch('/api/sensor-test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({on: true, seconds: 600, interval: 5})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    btn.disabled = false;
+    if (!d.ok) { showSensorTestError(d.message || 'Failed to start'); return; }
+    _sensorTestActive = true;
+    btn.textContent = '■ Stop Test Mode';
+    btn.style.background = 'var(--red)';
+    el('sensor-test-status').style.display = 'block';
+    el('sensor-test-live').style.display = 'block';
+    pollSensorLive();
+    _sensorTestPoll = setInterval(pollSensorLive, 4000);
+  }).catch(function(e){ btn.disabled = false; showSensorTestError(String(e)); });
+}
+
+function stopSensorTest() {
+  var btn = el('sensor-test-btn');
+  btn.disabled = true; btn.textContent = 'Stopping…';
+  if (_sensorTestPoll) { clearInterval(_sensorTestPoll); _sensorTestPoll = null; }
+  fetch('/api/sensor-test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({on: false})
+  }).then(function(r){ return r.json(); }).then(function(){
+    finishSensorTest();
+  }).catch(function(){ finishSensorTest(); });
+}
+
+function finishSensorTest() {
+  _sensorTestActive = false;
+  var btn = el('sensor-test-btn');
+  btn.disabled = false;
+  btn.textContent = '▶ Start Test Mode';
+  btn.style.background = 'var(--green)';
+  el('sensor-test-status').textContent = 'Back to automatic (hourly sampling).';
+}
+
+function showSensorTestError(msg) {
+  var s = el('sensor-test-status');
+  s.style.display = 'block';
+  s.innerHTML = '<span style="color:var(--red)">⚠ ' + msg + '</span>';
+}
+
+function pollSensorLive() {
+  fetch('/api/sensor-live').then(function(r){ return r.json(); }).then(function(d){
+    if (!d.ok) { el('sensor-test-status').textContent = '⚠ ESP32 not responding…'; return; }
+    // If firmware auto-reverted (window expired), stop polling and reset UI.
+    if (!d.fast_active && _sensorTestActive) {
+      if (_sensorTestPoll) { clearInterval(_sensorTestPoll); _sensorTestPoll = null; }
+      finishSensorTest();
+      el('sensor-test-status').textContent = 'Test window ended — back to automatic (hourly).';
+      // one final render of the last values
+    }
+    var remain = d.remain_sec || 0;
+    var mm = Math.floor(remain / 60), ss = remain % 60;
+    el('sensor-test-status').textContent = d.fast_active
+      ? ('● Live · updating every ' + (d.interval_sec || 5) + 's · auto-stops in ' + mm + 'm ' + ss + 's')
+      : 'Automatic (hourly sampling).';
+    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">';
+    (d.sensors || []).forEach(function(s){
+      // Heuristic: raw < ~400 = likely disconnected/floating.
+      var connected = s.raw != null && s.raw >= 400;
+      var color = connected ? 'var(--green-dark)' : 'var(--text3)';
+      var badge = connected ? '' : ' <span style="font-size:.65rem;color:var(--text3)">(no sensor?)</span>';
+      html += '<div class="card" style="padding:10px">' +
+        '<div style="font-size:.72rem;color:var(--text3)">GPIO ' + (s.gpio != null ? s.gpio : '?') + ' · ' + esc(s.name || ('Soil ' + s.index)) + badge + '</div>' +
+        '<div style="font-size:1.5rem;font-weight:800;color:' + color + '">' + (s.pct != null ? s.pct + '%' : '—') + '</div>' +
+        '<div style="font-size:.7rem;color:var(--text3)">raw ' + (s.raw != null ? s.raw : '—') + '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+    el('sensor-test-live').innerHTML = html;
+  }).catch(function(){ el('sensor-test-status').textContent = '⚠ Connection error…'; });
+}
+
 function fmt(n, d) { if (d === undefined) d = 1; return n == null ? '—' : Number(n).toFixed(d); }
 // Format a watering duration: seconds for sub-minute runs (manual tests, drip pulses), else minutes.
 function fmtDur(sec) { if (!sec) return null; return sec < 60 ? sec + ' sec' : fmt(sec / 60, 1) + ' min'; }

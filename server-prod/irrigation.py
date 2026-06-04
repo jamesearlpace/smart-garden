@@ -376,6 +376,31 @@ class IrrigationEngine:
             log.error("Remote reboot failed: %s", e)
             return False, str(e)[:200]
 
+    def set_fast_sample(self, seconds: int, interval: int) -> tuple[bool, str]:
+        """Toggle the ESP32 firmware's fast-sample test mode (token-protected).
+
+        seconds: how long to sample quickly (0 = cancel, back to hourly).
+        interval: seconds between samples while active.
+        Auto-reverts in firmware, so it can't drain the battery if forgotten.
+        Returns (success, message).
+        """
+        if not self.reboot_token:
+            return False, "reboot_token not configured"
+        try:
+            resp = self._esp32.post(
+                f"{self.esp32_url}/api/fastsample",
+                params={"token": self.reboot_token,
+                        "seconds": int(seconds), "interval": int(interval)},
+                timeout=ESP32_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                return False, "401: token rejected by firmware"
+            resp.raise_for_status()
+            return True, resp.text
+        except requests.RequestException as e:
+            log.error("Fast-sample toggle failed: %s", e)
+            return False, str(e)[:200]
+
     # ΓöÇΓöÇ Decision logic ΓöÇΓöÇ
 
     def calculate_weather_scale(self, allow_weather_fetch: bool = True) -> dict:

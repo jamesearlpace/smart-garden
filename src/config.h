@@ -30,11 +30,11 @@ const char* MQTT_PASS     = "";
 // Pin Assignments — match the wiring guide
 // ============================================================
 
-// Soil moisture sensors (analog input)
-#define SOIL_SENSOR_1  32  // Zone 1 - Garden
-#define SOIL_SENSOR_2  33  // Zone 2 - Grapes
-#define SOIL_SENSOR_3  34  // Zone 3 - Fruit trees
-#define SOIL_SENSOR_4  35  // Zone 4 - South lawn
+// Soil moisture sensors (analog input) — currently disabled in server config.yaml (sensors.soil_*: false)
+#define SOIL_SENSOR_1  32
+#define SOIL_SENSOR_2  33
+#define SOIL_SENSOR_3  34
+#define SOIL_SENSOR_4  35
 
 // DHT22 temperature & humidity
 #define DHT_PIN        4
@@ -109,6 +109,14 @@ const char* MQTT_PASS     = "";
 #define MCP_SCL_PIN        22
 #define VALVE_PULSE_MS     100   // How long to pulse the solenoid (ms)
 #define SENSOR_READ_INTERVAL_MS  3600000  // Read sensors every 60 minutes (hourly voltage report)
+
+// Fast-sample "test mode" — temporarily sample sensors quickly while testing,
+// then AUTO-REVERT to the hourly interval so the battery is never drained by a
+// forgotten test session. Toggled over WiFi via POST /api/fastsample (no reflash
+// needed to enter/exit). See handleApiFastSample().
+#define SENSOR_READ_INTERVAL_FAST_MS  5000     // default fast interval = 5s
+#define FAST_SAMPLE_MIN_INTERVAL_MS   1000     // floor: never faster than 1s
+#define FAST_SAMPLE_MAX_SECONDS       1800     // safety cap: max 30 min per session
 
 // ============================================================
 // Light Sleep — power saving between activity

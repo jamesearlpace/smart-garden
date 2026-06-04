@@ -3951,6 +3951,13 @@ showPanel = function(id) {
   if (id === 'config') {
     loadConfig();
   }
+  // The "settings" panel is a composite that absorbed the old p-config and
+  // p-telemetry panels, so the per-panel loaders above never fire for it.
+  // Load both when settings is shown (config inputs were rendering blank).
+  if (id === 'settings') {
+    loadConfig();
+    if (typeof loadTelemetry === 'function') loadTelemetry();
+  }
   if (id === 'history') {
     loadSensorHistory(window._shHours || 24);
   }

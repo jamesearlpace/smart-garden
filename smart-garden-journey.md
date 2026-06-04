@@ -1455,6 +1455,28 @@ Continued the audit. Five more real issues found and fixed (all deployed + pushe
 
 **Net batch G total: G7-G17, 11 fixes, issues #27-#30 closed.** Cockpit logic + display now audited end-to-end.
 
+### G18-G23 (2026-06-04 cont.) — whole-site fresh-eyes audit (Home, History, Settings, Map, Forecast)
+
+Audited every page beyond the Schedule cockpit. Site structure: `/` index.html (Home + Zones + History + Settings + Cam as SPA panels), `/map`, `/forecast` (+ Forecast-vs-Actual sub-tab), `/moisture-sim`, `/login`.
+
+| Tag | Page | What | Commit | Issue |
+|-----|------|------|--------|-------|
+| G18 | Home + History | Sub-minute runs showed "0.0 min" in Recent Activity feed (server `recent[].detail` in dashboard.py) + History detail tables → now "<N> sec". Added `fmtDur()` helper. | `ace5f99` | #33 |
+| G19 | **Settings** | **HIGH: Settings never loaded config — every field blank.** Composite "settings" panel absorbed old `p-config`, but the loader only fired for `id==='config'` (dead id). Blank form + Save's `||0` fallback = silent wipe of all skip rules (rain/wind/freeze protection). Fix: fire loadConfig+loadTelemetry on `id==='settings'`. | `fb4f2f7` | #31 |
+| G20 | Settings | Defensive guard: `cfgSave()` refuses to save if config not loaded, so a blank form can never zero out safety rules. | `427fed3` | #31 |
+| G21 | Map + nav | map.html nav linked to `/history` `/sensors` (404 — not routes). index.html ignored `location.hash`, so Forecast page's `/#history` etc. didn't open the right panel. Fixed both. | `74ef7a7` | #32 |
+| G22 | Forecast | Humidity always "?" (`w.humidity_pct`→`w.humidity`); Rain always "0mm" (`w.rain_forecast_mm`→`w.precip_mm`, so real rain never showed); manual zones predicted "Today" (API now returns auto_mode, template shows "Manual"). | `756cbbe` | #33 |
+| G23 | Forecast-vs-Actual | Manual zones stored "Water today" in daily snapshot (polluted accuracy) → now `predicted_skip=manual_mode` in irrigation.py `save_daily_forecast_snapshot` (future snapshots only). "Watered 0 min" → "<N> sec". | `2437996` | #33 |
+
+**Biggest catch: G19** — the Settings page was a latent data-loss bug. Saving from the (always-blank) form would have written 0 to every skip rule, disabling rain/wind/freeze skip protection on a live irrigation system.
+
+**Verified:** all pages load with 0 console errors; Settings populates real config; hash deep-links open correct panels; Forecast shows Humidity 74% / real rain / Manual zones; engine health OK after irrigation.py change. Login page clean. Cam panel shows "Waiting for first image" — the water-meter-cam is a separate service (offline), not a bug in this site.
+
+**Recurring theme across the whole site:** "a manual-mode zone must never look like the engine will auto-water it" — fixed on the banner (G10), all-zones status (G12), Forecast tab (G22), and Forecast-vs-Actual snapshot (G23).
+
+**Net whole-site audit: G7-G23, 17 fixes, issues #27-#33 closed.**
+
+
 
 
 

@@ -220,6 +220,12 @@ def create_app(config, engine, weather, billing):
 
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
     SESSION_SECRET = os.environ.get("SESSION_SECRET", "smartgarden2026default")
+    # Shared secret the ESP32-CAM sends as X-Cam-Token. Only enforced for
+    # requests that arrive over the cloudflare tunnel (internet); direct LAN
+    # posts from the cam don't need it (see cam_upload). Empty = not configured.
+    CAM_UPLOAD_SECRET = os.environ.get("CAM_UPLOAD_SECRET", "")
+    # Hard cap on a pushed frame (buffered into RAM). Real cam JPEGs are ~20-80KB.
+    CAM_MAX_UPLOAD_BYTES = 1_000_000
     SESSION_MAX_AGE = 86400 * 30  # 30 days
     ALLOWED_EMAILS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "allowed_emails.json")
     _allowed_emails_cache = {"mtime": 0.0, "emails": frozenset()}
@@ -281,7 +287,7 @@ def create_app(config, engine, weather, billing):
     @app.before_request
     def check_auth():
         # Public routes
-        public = ("/login", "/auth/", "/favicon.ico", "/static/", "/api/cam/upload", "/api/cam/status")
+        public = ("/login", "/auth/", "/favicon.ico", "/static/", "/api/cam/upload")
         if any(request.path.startswith(p) for p in public) or request.path == "/login":
             return None
         # Check session cookie
@@ -1370,10 +1376,32 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
-        """Receive a JPEG push from the ESP32-CAM."""
-        data = request.get_data()
+        """Receive a JPEG push from the ESP32-CAM.
+
+        The cam pushes directly over the LAN and can't do OAuth, so this route
+        is exempt from the session-cookie check. But it's also reachable from
+        the internet via the cloudflare tunnel, so we can't let anyone POST
+        images (issue #16: spam / image-poisoning). Rule:
+          - Tunnel (internet) requests carry Cf-* headers — they MUST present a
+            valid X-Cam-Token shared secret or get 401.
+          - Direct LAN posts (no Cf-* headers, can't be forged from the
+            internet because port 5125 isn't forwarded) are allowed without a
+            token so the cam keeps working without a firmware reflash.
+        """
+        via_tunnel = bool(request.headers.get("Cf-Connecting-Ip")
+                          or request.headers.get("Cf-Ray"))
+        if via_tunnel:
+            token = request.headers.get("X-Cam-Token", "")
+            if not (CAM_UPLOAD_SECRET and token
+                    and hmac.compare_digest(token, CAM_UPLOAD_SECRET)):
+                log.warning("cam_upload: rejected tunnel request without valid token from %s",
+                            request.headers.get("Cf-Connecting-Ip", "?"))
+                return jsonify({"error": "unauthorized"}), 401
+        data = request.get_data(cache=False)
         if not data or len(data) < 100:
             return jsonify({"error": "No image data"}), 400
+        if len(data) > CAM_MAX_UPLOAD_BYTES:
+            return jsonify({"error": "image too large"}), 413
         cam_state["image"] = data
         cam_state["timestamp"] = datetime.now().isoformat()
         cam_state["ocr_count"] += 1

@@ -2189,7 +2189,15 @@ function predictZoneSchedule(zoneId, liveData, forecast7) {
     // Open-Meteo returns ET0 and rain in mm — convert to inches before dividing by rootDepth (in).
     var et0In = (fc.et0 || 0) / MM_PER_IN_P;
     var rainIn = (fc.rain || 0) / MM_PER_IN_P;
-    m = m - (et0In * 0.90 / rootDepth) * 100 + (rainIn * 0.65 / rootDepth) * 100;
+    // Crop coefficient mirrors the engine (et_demand = et0 * kc). Was hardcoded 0.90,
+    // which is wrong for drip zones (Garden Kc 0.5-0.7, Grapes up to 1.15) and for
+    // peak-summer sprinklers (Kc 0.95) — the schedule grid then mispredicted watering
+    // nights. Compute Kc from the zone's real kc[] array for EACH night's actual date so
+    // a 7-day window crossing a month boundary picks up the season change. kc===0 means
+    // dormant season -> no ET drain (engine skips irrigation), matching engine behavior.
+    var nightMonth = new Date(Date.now() + (di + 1) * 86400000).getMonth() + 1;
+    var kc = getSeasonalKc(brain, nightMonth);
+    m = m - (et0In * kc / rootDepth) * 100 + (rainIn * 0.65 / rootDepth) * 100;
     var willWater = false;
     var skipReason = null;
     if (m <= madPct) {

@@ -430,6 +430,14 @@ class IrrigationEngine:
             return self._decision("skip", zone_id, "Dormant season ΓÇö no irrigation",
                                   {})
 
+        # Vacation mode — global pause of all auto-watering. Manual
+        # /api/run and /api/valve calls still work; only the auto
+        # decision engine is gated. Cleared from /moisture-sim UI.
+        if self.config.get("vacation_mode"):
+            return self._decision("skip", zone_id,
+                                  "Vacation mode — all auto-watering paused",
+                                  {"vacation_mode": True})
+
         # Zone-level Manual/Automatic mode (default: automatic for backward compat).
         # Manual mode disables ALL auto-decision watering; only explicit `reason="manual"`
         # calls to start_zone_watering still run.

@@ -490,6 +490,10 @@ def create_app(config, engine, weather, billing):
                 "heads": zone_cfg.get("heads", 4),
                 "est_gpm": zone_cfg.get("est_gpm", 4.0),
                 "area_sqft": zone_cfg.get("area_sqft", 0),
+                "max_runtime_min": zone_cfg.get("max_runtime_min", 30),
+                "wet_target": zone_cfg.get("wet_target", 90),
+                "dry_trigger": zone_cfg.get("dry_trigger", 30),
+                "soil_sensor": zone_cfg.get("soil_sensor", 0),
             },
             "balances": balances,
             "waterings": zone_waterings,
@@ -531,6 +535,10 @@ def create_app(config, engine, weather, billing):
             "heads": (1, 20),
             "est_gpm": (0.1, 40.0),
             "area_sqft": (10, 10000),
+            "max_runtime_min": (1, 120),
+            "wet_target": (50, 100),
+            "dry_trigger": (10, 60),
+            "mad_pct": (20, 80),
         }
         changes = {}
         for key, (lo, hi) in allowed.items():
@@ -539,6 +547,16 @@ def create_app(config, engine, weather, billing):
                 val = max(lo, min(hi, val))
                 zone_cfg[key] = round(val, 3)
                 changes[key] = zone_cfg[key]
+
+        # Integer-only: soil sensor channel (0-7)
+        if "soil_sensor" in data and data["soil_sensor"] is not None:
+            try:
+                sid = int(data["soil_sensor"])
+                if 0 <= sid <= 7:
+                    zone_cfg["soil_sensor"] = sid
+                    changes["soil_sensor"] = sid
+            except (TypeError, ValueError):
+                pass
 
         # Boolean: Manual/Automatic mode
         if "auto_mode" in data and data["auto_mode"] is not None:
@@ -706,6 +724,23 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/status")
     def api_status():
         return jsonify(status_summary())
+
+    @app.route("/api/vacation", methods=["GET", "POST"])
+    def api_vacation():
+        """Global vacation/pause-all-auto flag.
+
+        GET  -> {enabled: bool}
+        POST -> {enabled: bool} sets the flag, persists to config.yaml,
+                and is picked up by the engine on the next evaluate_zone()
+                call (no restart needed because engine.config is the
+                same dict object).
+        """
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            enabled = bool(data.get("enabled"))
+            config["vacation_mode"] = enabled
+            write_config_atomic(config)
+        return jsonify({"enabled": bool(config.get("vacation_mode", False))})
 
     @app.route("/health")
     @app.route("/api/health")

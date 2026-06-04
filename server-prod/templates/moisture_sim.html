@@ -262,7 +262,7 @@ h2 { margin: 0; font-size: 1.05rem; }
     <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
     <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
     <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
-    <a href="/moisture-sim" class="nav-item active"><span class="icon">💧</span> Moisture</a>
+    <a href="/moisture-sim" class="nav-item active"><span class="icon">💧</span> Schedule</a>
     <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
   </div>
   <div class="sidebar-footer">
@@ -292,6 +292,26 @@ h2 { margin: 0; font-size: 1.05rem; }
       <div class="nw-value" id="nw-value">—</div>
       <div class="nw-detail" id="nw-detail"></div>
     </div>
+  </div>
+
+  <!-- Vacation mode banner (only shown when vacation_mode=true) -->
+  <div id="vacation-banner" style="display:none; margin:8px 0 12px; padding:10px 14px; background:#fef3c7; border-left:4px solid #f59e0b; border-radius:6px; color:#92400e; font-size:.85rem; font-weight:600">
+    🏖️ <span>Vacation mode is ON — all auto-watering is paused across every zone. Manual Run Now still works.</span>
+  </div>
+
+  <!-- Action bar: emergency stop + vacation toggle (always visible, top of page) -->
+  <div class="action-bar" style="display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px; align-items:center">
+    <button id="btn-stop-all" type="button"
+            title="Immediately close every valve (emergency stop)"
+            style="background:#fee2e2; color:#b91c1c; border:1px solid #f87171; border-radius:6px; padding:6px 12px; font-size:.8rem; font-weight:700; cursor:pointer">
+      ⛔ Stop All
+    </button>
+    <button id="btn-vacation" type="button"
+            title="Pause all auto-watering across all zones (manual Run Now still works)"
+            style="background:#fff; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 12px; font-size:.8rem; font-weight:600; cursor:pointer">
+      🏖️ <span id="vacation-label">Vacation: —</span>
+    </button>
+    <span id="action-status" style="font-size:.75rem; color:var(--text2)"></span>
   </div>
 
   <div class="controls">
@@ -432,6 +452,31 @@ h2 { margin: 0; font-size: 1.05rem; }
           <label>Root Depth (in)</label>
           <input type="number" id="tune-root" min="2" max="36" step="1">
           <div class="tune-hint">Bucket size — deeper = slower drain</div>
+        </div>
+        <div class="tune-field">
+          <label>Max Runtime (min)</label>
+          <input type="number" id="tune-max-runtime" min="1" max="120" step="1">
+          <div class="tune-hint">Hard cap per cycle (safety)</div>
+        </div>
+        <div class="tune-field">
+          <label>Wet Target (%)</label>
+          <input type="number" id="tune-wet-target" min="50" max="100" step="1">
+          <div class="tune-hint">Refill to this moisture %</div>
+        </div>
+        <div class="tune-field">
+          <label>Dry Trigger (%)</label>
+          <input type="number" id="tune-dry-trigger" min="10" max="60" step="1">
+          <div class="tune-hint">Water when soil drops below this</div>
+        </div>
+        <div class="tune-field">
+          <label>MAD (%)</label>
+          <input type="number" id="tune-mad-pct" min="20" max="80" step="1">
+          <div class="tune-hint">Management Allowable Depletion</div>
+        </div>
+        <div class="tune-field">
+          <label>Soil Sensor #</label>
+          <input type="number" id="tune-soil-sensor" min="0" max="7" step="1">
+          <div class="tune-hint">ADC channel (0-7)</div>
         </div>
       </div>
 
@@ -2216,8 +2261,9 @@ function refreshAllZones() {
 
     // ── Build status table ──
     var statusHtml = '<thead><tr>'
-      + '<th>Zone</th><th>Mode</th><th class="az-num">Moisture</th><th class="az-num">MAD</th>'
+      + '<th>Zone</th><th>Mode</th><th>Live</th><th class="az-num">Moisture</th><th class="az-num">MAD</th>'
       + '<th>Status</th><th class="az-num">Next water</th><th class="az-num">Last run</th><th class="az-num">Gal / 7d</th>'
+      + '<th>Action</th>'
       + '</tr></thead><tbody>';
     var zonesNeedingNow = 0, zonesSoon = 0, totalGalWeek = 0;
     var firingByNight = [0, 0, 0, 0, 0, 0, 0]; // # zones watering each of next 7 nights
@@ -2227,7 +2273,7 @@ function refreshAllZones() {
       var pred = predictZoneSchedule(z.id, ld, forecast7);
       if (!pred) {
         statusHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
-          + '<td colspan="7" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
+          + '<td colspan="9" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
         return;
       }
       var firstFire = -1;
@@ -2260,16 +2306,28 @@ function refreshAllZones() {
       statusHtml += '<tr>'
         + '<td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
         + '<td>' + modePill + '</td>'
+        + '<td id="live-z' + z.id + '"><span style="color:#94a3b8">⚪ idle</span></td>'
         + '<td class="az-num">' + Math.round(pred.curM) + '%</td>'
         + '<td class="az-num" style="color:var(--text3)">' + Math.round(pred.madPct) + '%</td>'
         + '<td class="' + statusCls + '">' + statusTxt + '</td>'
         + '<td class="az-num">' + nextTxt + '</td>'
         + '<td class="az-num" style="color:var(--text2)">' + fmtLastWatered(ld.waterings || []) + '</td>'
         + '<td class="az-num">' + (gal > 0 ? Math.round(gal) : '—') + '</td>'
+        + '<td><button type="button" class="az-run-btn" data-zone-id="' + z.id + '" data-zone-name="' + z.name.replace(/"/g, '&quot;') + '" style="background:#fff; color:var(--green-dark); border:1px solid var(--green); border-radius:4px; padding:3px 8px; font-size:.72rem; font-weight:600; cursor:pointer" title="Manually open this valve">▶ Run</button></td>'
         + '</tr>';
     });
     statusHtml += '</tbody>';
     document.getElementById('az-status-table').innerHTML = statusHtml;
+
+    // Wire up Run Now buttons after table is rendered
+    document.querySelectorAll('.az-run-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        runZoneNow(parseInt(this.dataset.zoneId), this.dataset.zoneName);
+      });
+    });
+
+    // Refresh live valve state immediately after table renders
+    refreshLiveValveState();
 
     // ── Build 7-night schedule grid ──
     var schedHtml = '<thead><tr><th>Zone</th>';
@@ -2488,6 +2546,11 @@ function populateTunePanel(zoneInfo) {
   document.getElementById('tune-area').value = area || '';
   document.getElementById('tune-precip').value = (z.precip_rate_iph || 1.0).toFixed(2);
   document.getElementById('tune-root').value = z.root_depth_in || 6;
+  document.getElementById('tune-max-runtime').value = z.max_runtime_min || 30;
+  document.getElementById('tune-wet-target').value = z.wet_target != null ? z.wet_target : 90;
+  document.getElementById('tune-dry-trigger').value = z.dry_trigger != null ? z.dry_trigger : 30;
+  document.getElementById('tune-mad-pct').value = z.mad_pct != null ? z.mad_pct : 50;
+  document.getElementById('tune-soil-sensor').value = z.soil_sensor != null ? z.soil_sensor : 0;
 
   // Show what precip rate implies and vice versa
   updateTuneCalcs();
@@ -2589,7 +2652,12 @@ document.getElementById('tune-save').addEventListener('click', function() {
     heads: parseInt(document.getElementById('tune-heads').value),
     est_gpm: parseFloat(document.getElementById('tune-gpm').value),
     precip_rate_iph: parseFloat(document.getElementById('tune-precip').value),
-    root_depth_in: parseInt(document.getElementById('tune-root').value)
+    root_depth_in: parseInt(document.getElementById('tune-root').value),
+    max_runtime_min: parseInt(document.getElementById('tune-max-runtime').value),
+    wet_target: parseInt(document.getElementById('tune-wet-target').value),
+    dry_trigger: parseInt(document.getElementById('tune-dry-trigger').value),
+    mad_pct: parseInt(document.getElementById('tune-mad-pct').value),
+    soil_sensor: parseInt(document.getElementById('tune-soil-sensor').value)
   };
   var area = parseFloat(document.getElementById('tune-area').value);
   if (area > 0) payload.area_sqft = area;
@@ -2750,6 +2818,124 @@ function refreshSidebarStatus() {
 refreshSidebarStatus();
 setInterval(refreshSidebarStatus, 30000);
 
+// ═══════════════════════════════════════════════════════════════
+// Cockpit controls: Stop All, Vacation toggle, Live valve state
+// ═══════════════════════════════════════════════════════════════
+function flashActionStatus(msg, isError) {
+  var el = document.getElementById('action-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isError ? '#dc2626' : '#16a34a';
+  setTimeout(function() { el.textContent = ''; }, 4000);
+}
+
+document.getElementById('btn-stop-all').addEventListener('click', function() {
+  if (!confirm('⛔ Close every valve right now?\n\nThis will stop any zone currently watering. Manual and auto runs can resume after.')) return;
+  var btn = this;
+  btn.disabled = true;
+  fetch('/api/closeall', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    .then(function(r) { return r.json(); })
+    .then(function(resp) {
+      if (resp && resp.ok) {
+        flashActionStatus('✅ All valves closed');
+        refreshLiveValveState();
+      } else {
+        flashActionStatus('❌ ' + ((resp && resp.error) || 'Failed'), true);
+      }
+    })
+    .catch(function(err) { flashActionStatus('❌ ' + err, true); })
+    .finally(function() { btn.disabled = false; });
+});
+
+function setVacationButton(enabled) {
+  var lbl = document.getElementById('vacation-label');
+  var btn = document.getElementById('btn-vacation');
+  var banner = document.getElementById('vacation-banner');
+  if (lbl) lbl.textContent = 'Vacation: ' + (enabled ? 'ON' : 'OFF');
+  if (btn) {
+    btn.style.background = enabled ? '#fef3c7' : '#fff';
+    btn.style.borderColor = enabled ? '#f59e0b' : 'var(--border)';
+    btn.style.color = enabled ? '#92400e' : 'var(--text)';
+  }
+  if (banner) banner.style.display = enabled ? 'flex' : 'none';
+}
+
+function loadVacationState() {
+  fetch('/api/vacation').then(function(r) { return r.json(); }).then(function(d) {
+    setVacationButton(!!(d && d.enabled));
+  }).catch(function() { /* silent */ });
+}
+
+document.getElementById('btn-vacation').addEventListener('click', function() {
+  var btn = this;
+  // Read current state from label
+  var lbl = document.getElementById('vacation-label');
+  var currentlyOn = lbl && /ON/.test(lbl.textContent);
+  var nextState = !currentlyOn;
+  var msg = nextState
+    ? '🏖️ Turn ON vacation mode?\n\nAuto-watering pauses across ALL zones. Manual Run Now still works.'
+    : '☀️ Turn OFF vacation mode?\n\nAuto-watering resumes on its normal schedule.';
+  if (!confirm(msg)) return;
+  btn.disabled = true;
+  fetch('/api/vacation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: nextState })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(resp) {
+      setVacationButton(!!(resp && resp.enabled));
+      flashActionStatus(resp.enabled ? '🏖️ Vacation mode ON' : '☀️ Vacation mode OFF');
+    })
+    .catch(function(err) { flashActionStatus('❌ ' + err, true); })
+    .finally(function() { btn.disabled = false; });
+});
+
+// Live valve state poller — updates live-z* cells in the all-zones table
+function refreshLiveValveState() {
+  fetch('/api/status').then(function(r) { return r.json(); }).then(function(d) {
+    var active = (d && Array.isArray(d.active_zones)) ? d.active_zones : [];
+    var cells = document.querySelectorAll('[id^="live-z"]');
+    cells.forEach(function(cell) {
+      var zid = parseInt(cell.id.replace('live-z', ''));
+      var isActive = active.indexOf(zid) !== -1;
+      cell.innerHTML = isActive
+        ? '<span style="color:#16a34a; font-weight:700">🟢 RUNNING</span>'
+        : '<span style="color:#94a3b8">⚪ idle</span>';
+    });
+  }).catch(function() { /* silent */ });
+}
+
+function runZoneNow(zoneId, zoneName) {
+  var defaultMins = 5;
+  var raw = prompt('Run zone "' + zoneName + '" for how many minutes?', String(defaultMins));
+  if (raw === null) return;
+  var mins = parseInt(raw, 10);
+  if (!mins || mins < 1 || mins > 120) {
+    flashActionStatus('❌ Minutes must be 1-120', true);
+    return;
+  }
+  fetch('/api/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: zoneId, minutes: mins })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(resp) {
+      if (resp && resp.ok) {
+        flashActionStatus('▶ Zone ' + (zoneId + 1) + ' started for ' + mins + 'm');
+        setTimeout(refreshLiveValveState, 500);
+      } else {
+        flashActionStatus('❌ ' + ((resp && resp.error) || 'Failed'), true);
+      }
+    })
+    .catch(function(err) { flashActionStatus('❌ ' + err, true); });
+}
+
+loadVacationState();
+refreshLiveValveState();
+setInterval(refreshLiveValveState, 15000);
+
 // Initial load
 renderModeToggle();
 refresh();
@@ -2767,7 +2953,7 @@ loadSeasonalOutlook();
     <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
     <a href="/#settings" class="mob-nav-item"><span class="mob-icon">⚙️</span>Settings</a>
     <a href="/forecast" class="mob-nav-item"><span class="mob-icon">🌧️</span>Forecast</a>
-    <a href="/moisture-sim" class="mob-nav-item active"><span class="mob-icon">💧</span>Moisture</a>
+    <a href="/moisture-sim" class="mob-nav-item active"><span class="mob-icon">💧</span>Schedule</a>
     <a href="/#cam" class="mob-nav-item"><span class="mob-icon">📷</span>Cam</a>
   </div>
 </div>

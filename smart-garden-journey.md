@@ -478,6 +478,7 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
 | smart-garden-server | ✅ closed | — | #15 banner past-time, #16 mm-as-inches, #17 forecast dark theme, #18 missing templates, #19 orphan routes, #20 dead templates, #21 forecast no sidebar, #22 mobile nav drift, #23 server clutter, #24 redundant breadcrumb, #25 sidebar footer drift — all SHIPPED 2026-06-03. See session log below. |
 | smart-garden-server | ✅ closed | — | #3 same-zone double-click leaked orphan `watering_event` rows — FIXED 2026-06-04: idempotent guard in `start_zone_watering()`. Orphan event 164 backfilled. See June 4 session log. |
+| smart-garden-server | ✅ closed | — | #4 `daily_summary` table had no populator (empty since inception) — FIXED 2026-06-04: `BillingCalculator.update_daily_summary()` + 23:55 scheduler job + 59-day backfill. See June 4 session log. |
 
 ---
 
@@ -495,6 +496,24 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 - Code: 8-line guard in `irrigation.py::start_zone_watering()`, before `calculate_weather_scale`
 - DB cleanup: `UPDATE watering_event SET end_ts='2026-06-03T17:39:40', duration_sec=4, est_gallons=0.0 WHERE id=164` → orphan count now 0
 - Deployed: scp + restart `smart-garden-server` 2026-06-04 07:59:56 PDT, service active
+
+### Issue #4 — `daily_summary` table empty since inception
+
+Surfaced while auditing what other schema tables had no writers. `daily_summary` (date PK + total_gallons/cf, gallons_saved/cf_saved, cost, cost_avoided, et0_mm, rain_mm, avg_temp_f) is read by `/api/daily-summary-history` and `db.get_daily_summaries()` but `grep` for INSERT/UPDATE/UPSERT returned **zero matches**. Table had 0 rows.
+
+- Filed: [#4](https://github.com/jamesearlpace/smart-garden-server/issues/4)
+- Fix: added `BillingCalculator.update_daily_summary(date_str)` in [billing.py](../smart-garden-server-live/billing.py) — aggregates from `watering_event` + `skip_event` + `soil_balance` (zone 0) + `weather_log` (api source), computes cost via tier-aware difference-of-cumulative (`cost_for_cf(month_through_today) - cost_for_cf(month_through_yesterday)`), UPSERTs into `daily_summary`.
+- Scheduler: new cron job at 23:55 daily (right after the 23:00 `daily_balance`, before midnight). Wired in [server.py](../smart-garden-server-live/server.py).
+- Backfill: [backfill_daily_summary.py](../smart-garden-server-live/backfill_daily_summary.py) one-shot — populated **59 rows** spanning 2026-04-02 → 2026-06-04.
+- Sanity check on results:
+  - Most days $0.00 because they're inside tier 1's free 200 cf — correct
+  - 2026-05-31: 1190.5 gal / $8.37 — single big day pushed past tier 1, charged at tier 2's $5.10/100cf — correct
+  - 2026-06-01 (new billing month): back to $0.00 inside free tier — correct
+  - `gallons_saved=0` across all days because `skip_event` table is itself empty (separate latent bug, not part of this fix)
+  - 2026-06-04: `et0`/`rain` are `None` because `soil_balance` hasn't run yet for today (fills at 23:00) — tomorrow's run will overwrite with full values
+- Deployed: scp + restart 2026-06-04 08:15:38 PDT, service active, scheduler logs `BillingCalculator.update_daily_summary` job added cleanly.
+
+**Open follow-up:** `skip_event` table appears empty — none of the cycle-summary `zones_skipped` counts produce individual skip rows. Worth investigating: is `log_skip()` actually being called? If not, `gallons_saved` / `cost_avoided` will stay at 0 even after this fix. Separate issue, not yet filed.
 
 ---
 

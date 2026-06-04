@@ -6,7 +6,7 @@ what a dumb timer would have cost.
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime
 
 import database as db
 
@@ -165,4 +165,136 @@ class BillingCalculator:
             "projected_tier": projected_tier,
             "marginal_rate": self.marginal_rate(current_cf),
             "day_of_month": day_of_month,
+        }
+
+    # Indoor baseline assumed when computing tier-aware daily costs.
+    # Matches the 150 cf/month estimate used by get_monthly_bill_estimate().
+    INDOOR_CF_PER_MONTH = 150.0
+    DAYS_IN_MONTH = 30  # approximation matching should_tighten_budget()
+
+    def update_daily_summary(self, date_str: str | None = None) -> dict:
+        """Aggregate per-day water + skip + weather + cost into daily_summary.
+
+        Cost uses the difference-of-cumulative-cost approach so that tier
+        transitions mid-day are charged correctly and the base fee cancels.
+        Safe to re-run for any date — upserts on (date) primary key.
+        """
+        if date_str is None:
+            date_str = date.today().strftime("%Y-%m-%d")
+
+        month = date_str[:7]
+        try:
+            day_of_month = datetime.strptime(date_str, "%Y-%m-%d").day
+        except ValueError:
+            log.error("update_daily_summary: invalid date_str %r", date_str)
+            return {}
+
+        indoor_today = self.INDOOR_CF_PER_MONTH * (day_of_month / self.DAYS_IN_MONTH)
+        indoor_yday = (
+            self.INDOOR_CF_PER_MONTH * ((day_of_month - 1) / self.DAYS_IN_MONTH)
+            if day_of_month > 1 else 0.0
+        )
+
+        conn = db.get_conn()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(est_gallons), 0) AS gal, "
+                "       COALESCE(SUM(est_cf), 0) AS cf "
+                "FROM watering_event "
+                "WHERE DATE(start_ts) = ? AND end_ts IS NOT NULL",
+                (date_str,),
+            ).fetchone()
+            total_gallons = float(row["gal"])
+            total_cf = float(row["cf"])
+
+            row = conn.execute(
+                "SELECT COALESCE(SUM(est_gallons_saved), 0) AS gal, "
+                "       COALESCE(SUM(est_cf_saved), 0) AS cf "
+                "FROM skip_event WHERE DATE(ts) = ?",
+                (date_str,),
+            ).fetchone()
+            gallons_saved = float(row["gal"])
+            cf_saved = float(row["cf"])
+
+            row = conn.execute(
+                "SELECT COALESCE(SUM(est_cf), 0) AS cf "
+                "FROM watering_event "
+                "WHERE strftime('%Y-%m', start_ts) = ? "
+                "  AND DATE(start_ts) <= ? AND end_ts IS NOT NULL",
+                (month, date_str),
+            ).fetchone()
+            cum_cf_today = float(row["cf"])
+            cum_cf_yday = cum_cf_today - total_cf
+
+            row = conn.execute(
+                "SELECT COALESCE(SUM(est_cf_saved), 0) AS cf "
+                "FROM skip_event "
+                "WHERE strftime('%Y-%m', ts) = ? AND DATE(ts) <= ?",
+                (month, date_str),
+            ).fetchone()
+            cum_saved_today = float(row["cf"])
+            cum_saved_yday = cum_saved_today - cf_saved
+
+            cost_after = self.cost_for_cf(indoor_today + cum_cf_today)
+            cost_before = self.cost_for_cf(indoor_yday + cum_cf_yday)
+            cost = max(0.0, cost_after - cost_before)
+
+            timer_after = self.cost_for_cf(
+                indoor_today + cum_cf_today + cum_saved_today)
+            timer_before = self.cost_for_cf(
+                indoor_yday + cum_cf_yday + cum_saved_yday)
+            cost_avoided = max(0.0, (timer_after - timer_before) - cost)
+
+            row = conn.execute(
+                "SELECT et0_mm, rain_mm FROM soil_balance "
+                "WHERE zone_id = 0 AND date = ?",
+                (date_str,),
+            ).fetchone()
+            et0_mm = row["et0_mm"] if row else None
+            rain_mm = row["rain_mm"] if row else None
+
+            row = conn.execute(
+                "SELECT AVG(temp_f) AS avg_f FROM weather_log "
+                "WHERE source = 'api' AND DATE(ts) = ?",
+                (date_str,),
+            ).fetchone()
+            avg_temp_f = row["avg_f"] if row else None
+
+            conn.execute(
+                "INSERT INTO daily_summary "
+                "(date, total_gallons, total_cf, gallons_saved, cf_saved, "
+                " cost, cost_avoided, et0_mm, rain_mm, avg_temp_f) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(date) DO UPDATE SET "
+                "  total_gallons = excluded.total_gallons, "
+                "  total_cf      = excluded.total_cf, "
+                "  gallons_saved = excluded.gallons_saved, "
+                "  cf_saved      = excluded.cf_saved, "
+                "  cost          = excluded.cost, "
+                "  cost_avoided  = excluded.cost_avoided, "
+                "  et0_mm        = excluded.et0_mm, "
+                "  rain_mm       = excluded.rain_mm, "
+                "  avg_temp_f    = excluded.avg_temp_f",
+                (date_str, total_gallons, total_cf, gallons_saved, cf_saved,
+                 cost, cost_avoided, et0_mm, rain_mm, avg_temp_f),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        log.info(
+            "daily_summary[%s]: %.1f gal / $%.2f (saved %.1f gal / $%.2f)",
+            date_str, total_gallons, cost, gallons_saved, cost_avoided,
+        )
+        return {
+            "date": date_str,
+            "total_gallons": round(total_gallons, 1),
+            "total_cf": round(total_cf, 2),
+            "gallons_saved": round(gallons_saved, 1),
+            "cf_saved": round(cf_saved, 2),
+            "cost": round(cost, 2),
+            "cost_avoided": round(cost_avoided, 2),
+            "et0_mm": et0_mm,
+            "rain_mm": rain_mm,
+            "avg_temp_f": avg_temp_f,
         }

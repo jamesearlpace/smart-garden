@@ -1378,6 +1378,14 @@ def main():
                           id="daily_balance", max_instances=1,
                           misfire_grace_time=3600)
 
+        # Roll up the day's water, savings, weather, and cost into
+        # daily_summary at 23:55 — after daily_balance, before midnight.
+        scheduler.add_job(api_guarded(
+                              "daily_summary", billing.update_daily_summary),
+                          "cron", hour=23, minute=55,
+                          id="daily_summary", max_instances=1,
+                          misfire_grace_time=3600)
+
         # Capture forecast snapshot daily at 3:55 AM (before morning watering window)
         scheduler.add_job(api_guarded(
                               "forecast_snapshot", engine.save_daily_forecast_snapshot),

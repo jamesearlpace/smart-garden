@@ -572,6 +572,19 @@ def create_app(config, engine, weather, billing):
         if not changes:
             return jsonify({"ok": False, "error": "No valid fields"}), 400
 
+        # Cross-field sanity: the engine waters below dry_trigger and stops
+        # at wet_target, so wet_target must sit meaningfully above dry_trigger
+        # or the zone either never refills or thrashes. Reject incoherent
+        # combinations instead of silently persisting them.
+        wt = zone_cfg.get("wet_target")
+        dt = zone_cfg.get("dry_trigger")
+        if wt is not None and dt is not None and wt <= dt + 5:
+            return jsonify({
+                "ok": False,
+                "error": "Wet Target must be at least 5%% above Dry Trigger "
+                         "(got wet=%g, dry=%g)" % (wt, dt),
+            }), 400
+
         # Write updated config
         config["zones"][zone_idx] = zone_cfg
         write_config_atomic(config)

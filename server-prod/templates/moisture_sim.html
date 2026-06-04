@@ -2313,7 +2313,9 @@ function refreshAllZones() {
         + '<td class="az-num">' + nextTxt + '</td>'
         + '<td class="az-num" style="color:var(--text2)">' + fmtLastWatered(ld.waterings || []) + '</td>'
         + '<td class="az-num">' + (gal > 0 ? Math.round(gal) : '—') + '</td>'
-        + '<td><button type="button" class="az-run-btn" data-zone-id="' + z.id + '" data-zone-name="' + z.name.replace(/"/g, '&quot;') + '" style="background:#fff; color:var(--green-dark); border:1px solid var(--green); border-radius:4px; padding:3px 8px; font-size:.72rem; font-weight:600; cursor:pointer" title="Manually open this valve">▶ Run</button></td>'
+        + '<td>' + (z.installed
+            ? '<button type="button" class="az-run-btn" data-zone-id="' + z.id + '" data-zone-name="' + z.name.replace(/"/g, '&quot;') + '" style="background:#fff; color:var(--green-dark); border:1px solid var(--green); border-radius:4px; padding:3px 8px; font-size:.72rem; font-weight:600; cursor:pointer" title="Run this zone for its configured runtime">▶ Run</button>'
+            : '<span style="color:var(--text3)">—</span>') + '</td>'
         + '</tr>';
     });
     statusHtml += '</tbody>';
@@ -2907,23 +2909,23 @@ function refreshLiveValveState() {
 }
 
 function runZoneNow(zoneId, zoneName) {
-  var defaultMins = 5;
-  var raw = prompt('Run zone "' + zoneName + '" for how many minutes?', String(defaultMins));
-  if (raw === null) return;
-  var mins = parseInt(raw, 10);
-  if (!mins || mins < 1 || mins > 120) {
-    flashActionStatus('❌ Minutes must be 1-120', true);
-    return;
-  }
+  // The engine runs each zone for its configured max_runtime_min
+  // (weather-scaled) and auto-closes — there is no per-run duration
+  // override, so we surface the configured runtime instead of asking
+  // for arbitrary minutes the backend would ignore.
+  var zcfg = null;
+  for (var i = 0; i < ZONES.length; i++) { if (ZONES[i].id === zoneId) { zcfg = ZONES[i]; break; } }
+  var runMin = (zcfg && zcfg.max_runtime_min) ? zcfg.max_runtime_min : 30;
+  if (!confirm('▶ Run "' + zoneName + '" now?\n\nRuns for its configured ' + runMin + ' min (auto-adjusted for weather, then auto-closes). Change the runtime in Zone Tuning if needed.')) return;
   fetch('/api/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: zoneId, minutes: mins })
+    body: JSON.stringify({ id: zoneId })
   })
     .then(function(r) { return r.json(); })
     .then(function(resp) {
       if (resp && resp.ok) {
-        flashActionStatus('▶ Zone ' + (zoneId + 1) + ' started for ' + mins + 'm');
+        flashActionStatus('▶ Zone ' + (zoneId + 1) + ' started (~' + runMin + 'm)');
         setTimeout(refreshLiveValveState, 500);
       } else {
         flashActionStatus('❌ ' + ((resp && resp.error) || 'Failed'), true);

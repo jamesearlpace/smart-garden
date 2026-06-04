@@ -2244,8 +2244,14 @@ function fmtNight(offset) {
 }
 function fmtLastWatered(waterings) {
   if (!waterings || waterings.length === 0) return '—';
-  var last = waterings[waterings.length - 1];
-  if (!last.start_ts) return '—';
+  // The API does not guarantee chronological order, so pick the max start_ts
+  // rather than assuming the last array element is the most recent.
+  var last = waterings.reduce(function(a, b) {
+    if (!a || !a.start_ts) return b;
+    if (!b || !b.start_ts) return a;
+    return a.start_ts > b.start_ts ? a : b;
+  });
+  if (!last || !last.start_ts) return '—';
   var d = new Date(last.start_ts);
   var hoursAgo = (Date.now() - d.getTime()) / 3600000;
   if (hoursAgo < 24) return hoursAgo.toFixed(0) + 'h ago';

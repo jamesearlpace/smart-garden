@@ -697,6 +697,11 @@ def check_and_update_sensor_faults(zones: list):
             continue
         sensor_id = zone["soil_sensor"]
         zone_id = zone["id"]
+        # No sensor configured (soil_sensor: null) means there's nothing to
+        # fault on. Clear any stale fault row left over from a prior config.
+        if sensor_id is None:
+            clear_sensor_fault(zone_id)
+            continue
         anomaly = get_sensor_flatline(sensor_id, hours=48)
         if anomaly.get("railed"):
             set_sensor_fault(zone_id, "railed")

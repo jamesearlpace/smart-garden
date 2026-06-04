@@ -214,13 +214,25 @@ def create_app(config, engine, weather, billing):
     SESSION_SECRET = os.environ.get("SESSION_SECRET", "smartgarden2026default")
     SESSION_MAX_AGE = 86400 * 30  # 30 days
     ALLOWED_EMAILS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "allowed_emails.json")
+    _allowed_emails_cache = {"mtime": 0.0, "emails": frozenset()}
 
     def _load_allowed_emails():
+        # Called from check_auth() @before_request, so it ran once per HTTP
+        # request. Cache by mtime so disk only hits when the file actually changes.
         try:
-            with open(ALLOWED_EMAILS_FILE) as f:
-                return {e["email"].lower() for e in auth_json.load(f)}
-        except Exception:
-            return set()
+            mtime = os.path.getmtime(ALLOWED_EMAILS_FILE)
+        except OSError:
+            return frozenset()
+        if mtime != _allowed_emails_cache["mtime"]:
+            try:
+                with open(ALLOWED_EMAILS_FILE) as f:
+                    _allowed_emails_cache["emails"] = frozenset(
+                        e["email"].lower() for e in auth_json.load(f)
+                    )
+                _allowed_emails_cache["mtime"] = mtime
+            except Exception:
+                return frozenset()
+        return _allowed_emails_cache["emails"]
 
     def _make_session_token(email):
         ts = str(int(time.time()))
@@ -1362,7 +1374,7 @@ def create_app(config, engine, weather, billing):
         ("sensor_log",        "ts",          False, None, "DISABLED — all soil_* gates off in config.yaml"),
         ("weather_log",       "ts",          False, 1,    "Weather observations"),
         ("watering_event",    "start_ts",    False, 168,  "Watering events (sparse — days between OK)"),
-        ("skip_event",        "ts",          False, 1,    "Per-zone skip decisions"),
+        ("skip_event",        "ts",          False, 25,   "Per-zone skip decisions (deduped per zone per day)"),
         ("daily_summary",     "date",        True,  48,   "Nightly cost/savings rollup"),
         ("billing_cycle",     "month",       True,  None, "Monthly bill cache (KNOWN UNUSED — dead schema)"),
         ("system_health",     "ts",          False, 1,    "ESP32 health (rssi/heap/temp)"),

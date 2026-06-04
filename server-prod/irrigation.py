@@ -720,13 +720,37 @@ class IrrigationEngine:
             if self.open_valve(zone_id, timeout=command_timeout, retry=retry):
                 event_id = db.start_watering(zone_id, soil_before, et_demand, reason)
                 with self._start_lock:
-                    # Reservation may have been cleared by stop_zone_watering
-                    # during the open_valve round-trip; only update if still ours.
-                    if zone_id in self._active and self._active[zone_id]["event_id"] == -1:
-                        self._active[zone_id].update({
+                    entry = self._active.get(zone_id)
+                    if entry is not None and entry.get("event_id", -1) == -1:
+                        # Normal path: our sentinel survived — fill it in.
+                        entry.update({
                             "event_id": event_id,
                             "weather_scale_pct": scale_pct,
                         })
+                    elif entry is None:
+                        # Our reservation was cleared during the open_valve
+                        # round-trip. This happens on the rapid-switch path:
+                        # open_valve's own preemption belt-and-suspenders calls
+                        # close_all(), which clears ALL of _active — including
+                        # the sentinel we just made for THIS zone — right before
+                        # it physically opens our valve. Without re-tracking, the
+                        # valve is left physically OPEN but untracked, so
+                        # safety_check never closes it: the dashboard shows every
+                        # zone off while one valve stays stuck on. Re-establish
+                        # tracking so the timeout/safety path will close it.
+                        self._active[zone_id] = {
+                            "event_id": event_id,
+                            "start_time": time.time(),
+                            "soil_before": soil_before,
+                            "weather_scale_pct": scale_pct,
+                        }
+                        log.warning("%s: re-established tracking after the slot was "
+                                    "cleared mid-open (event %d) — rapid-switch race",
+                                    self._zone_label(zone_id), event_id)
+                    else:
+                        # A different real event already owns this slot; finalize
+                        # ours so we don't leak a dangling open DB row.
+                        db.end_watering(event_id, soil_before, 0, 0)
                 log.info("%s watering started (event %d)", self._zone_label(zone_id), event_id)
                 return True
             # open_valve failed - release the reservation
@@ -927,7 +951,9 @@ class IrrigationEngine:
         return actions
 
     def safety_check(self):
-        """Safety: close any valve that's been open too long."""
+        """Safety: close any valve open too long, and reconcile the firmware's
+        physical valve state against our tracking so a desync can never leave a
+        valve stuck on."""
         now = time.time()
         for zone_id, active in list(self._active.items()):
             elapsed = now - active["start_time"]
@@ -935,6 +961,42 @@ class IrrigationEngine:
                 log.warning("Safety timeout: %s open for %ds - forcing close",
                             self._zone_label(zone_id), int(elapsed))
                 self.stop_zone_watering(zone_id, soil_after=0)
+
+        # Reconcile physical vs tracked state. The firmware is the source of
+        # truth for what's physically open. If a valve reports OPEN but we are
+        # not tracking it in _active, it's an orphan (rapid-switch race, a
+        # manual toggle that drifted, a missed bookkeeping update) — nothing
+        # else will ever close it, so close it here. This is the safety net for
+        # the "dashboard shows all zones off but one valve is stuck on" bug.
+        try:
+            status = self.get_esp32_status(force_fresh=True)
+        except Exception as e:
+            log.debug("safety_check: ESP32 status fetch failed, skipping reconcile: %s", e)
+            status = None
+        valves = (status or {}).get("valves", []) or []
+        if valves:
+            with self._start_lock:
+                tracked = set(self._active.keys())
+                # If a start is mid-flight (sentinel reservation present), the
+                # physical/tracked picture is transient — skip reconcile this
+                # cycle so we never close a valve that's actively being opened.
+                setup_in_progress = any(
+                    a.get("event_id", -1) == -1 for a in self._active.values()
+                )
+            if not setup_in_progress:
+                for vid, v in enumerate(valves):
+                    if vid >= len(self.config["zones"]):
+                        continue
+                    inverted = bool(self.config["zones"][vid].get("inverted", False))
+                    physically_open = bool(v.get("open")) ^ inverted
+                    if physically_open and vid not in tracked:
+                        log.warning("Reconcile: valve %s reported OPEN but untracked "
+                                    "— force-closing orphan", self._zone_label(vid))
+                        try:
+                            self.close_valve(vid, retry=False)
+                        except Exception as e:
+                            log.error("Reconcile: failed to close orphan valve %d: %s",
+                                      vid, e)
 
     def get_zone_taw_mm(self, zone_id: int) -> float:
         """Total Available Water in mm for a zone."""

@@ -1444,5 +1444,17 @@ Continued the audit. Five more real issues found and fixed (all deployed + pushe
 
 **Lessons:** (1) A throw early in a `.then()` callback silently aborts every later UI update in that chain — wrap risky calls (like chart rendering) so they can't take down unrelated UI. (2) Never assume API array ordering — sort/reduce explicitly. (3) The "manual zone shouldn't look like it needs water" theme recurred across the banner (G10), status badge (G12), and was the root reason the hint/fields were misleading.
 
+### G16-G17 (2026-06-04 cont.) — second polish pass
+
+| Tag | What | Commit |
+|-----|------|--------|
+| G16 | Sub-minute watering runs (manual tests, drip pulses — e.g. a 13s valve test) rendered as "0 min (0.00\")" in the Watering History list and chart tooltip, looking like no-ops. Now show "<N> sec" for <60s and "<0.01\"" for tiny depths. | `c56931b` |
+| G17 | Header moisture-% badge showed a meaningless "—%" in all-zones mode (it's per-zone only). Now hidden in all-zones mode, restored in single-zone. | `c934e4d` |
+
+**Verified:** Garden history now reads "3 sec (<0.01\")" etc.; header badge hidden on all-zones / shows "44.9%" on single zone. Final health check: **0 console errors/warnings** across zones 0, 7, 8, all (Chart.js race fix holding). Cycle stats already correctly exclude sub-minute runs (`duration_sec <= 60` filter in computeStats), so the stat cards reflect real waterings. Mobile (390px) clean — no overflow, sticky column works.
+
+**Net batch G total: G7-G17, 11 fixes, issues #27-#30 closed.** Cockpit logic + display now audited end-to-end.
+
+
 
 

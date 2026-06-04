@@ -2289,12 +2289,6 @@ function timeAgo(ts) {
   return Math.floor(sec / 86400) + 'd ago';
 }
 
-function fmtUptime(sec) {
-  if (sec >= 86400) return fmt(sec / 86400, 1) + ' d';
-  if (sec >= 3600) return fmt(sec / 3600, 1) + ' h';
-  return fmt(sec / 60, 0) + ' min';
-}
-
 function detectAlerts(d) {
   /* Returns array of {level: 'red'|'amber', text: string} sorted by priority */
   var alerts = [];
@@ -2589,18 +2583,11 @@ function renderHome(d) {
 /* ── DRILL-DOWN SYSTEM ── */
 function toggleDrilldown(ddId, evt) {
   if (evt && evt.target.closest('.drilldown')) return; // don't toggle when clicking inside drilldown
-  var allDDs = document.querySelectorAll('.drilldown');
-  var anyOpen = document.querySelector('.drilldown.open');
-  if (anyOpen) {
-    // Collapse all
-    allDDs.forEach(function(d) { d.classList.remove('open'); });
-  } else {
-    // Expand all and load charts
-    allDDs.forEach(function(d) {
-      d.classList.add('open');
-      loadDrilldownChart(d.id, 24);
-    });
-  }
+  var dd = document.getElementById(ddId);
+  if (!dd) return;
+  var wasOpen = dd.classList.contains('open');
+  dd.classList.toggle('open');
+  if (!wasOpen) loadDrilldownChart(ddId, 24);
 }
 
 function loadDrilldownChart(ddId, hours) {
@@ -5536,14 +5523,14 @@ function camLoadReadings() {
       var c = r.confidence === 'high' ? 'var(--green)' :
               r.confidence === 'medium' ? 'var(--amber)' :
               r.confidence === 'low' ? 'var(--red)' : 'var(--text2)';
-      var raw = r.raw_n || r.raw_f || r.error || '';
+      var raw = String(r.raw_n || r.raw_f || r.error || '');
       if (raw.length > 40) raw = raw.substring(0,40) + '\u2026';
       return '<tr style="border-bottom:1px solid var(--border)">' +
-        '<td style="padding:4px 8px;white-space:nowrap">' + r.ts + '</td>' +
-        '<td style="padding:4px 8px;font-family:monospace;font-weight:bold">' + r.reading + '</td>' +
-        '<td style="padding:4px 8px;font-family:monospace">' + r.delta + '</td>' +
-        '<td style="padding:4px 8px;color:' + c + '">' + r.confidence + '</td>' +
-        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + raw + '</td>' +
+        '<td style="padding:4px 8px;white-space:nowrap">' + esc(r.ts) + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;font-weight:bold">' + esc(r.reading) + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace">' + esc(r.delta) + '</td>' +
+        '<td style="padding:4px 8px;color:' + c + '">' + esc(r.confidence) + '</td>' +
+        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(raw) + '</td>' +
         '</tr>';
     }).join('');
   }).catch(function(e){ console.error('Readings error:', e); });

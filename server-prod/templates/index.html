@@ -5359,6 +5359,13 @@ function loadConfig() {
 
 function cfgSave() {
   var btn = el('cfg-save-btn');
+  // Safety guard: never save from an unpopulated form. The skip-rule/weather
+  // fields fall back to `|| 0`, so saving before loadConfig() populated them
+  // would silently zero out rain/wind/freeze skip protection. Block it.
+  if (!CFG_DATA || !el('cfg-skip-rain').value) {
+    cfgToast('⚠ Config not loaded yet — click ↻ Reload first', false);
+    return;
+  }
   btn.disabled = true;
   btn.textContent = '⏳ Saving...';
 

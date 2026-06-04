@@ -1049,7 +1049,16 @@ class IrrigationEngine:
             predicted_skip = False
             skip_reason = None
 
-            if season_idx < 0:
+            # Manual-mode zones are never auto-watered (evaluate_zone returns skip
+            # for auto_mode=False), so the honest prediction is "skip", not a
+            # "water today" date derived from the balance. Without this, manual
+            # drip zones (Garden, Grapes) polluted the forecast-vs-actual accuracy.
+            if not zone.get("auto_mode", True):
+                predicted_skip = True
+                skip_reason = "manual_mode"
+                days_until = None
+                predicted_date = None
+            elif season_idx < 0:
                 predicted_skip = True
                 skip_reason = "dormant_season"
             elif rain_last_24h >= rules.get("recent_rain_mm", 999):

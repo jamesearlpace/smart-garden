@@ -401,9 +401,11 @@ function renderRow(c) {
           (c.rain_forecast_mm > 0 ? ' · Rain fcst: ' + c.rain_forecast_mm.toFixed(1) + 'mm' : '') + '</div></div>';
   html += '<div class="actual-col"><div class="col-header">Actual</div><div class="detail">';
   if (c.actually_watered) {
-    const mins = c.actual_duration_sec ? (c.actual_duration_sec / 60).toFixed(0) : '?';
+    const dur = c.actual_duration_sec
+      ? (c.actual_duration_sec < 60 ? c.actual_duration_sec + ' sec' : (c.actual_duration_sec / 60).toFixed(0) + ' min')
+      : '?';
     const gal = c.actual_gallons ? c.actual_gallons.toFixed(1) : null;
-    html += '💧 Watered ' + mins + ' min'; if (gal) html += ' (' + gal + ' gal)';
+    html += '💧 Watered ' + dur; if (gal) html += ' (' + gal + ' gal)';
     if (c.actual_trigger) html += ' — ' + esc(c.actual_trigger);
   } else if (c.actually_skipped) {
     html += '⏭️ Skipped: ' + esc(c.actual_skip_reason || 'unknown');

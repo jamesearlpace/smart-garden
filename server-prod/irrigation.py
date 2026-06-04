@@ -158,11 +158,16 @@ class IrrigationEngine:
             orphans = db.close_orphaned_watering_events()
             for o in orphans:
                 log.warning(
-                    "Cleaned orphaned watering event %d (zone %d, started %s, reason=%s)",
-                    o["id"], o["zone_id"], o["start_ts"], o.get("trigger_reason"),
+                    "Cleaned orphaned watering event %d (%s, started %s, reason=%s)",
+                    o["id"], self._zone_label(o["zone_id"]), o["start_ts"], o.get("trigger_reason"),
                 )
         except Exception as e:
             log.error("Failed to clean orphaned watering events: %s", e)
+
+    def _zone_label(self, zone_id):
+        # Match dashboard's 1-indexed display so logs and UI agree (issue #6).
+        name = self.zones.get(zone_id, {}).get("name", "?")
+        return f"Zone {zone_id + 1} ({name})"
 
     # ΓöÇΓöÇ ESP32 communication ΓöÇΓöÇ
 
@@ -261,14 +266,15 @@ class IrrigationEngine:
         # https://github.com/jamesearlpace/smart-garden-server/issues/1
         preempted = [z for z in list(self._active.keys()) if z != zone_id]
         if preempted:
-            log.warning("Preemption: closing zone(s) %s before opening zone %d",
-                        preempted, zone_id)
+            log.warning("Preemption: closing %s before opening %s",
+                        ", ".join(self._zone_label(z) for z in preempted),
+                        self._zone_label(zone_id))
             for other in preempted:
                 try:
                     self.stop_zone_watering(other, 0)
                 except Exception as e:
-                    log.error("Failed to cleanly stop zone %d during preemption: %s",
-                              other, e)
+                    log.error("Failed to cleanly stop %s during preemption: %s",
+                              self._zone_label(other), e)
                     # Hard fallback: raw close + drop from _active
                     self.close_valve(other, timeout=timeout, retry=retry)
                     self._active.pop(other, None)
@@ -286,11 +292,10 @@ class IrrigationEngine:
                                 data={"id": zone_id, "action": "open"},
                                 timeout=timeout)
             resp.raise_for_status()
-            log.info("Opened valve %d (%s)", zone_id,
-                     self.zones[zone_id]["name"])
+            log.info("Opened %s", self._zone_label(zone_id))
             return True
         except Exception as e:
-            log.error("Failed to open valve %d: %s", zone_id, e)
+            log.error("Failed to open %s: %s", self._zone_label(zone_id), e)
             return False
 
     def close_valve(self, zone_id: int, timeout: int | float = ESP32_TIMEOUT,
@@ -301,11 +306,10 @@ class IrrigationEngine:
                                 data={"id": zone_id, "action": "close"},
                                 timeout=timeout)
             resp.raise_for_status()
-            log.info("Closed valve %d (%s)", zone_id,
-                     self.zones[zone_id]["name"])
+            log.info("Closed %s", self._zone_label(zone_id))
             return True
         except Exception as e:
-            log.error("Failed to close valve %d: %s", zone_id, e)
+            log.error("Failed to close %s: %s", self._zone_label(zone_id), e)
             return False
 
     def close_all(self, timeout: int | float = ESP32_TIMEOUT,
@@ -595,8 +599,8 @@ class IrrigationEngine:
         """Open valve and track the watering event."""
         if not self.is_zone_installed(zone_id):
             log.warning(
-                "Refusing to start watering for disabled or unknown zone %s",
-                zone_id,
+                "Refusing to start watering for disabled or unknown %s (id=%d)",
+                self._zone_label(zone_id), zone_id,
             )
             return False
 
@@ -605,8 +609,8 @@ class IrrigationEngine:
         # overwrite _active[zone_id], orphaning the original event.
         # See https://github.com/jamesearlpace/smart-garden-server/issues/3
         if zone_id in self._active:
-            log.info("Zone %d: already watering (event %d) - ignoring duplicate start",
-                     zone_id, self._active[zone_id]["event_id"])
+            log.info("%s: already watering (event %d) - ignoring duplicate start",
+                     self._zone_label(zone_id), self._active[zone_id]["event_id"])
             return True
 
         ws = self.calculate_weather_scale(allow_weather_fetch=allow_weather_fetch)
@@ -616,19 +620,19 @@ class IrrigationEngine:
         # BUT: manual overrides always run regardless of weather
         is_manual = reason.startswith("manual")
         if scale_pct == 0 and not is_manual:
-            log.info("Zone %d: weather scale 0%% ΓÇö skipping (rain: %.1fmm)",
-                     zone_id, ws["rain_last_24h_mm"])
+            log.info("%s: weather scale 0%% - skipping (rain: %.1fmm)",
+                     self._zone_label(zone_id), ws["rain_last_24h_mm"])
             return False
         if scale_pct == 0 and is_manual:
-            log.info("Zone %d: weather scale 0%% but manual override ΓÇö running anyway",
-                     zone_id)
+            log.info("%s: weather scale 0%% but manual override - running anyway",
+                     self._zone_label(zone_id))
             scale_pct = 100  # full runtime for manual
 
         zone = self.zones[zone_id]
         adjusted_min = zone["max_runtime_min"] * scale_pct / 100.0
-        log.info("Zone %d: weather scale %d%% ΓåÆ runtime %.0fmin (base %dmin) "
-                 "[temp_╬ö=%.1f hum_╬ö=%.1f rain_╬ö=%.1f]",
-                 zone_id, scale_pct, adjusted_min, zone["max_runtime_min"],
+        log.info("%s: weather scale %d%% -> runtime %.0fmin (base %dmin) "
+                 "[temp_d=%.1f hum_d=%.1f rain_d=%.1f]",
+                 self._zone_label(zone_id), scale_pct, adjusted_min, zone["max_runtime_min"],
                  ws["temp_delta"], ws["humidity_delta"], ws["rain_delta"])
 
         if self.open_valve(zone_id, timeout=command_timeout, retry=retry):
@@ -639,7 +643,7 @@ class IrrigationEngine:
                 "soil_before": soil_before,
                 "weather_scale_pct": scale_pct,
             }
-            log.info("Zone %d watering started (event %d)", zone_id, event_id)
+            log.info("%s watering started (event %d)", self._zone_label(zone_id), event_id)
             return True
         return False
 
@@ -656,8 +660,8 @@ class IrrigationEngine:
 
         self.close_valve(zone_id)
         db.end_watering(active["event_id"], soil_after, duration_sec, est_gallons)
-        log.info("Zone %d watering stopped: %ds, ~%.1f gal",
-                 zone_id, duration_sec, est_gallons)
+        log.info("%s watering stopped: %ds, ~%.1f gal",
+                 self._zone_label(zone_id), duration_sec, est_gallons)
 
     def log_skip_event(self, zone_id: int, reason: str, conditions: dict):
         """Log that we skipped watering ΓÇö estimates what WOULD have been used."""
@@ -767,8 +771,8 @@ class IrrigationEngine:
             actions.append(decision)
 
             action = decision["action"]
-            log.info("Zone %d (%s): %s ΓÇö %s",
-                     zid, zone["name"], action, decision["reason"])
+            log.info("%s: %s - %s",
+                     self._zone_label(zid), action, decision["reason"])
 
             if action == "water":
                 # INVARIANT: only one valve open at a time. Power budget (solar +
@@ -780,9 +784,9 @@ class IrrigationEngine:
                 # PREEMPT instead (see open_valve lockout). See
                 # https://github.com/jamesearlpace/smart-garden-server/issues/1
                 if self._active:
-                    busy = ", ".join(str(z) for z in self._active.keys())
-                    log.info("Zone %d: deferring ΓÇö zone(s) %s already running",
-                             zid, busy)
+                    busy = ", ".join(self._zone_label(z) for z in self._active.keys())
+                    log.info("%s: deferring - %s already running",
+                             self._zone_label(zid), busy)
                     defer_reason = "deferred ΓÇö another zone running"
                     skip_reasons[defer_reason] = skip_reasons.get(defer_reason, 0) + 1
                     n_skipped += 1
@@ -835,8 +839,8 @@ class IrrigationEngine:
         for zone_id, active in list(self._active.items()):
             elapsed = now - active["start_time"]
             if elapsed > self.valve_timeout:
-                log.warning("Safety timeout: Zone %d open for %ds ΓÇö forcing close",
-                            zone_id, int(elapsed))
+                log.warning("Safety timeout: %s open for %ds - forcing close",
+                            self._zone_label(zone_id), int(elapsed))
                 self.stop_zone_watering(zone_id, soil_after=0)
 
     def get_zone_taw_mm(self, zone_id: int) -> float:
@@ -893,14 +897,14 @@ class IrrigationEngine:
                     # Can't find yesterday — carry forward today's existing
                     # balance rather than resetting to TAW (bug #7 fix)
                     balance = prev["balance_mm"]
-                    log.warning("Zone %d: no yesterday record, carrying forward "
+                    log.warning("%s: no yesterday record, carrying forward "
                                 "today's balance %.1fmm (not resetting to TAW)",
-                                zid, balance)
+                                self._zone_label(zid), balance)
             else:
                 # True first entry ever — only time we assume field capacity
                 balance = taw_mm
-                log.info("Zone %d: first balance entry, starting at field "
-                         "capacity %.1fmm", zid, taw_mm)
+                log.info("%s: first balance entry, starting at field "
+                         "capacity %.1fmm", self._zone_label(zid), taw_mm)
 
             # Crop coefficient for current season
             kc = zone["kc"][season_idx] if season_idx >= 0 else 0
@@ -922,8 +926,8 @@ class IrrigationEngine:
             )
 
             deficit_pct = (1 - balance / taw_mm) * 100 if taw_mm > 0 else 0
-            log.info("Zone %d balance: %.1fmm / %.1fmm TAW (%.0f%% depleted, MAD=%.1fmm)",
-                     zid, balance, taw_mm, deficit_pct, mad_mm)
+            log.info("%s balance: %.1fmm / %.1fmm TAW (%.0f%% depleted, MAD=%.1fmm)",
+                     self._zone_label(zid), balance, taw_mm, deficit_pct, mad_mm)
 
     def save_daily_forecast_snapshot(self):
         """Capture today's watering forecast for every installed zone.

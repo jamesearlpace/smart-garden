@@ -700,12 +700,12 @@ def check_and_update_sensor_faults(zones: list):
         anomaly = get_sensor_flatline(sensor_id, hours=48)
         if anomaly.get("railed"):
             set_sensor_fault(zone_id, "railed")
-            _log.warning("Sensor fault (railed): zone %d (%s) at %s%%",
-                         zone_id, zone["name"], anomaly["min_pct"])
+            _log.warning("Sensor fault (railed): Zone %d (%s) at %s%%",
+                         zone_id + 1, zone["name"], anomaly["min_pct"])
         elif anomaly.get("flatline"):
             set_sensor_fault(zone_id, "flatline")
-            _log.warning("Sensor fault (flatline): zone %d (%s) at %s%%",
-                         zone_id, zone["name"], anomaly["min_pct"])
+            _log.warning("Sensor fault (flatline): Zone %d (%s) at %s%%",
+                         zone_id + 1, zone["name"], anomaly["min_pct"])
         elif not anomaly.get("no_data"):
             clear_sensor_fault(zone_id)
 

@@ -1429,12 +1429,14 @@ function renderUI(stats, MAD, decisions, zoneCfg, actualWaterings) {
       var ap = d.getHours() >= 12 ? 'PM' : 'AM';
       var dateStr = dn[d.getDay()] + ' ' + mn[d.getMonth()] + ' ' + d.getDate();
       var timeStr = h + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes() + ' ' + ap;
-      var mins = Math.round(w.duration_sec / 60);
-      var inches = (z.precipRate * w.duration_sec / 3600).toFixed(2);
+      // Sub-minute runs (manual tests, drip pulses) read as "0 min" — show seconds instead.
+      var durTxt = w.duration_sec < 60 ? w.duration_sec + ' sec' : Math.round(w.duration_sec / 60) + ' min';
+      var inchesNum = z.precipRate * w.duration_sec / 3600;
+      var inchesTxt = inchesNum < 0.01 ? '<0.01"' : inchesNum.toFixed(2) + '"';
       var reason = w.trigger_reason || '';
       logHtml += '<div class="decision-entry"><span class="decision-icon">💧</span>' +
         '<span class="decision-time">' + dateStr + '</span>' +
-        '<span class="decision-reason" style="color:#22c55e">' + timeStr + ' — ' + mins + ' min (' + inches + '") ' + reason + '</span></div>';
+        '<span class="decision-reason" style="color:#22c55e">' + timeStr + ' — ' + durTxt + ' (' + inchesTxt + ') ' + reason + '</span></div>';
     });
   } else if (actualWaterings && actualWaterings.length === 0 && decisions.length === 0) {
     // Real data mode, no watering events
@@ -1721,8 +1723,8 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
                 var lbl = ctx.dataset.label;
                 // Actual sprinkler event — show runtime + depth + moisture impact
                 if (ctx.raw && ctx.raw.duration) {
-                  var mins = Math.round(ctx.raw.duration / 60);
-                  lbl = '💧 Ran ' + mins + ' min · ' + inches.toFixed(2) + '" · +' + moistPct.toFixed(1) + '% moisture';
+                  var durTxt = ctx.raw.duration < 60 ? ctx.raw.duration + ' sec' : Math.round(ctx.raw.duration / 60) + ' min';
+                  lbl = '💧 Ran ' + durTxt + ' · ' + inches.toFixed(2) + '" · +' + moistPct.toFixed(1) + '% moisture';
                 // Predicted sprinkler — estimate runtime from precip rate
                 } else if (lbl.indexOf('Predicted') >= 0) {
                   var estMins = Math.round(inches / (zone.precipRate || 1.3) * 60);

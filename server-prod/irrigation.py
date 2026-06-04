@@ -559,6 +559,15 @@ class IrrigationEngine:
             )
             return False
 
+        # Idempotent guard: a duplicate start (e.g. user double-taps the manual
+        # button) would otherwise create a second watering_event row and
+        # overwrite _active[zone_id], orphaning the original event.
+        # See https://github.com/jamesearlpace/smart-garden-server/issues/3
+        if zone_id in self._active:
+            log.info("Zone %d: already watering (event %d) - ignoring duplicate start",
+                     zone_id, self._active[zone_id]["event_id"])
+            return True
+
         ws = self.calculate_weather_scale(allow_weather_fetch=allow_weather_fetch)
         scale_pct = ws["scale_pct"]
 

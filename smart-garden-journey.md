@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done.
-**Last Updated:** 2026-06-03
+**Last Updated:** 2026-06-04
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -477,6 +477,24 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 | smart-garden-server | (closed) | — | #10 TIME_WAIT, #11 emoji, #12 reboot wiring — closed 2026-04-21. |
 | smart-garden-server | ✅ closed | — | dashboard.py bypass routes — FIXED `624b6d9` (2026-04-26). |
 | smart-garden-server | ✅ closed | — | #15 banner past-time, #16 mm-as-inches, #17 forecast dark theme, #18 missing templates, #19 orphan routes, #20 dead templates, #21 forecast no sidebar, #22 mobile nav drift, #23 server clutter, #24 redundant breadcrumb, #25 sidebar footer drift — all SHIPPED 2026-06-03. See session log below. |
+| smart-garden-server | ✅ closed | — | #3 same-zone double-click leaked orphan `watering_event` rows — FIXED 2026-06-04: idempotent guard in `start_zone_watering()`. Orphan event 164 backfilled. See June 4 session log. |
+
+---
+
+## Session Log: 2026-06-04 (Overnight audit + Issue #3 fix)
+
+**Overnight cycle was clean.** First overnight under the issue #1 defer-guard fix (deployed 2026-06-03 16:51 PDT):
+- Zone 0 (Front Yard A) watered 04:02–04:17 (14 min, 60 gal) — single zone, no overlap
+- Zones 3 and 6 stayed dormant at full TAW after yesterday's manual watering — `get_daily_irrigation_mm()` credited them correctly at the 23:00 daily balance job (29.8 mm and 26.8 mm respectively). Stuck-balance bug from June 2-3 = FIXED.
+- Same-day re-water guard fired correctly at 22:57 ("Already watered 52.4 min today")
+- No INVARIANT violations, no exceptions in scheduler
+
+**Issue #3 found and fixed (same session):** Double-tapping the manual button on Zone 8 at 17:39:36 yesterday created two `watering_event` rows (164, 165) in the same second; only event 165 got an `end_ts`. Root cause: `open_valve()`'s preemption filter excludes the same zone (`if z != zone_id`), so a re-entry on an already-active zone just clobbers `_active[zone_id]` and orphans the prior event_id. Fix: guard in `start_zone_watering()` — if `zone_id in self._active`, log and return True (idempotent no-op). Single physical valve, so no watering-safety impact, but it polluted the audit table.
+
+- Filed: [#3](https://github.com/jamesearlpace/smart-garden-server/issues/3)
+- Code: 8-line guard in `irrigation.py::start_zone_watering()`, before `calculate_weather_scale`
+- DB cleanup: `UPDATE watering_event SET end_ts='2026-06-03T17:39:40', duration_sec=4, est_gallons=0.0 WHERE id=164` → orphan count now 0
+- Deployed: scp + restart `smart-garden-server` 2026-06-04 07:59:56 PDT, service active
 
 ---
 
@@ -988,4 +1006,312 @@ ssh jamesearlpace@192.168.0.109 "sed -i 's/auto_mode: true/auto_mode: false/g' ~
 ```
 
 This stops the engine from making any further automatic decisions until you've diagnosed. Re-enable per-zone via the dashboard.
+
+
+
+---
+
+## 2026-06-03 — [P0 BUG] Concurrent valve open — two zones ran in parallel overnight
+
+**Issue:** [smart-garden-server#1](https://github.com/jamesearlpace/smart-garden-server/issues/1)
+
+**What happened:** Overnight at 04:02:04, 
+un_cycle opened **valve 3 (Enclosed Backyard B)** and **valve 6 (Southwest)** within the same wall-clock second. Both ran in parallel for ~25 minutes before both closed at 04:27:03. Log + DB evidence both confirm — see the issue body.
+
+**Why it's bad:** Line pressure splits between the two zones. Heads do not throw at design distance. The system reports "watered ~100 gal each, 25 min each" but actual lawn coverage is patchy. I noticed it visually this morning and re-ran Southwest manually to compensate.
+
+**Root cause:** irrigation.py::run_cycle loops through installed zones and opens each new "water" decision without checking self._active. The original assumption — that the water-balance model would only return `"water"` for one zone per cycle — broke when multiple zones crossed the MAD threshold during the same overnight idle period (the normal case after a hot dry day).
+
+**Fix plan:** Two-layer defense. (1) Defer guard in `run_cycle` — if `self._active` is non-empty, downgrade additional `"water"` decisions to `"wait"` and let the next 5-min cycle pick them up. (2) Hardware lockout in `open_valve` itself — preempts any other zone in `_active` and issues `close_all` to the ESP32 before opening the target. All open paths converge there (scheduler, manual `/api/run`, raw `/api/valve`), so two valves open at once becomes physically impossible.
+
+**Verification before closing the issue:**
+- Assertion in 
+un_cycle: `assert len(self._active) <= 1`
+- 7-day replay shows `_active` never exceeds 1
+- Force two zones below MAD in a test config — confirm only one opens
+- Dashboard `cycle_summary` gains a `zones_deferred` counter
+
+**Status:** ✅ Both fixes deployed 2026-06-03. `irrigation.py` now 993 lines on the server. Live smoke test confirmed preemption fires correctly.
+
+**Defense in depth — three layers, top to bottom:**
+
+1. **Policy (`run_cycle` defer guard, 08:30 deploy)** — scheduled cycles only open the first zone, others defer to next cycle. Avoids preemption thrash on the legit case.
+2. **Hardware lockout (`open_valve` preemption, 08:38 deploy)** — any caller, any path (scheduler, `/api/run` manual, `/api/valve` raw): if another zone is in `_active`, close it cleanly first via `stop_zone_watering`.
+3. **Belt-and-suspenders (`close_all` before every contended open, 08:38 deploy)** — catches untracked opens (raw `/api/valve` bypassed `_active`, drift between server map and ESP32 reality, anything else).
+
+Live verification via stubbed-ESP32 smoke test:
+```
+WARNING: Preemption: closing zone(s) [0] before opening zone 1
+ESP32 calls in order: close valve 0  →  closeall  →  open valve 1
+PASS ✓
+```
+
+Will leave [smart-garden-server#1](https://github.com/jamesearlpace/smart-garden-server/issues/1) open until tomorrow morning's 04:00 cycle confirms in production with real zones 3 + 6.
+
+**Lesson 1 — invariant assertion missing.** The "one valve at a time" invariant was load-bearing for the entire hardware design (power budget + water pressure), but it was nowhere encoded as a check. Behavior accidentally upheld it for months, then the conditions changed and the bug was silent until the lawn told me. **Going forward: any time a design constraint is load-bearing for hardware sizing, encode it as a runtime check at the lowest layer where all callers converge. Lawn shouldn't be the regression test.**
+
+**Lesson 2 — "one place fixes everything" was wrong.** First fix only patched the scheduler (`run_cycle`). Missed that `/api/valve` raw open calls `open_valve` directly without tracking, so a dashboard click could still cause overlap. Defense-in-depth needs to happen at the **lowest layer everyone goes through**, not the highest-level orchestrator.
+
+**Lesson 3 — service name in instructions was wrong.** `home-server-services.instructions.md` said `smart-garden-api`. The real systemd unit is `smart-garden-server`. Corrected in memory; should update the instructions file too.
+
+---
+
+## 2026-06-03 — [P1 BUG] Manual valve runs not credited to soil balance; orphaned events lingering
+
+**Issue:** [smart-garden-server#2](https://github.com/jamesearlpace/smart-garden-server/issues/2)
+
+**How it surfaced:** After deploying #1 the user toggled zone 6 (Southwest) on/off via the dashboard and asked: *"hopefully the runtime is adjusted by what I'm telling you and by what's actually happened."* That probe found two real bugs.
+
+**Bug A — manual toggle bypassed event tracking.** Two manual paths existed:
+- `/api/run` (Run-for-N-min button) → `engine.start_zone_watering` → writes `watering_event`, tracked in `_active`, credits soil balance ✅
+- `/api/valve open` (raw green/red toggle) → `engine.open_valve` direct → NO `watering_event` row, NOT in `_active`, NO credit ❌
+
+`get_daily_irrigation_mm()` filters `WHERE end_ts IS NOT NULL` and sums `duration_sec`. No row, no credit. So toggle-based runs were invisible to the scheduler — the model would still decide to water at 04:00 even after the user just hand-ran the zone for 25 min.
+
+**Bug B — orphaned `watering_event` rows accumulating.** Any time the service crashed or restarted mid-run, the row stayed with `end_ts = NULL` forever. Effects:
+- `get_active_watering(zone)` lies — reports zone as actively watering when it isn't
+- `get_daily_irrigation_mm()` filter excludes the row — irrigation that DID happen never credits the balance
+- No way to spot the pattern unless you happen to query for it
+
+Found **11 orphans** on first cleanup, going back to 2026-05-24. Including event 137 (zone 7 garden, last night, original reason `soil_dry`) and event 140 (zone 6, this morning, from the user's toggle before #1 was patched).
+
+**Fix:**
+1. `database.py::close_orphaned_watering_events()` — sweeps `end_ts IS NULL` rows on engine startup. Sets `end_ts=now, duration_sec=0, est_gallons=0`, appends `[orphaned_cleanup]` to `trigger_reason`. Under-credit intentional — better to let the model decide to water again than to lie about water applied. Logs WARNING per row so a frequent-orphan pattern is visible.
+2. `irrigation.py::IrrigationEngine.__init__` — calls the helper at end of init.
+3. `dashboard.py::api_valve` — open path now routes through `engine.start_zone_watering(zone_id, soil_pct, 0, "manual_toggle", allow_weather_fetch=False, ...)`, same pattern as `/api/run`.
+4. `irrigation.py::start_zone_watering` — `reason != "manual"` check generalised to `not reason.startswith("manual")` so the new `"manual_toggle"` reason still overrides weather-scale=0% on rainy days.
+
+**Deploy verification:**
+- All 11 orphans cleaned on first restart, `COUNT(*) WHERE end_ts IS NULL` now = 0.
+- Post-deploy cycle at 08:50:27 ran clean — Zone 3 correctly skipped with `"Already watered 25.0 min today (>=12 min threshold) — waiting for 11 PM balance update"`. The model DOES know about today's runs.
+
+**Lesson 4 — every write path needs the same hooks.** Bug A is the same shape as the original #1 — two code paths that *seem* equivalent (open a valve), one routed through the proper tracking, the other didn't. **Whenever there are multiple ways to invoke an operation, audit every path against a checklist of side effects (event row written? in-memory state updated? balance credited? metrics emitted?). The "this is just a thin convenience wrapper" path is exactly where these bugs hide.**
+
+**Lesson 5 — sweeper invariants need to run on startup.** Anything that depends on process liveness (in-memory tracking, open transactions, "currently doing X" state) needs a reconciliation pass on startup to recover from non-graceful shutdowns. 11 orphans accumulated over 10 days because there was no such pass. Cost of the sweeper: 5 lines of SQL.
+
+---
+
+## 2026-06-03 — Behavior reference: How multiple zones run when both are scheduled for the same time
+
+This is the question that prompted issues #1 and #2 and now has a definitive answer documented here. **TL;DR: They run in series, not parallel. Worst-case the second zone starts up to one cycle-interval (5 min) after the first one ends.**
+
+### Configuration
+- `config.yaml → esp32.poll_interval_sec = 300` — the irrigation decision cycle fires every 5 min, all day, every day.
+- It's NOT scheduled to fire at any specific clock time. There is no "4 AM job." The 04:00 cycle is just whichever 5-min cycle happens to land near 04:00.
+- The scheduler entry: [server.py L1354-L1358](../smart-garden-server-live/server.py#L1354)
+  ```python
+  scheduler.add_job(api_guarded("irrigation_cycle", engine.run_cycle),
+                    "interval", seconds=poll_interval,
+                    id="irrigation_cycle", max_instances=1, ...)
+  ```
+- `max_instances=1` means APScheduler will never run two `run_cycle` jobs in parallel. If a cycle takes longer than 5 min (rare), the next one is skipped (`misfire_grace_time=60`).
+
+### The decision loop (irrigation.py::run_cycle, ~line 747)
+For each installed zone in config order:
+1. Read soil + water-balance → decide `water` / `skip` / `close`.
+2. If `water` AND `self._active` is non-empty → log `"deferring — zone(s) X already running"`, skip this zone, move to next.
+3. If `water` AND `_active` is empty → `start_zone_watering(zid, ...)`, which writes a `watering_event` row and adds the zone to `_active`.
+
+The zone added to `_active` stays there until `stop_zone_watering` is called (either by `safety_check` enforcing max duration, or by a future cycle deciding `close`).
+
+### Worked example — both zones 3 and 6 cross the MAD threshold during the same overnight idle
+Both have `duration_min: 25` in config (these are the typical defaults).
+
+| Cycle time | What `run_cycle` does | `_active` after |
+|---|---|---|
+| 04:00:00 | Zone 3 → `water` → open. Zone 6 → `water` → DEFER (zone 3 running). | `{3}` |
+| 04:05:00 | Zone 3 still running (decision: `skip` — already active). Zone 6 → DEFER. | `{3}` |
+| 04:10 | same | `{3}` |
+| 04:15 | same | `{3}` |
+| 04:20 | same | `{3}` |
+| 04:25:00 | `safety_check` (runs every 2 min) sees zone 3 hit 25-min cap → `stop_zone_watering(3)`. | `{}` |
+| 04:25–04:30 | `_active` is empty. | `{}` |
+| 04:30:00 | Next `run_cycle` fires. Zone 6 → `water` → open. | `{6}` |
+| 04:55:00 | `safety_check` closes zone 6 at 25-min cap. | `{}` |
+
+**End-to-end:** two 25-min zones complete in ~55 wall-clock minutes, never overlapping. The 5-min gap between zone 3 closing and zone 6 opening is the worst-case "wait for next cycle to notice" latency.
+
+### Why this is safe (and intentional)
+- **Power budget:** ESP32 + solenoid driver + SLA battery can only sink one solenoid pulse at a time without browning out. Two valves opening simultaneously was a real risk before issue #1.
+- **Water pressure:** Drip + spray zones are sized for full line pressure. Splitting pressure across two zones means heads don't throw at design distance — visible as patchy coverage on the lawn (which is how the original bug surfaced).
+- **Soil model:** The water-balance model evaluates each zone independently, so deferring zone 6 by 5–30 min doesn't matter. The MAD threshold doesn't move that fast.
+
+### How manual paths differ from scheduled paths
+The defer-vs-preempt distinction is intentional:
+
+| Trigger | Path | Behavior if another zone is running |
+|---|---|---|
+| Scheduled `run_cycle` | `start_zone_watering` (via decide loop) | **Defers** — log `"deferring — zone(s) X already running"`, wait for next 5-min cycle |
+| `/api/run` Run-for-N-min button | `start_zone_watering` direct | **Preempts** — `open_valve` lockout closes the other zone first |
+| `/api/valve` ON toggle (since 2026-06-03 / issue #2) | `start_zone_watering("manual_toggle", ...)` | **Preempts** — same lockout |
+| `/api/valve` OFF toggle | `stop_zone_watering` if zone in `_active`, else raw `close_valve` | Closes that zone only |
+
+**Reasoning:** the scheduler is anonymous — there's no user waiting for the result, so politeness (defer) is the right default. Manual button clicks have a human behind them who wants the zone NOW; preempting whatever else is running is what they expect.
+
+### Invariant enforcement
+After every `run_cycle`, the loop checks `len(self._active) <= 1`. If somehow two zones ended up active (race, untracked open, future bug), logs `INVARIANT VIOLATED: N zones active`. So far never seen in production logs since the #1 fix.
+
+### Things this does NOT do (and that's OK)
+- **No "smart" reordering.** Zones are evaluated in config order. If you want zone 6 to go first, change config order. There's no priority field.
+- **No parallel duration math.** The model never thinks "I can run both for 12.5 min each instead of 25 each." It always runs each zone's full configured `duration_min`.
+- **No cross-cycle planning.** Each `run_cycle` is stateless — it doesn't know "I deferred zone 6 last cycle." Zone 6 just keeps coming up as a `water` decision until `_active` is empty and it actually opens.
+
+### Source of truth for this behavior
+- Defer guard: [irrigation.py L767-L777](../smart-garden-server-live/irrigation.py#L767)
+- Preemption lockout (manual paths): [irrigation.py L240-L281](../smart-garden-server-live/irrigation.py#L240)
+- Invariant assertion: [irrigation.py L793-L795](../smart-garden-server-live/irrigation.py#L793)
+- Scheduler: [server.py L1354](../smart-garden-server-live/server.py#L1354)
+- Config: `config.yaml → esp32.poll_interval_sec: 300`
+
+---
+
+## 2026-06-03 — Design: Soil-delta rain inference + tamper-resistant validation
+
+**Status:** Design only. **DO NOT BUILD until soil sensors are physically installed (~1 month out).** Captured now so the requirements (especially the kid-tamper threat model) don't get lost.
+
+### Problem statement
+
+The irrigation engine currently relies on Open-Meteo (which uses NOAA HRRR upstream) for rain detection. HRRR has ~3 km horizontal resolution and routinely misses local drizzle and convective showers landing on the property. Nearest real weather stations are 20.7 km away (NWS SEAW1) — also too far for hyper-local rain. Probe results from 2026-06-03 confirmed: API said 0% precipitation, user observed actual drizzle on the ground.
+
+**Hardware path forward** (decided 2026-06-03 after evaluating CWOP/PWS hardware at $450–$1045 and rejecting):
+- Install 1–2 cheap capacitive soil sensors (DIY tipping-bucket tier or just the soil probes already in the kit)
+- Infer rain from soil-pct rises during non-irrigation windows
+- Credit inferred rain to the global water-balance for all zones
+
+### Sensor placement decision (2026-06-03)
+
+**For a quarter-acre property, rain is uniform — one sensor anywhere acts as a global "did it rain?" proxy.**
+
+Recommended config: **2 sensors, ~10 ft apart, both in an auto-watered zone**. NOT both in the garden — zones 7 and 8 are `auto_mode: false` so sensors there don't drive any scheduling decision directly.
+
+| Channel | Location | Used for |
+|---|---|---|
+| `soil_0` | Garden, open spot (or front yard auto zone) | Primary rain ground truth + soil balance for that zone |
+| `soil_1` | ~10 ft from `soil_0`, same micro-area | Cross-check (Layer 4) + redundancy |
+
+**Siting rules:**
+- Open ground, 3+ ft from any irrigation head (else sprinkler overspray = false rain signal)
+- Not under tree canopy (no rain gets through)
+- Not at eaves drip line (false positives every rain)
+- Away from any spot kids or hose-watering can reach during play
+- Raised beds OK only if drainage matches ground soil
+
+Adding more sensors later (per-zone) only fine-tunes per-zone decisions — not necessary for the rain problem.
+
+### Threat model: kids pouring water on sensors
+
+User has multiple small children who will absolutely pour water bottles on sensors "just to be silly." The system MUST be robust to this without manual intervention. **Design principle: quarantine the sensor, don't try to clean the data.** Stop trusting that sensor until it returns to baseline naturally.
+
+### The 5-layer validation stack
+
+Every soil reading runs through this. If a tampering signature is detected, the reading still gets logged (for diagnostics) but contributes **zero** to rain inference.
+
+**Layer 1 — Physics rate limit.** Natural rain can't move soil pct more than ~3 pct per 5-min cycle (water has to infiltrate). Cap and reject:
+
+| Δ over 5 min | Verdict |
+|---|---|
+| 0–3 pct | Normal — could be light rain |
+| 3–8 pct | Suspicious — only heavy rain or hose |
+| > 8 pct | Tampering — quarantine immediately |
+
+**Layer 2 — Irrigation correlation.** If a `watering_event` row is open on this zone OR any zone within ~15 ft is currently running, the rise is expected. No tampering check, no rain signal extracted. Only fire rain inference when no irrigation is plausibly responsible.
+
+**Layer 3 — Weather corroboration.** Pull from existing Open-Meteo cache. Rain inference is allowed only if at least one of:
+- `precipitation_last_hour > 0`, OR
+- `cloud_cover > 60%` AND `humidity > 80%` (drizzle the API missed)
+
+If neither — sky is clear, sensor rose anyway → tampering candidate.
+
+**Layer 4 — Cross-sensor corroboration.** With 2+ sensors:
+- Both rise within same 5-min window, similar magnitude → real rain
+- Only one rises → tampering candidate on the rising one
+- One rises by 5 pct and other by 0.5 pct → tampering on the big one
+
+**Layer 5 — Decay signature (the killer detector).** This is the most powerful layer because it's the hardest to fake. Real rain decays slowly (hours) because moisture is field-wide. Spilled water on a sensor in dry soil decays fast (10–30 min) because there's no surrounding moisture field — the water just drains away from a single wet patch.
+
+After a rise event, watch for:
+- Soil pct drops by > 5 pct within 30 min → **confirmed tampering**, retroactively void the credit, quarantine sensor for 6 hours
+- Soil pct stays elevated for 2+ hours → confirmed natural moisture, credit promotes from `pending` to `confirmed`
+
+### Retroactive correction via `rain_credits` table
+
+This is critical: a credit issued at 10:00 AM might turn out to be tampering at 10:25 AM. The scheduler runs at 04:00 AM — by then the truth has to be in. Schema:
+
+```sql
+CREATE TABLE rain_credits (
+    id INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,           -- when the rise was detected
+    sensor_id INTEGER NOT NULL,
+    mm REAL NOT NULL,              -- inferred rain in mm
+    status TEXT NOT NULL,          -- 'pending' | 'confirmed' | 'voided'
+    void_reason TEXT,              -- e.g. 'decay_signature', 'cross_sensor_mismatch'
+    decided_at INTEGER             -- when status was finalized
+);
+```
+
+`get_daily_rain_inferred_mm()` only sums `status = 'confirmed'` rows. Pending credits don't influence irrigation decisions. A safety check before each scheduled `run_cycle` re-evaluates any `pending` credits older than 2 hours and promotes/voids them.
+
+### Quarantine state machine
+
+```
+HEALTHY → (tampering detected) → QUARANTINED (6 hours)
+QUARANTINED → (reading stable within ±1 pct of baseline for 1 hour) → HEALTHY
+QUARANTINED → (still elevated after 6 hours) → STUCK (alert + email)
+```
+
+While quarantined, the sensor:
+- Still gets logged
+- Contributes **0** to rain inference
+- Doesn't trigger irrigation skips for the garden zone it's assigned to (zone reverts to model-only mode)
+- Shows ⚠️ icon in dashboard so user can see "kid got the sensor again"
+
+### Tampering tolerance — what realistically gets through
+
+| Attack | Caught by |
+|---|---|
+| Pour 1 cup on one sensor | Layer 1 (rate) + Layer 4 (single sensor) + Layer 5 (decay) |
+| Pour 1 cup on both sensors | Layer 3 (clear sky) + Layer 5 (decay) |
+| Pour slowly over 10 min on both | Layer 3 (clear sky) + Layer 5 (decay) |
+| Pour 1 cup on both on a cloudy day | Layer 5 (decay) |
+| Pour 5 gal on both during actual rain when zones are off | Undetectable but harmless (rain was going to skip irrigation anyway) |
+
+**Layer 5 is the safety net.** Even if a kid beats every other layer, the decay signature catches it ~30 min later, the credit gets voided, and the 04:00 scheduler sees truth.
+
+### Fail-safe behavior
+
+When in doubt, the system should water (skip the rain credit). Worst case of false-rejecting real rain = irrigates one extra time = wastes ~50 gal of water. Worst case of false-accepting tampering = skips one watering cycle = potentially stresses plants on a hot day. Better to over-water than to under-water.
+
+### Implementation order (when sensors are installed)
+
+1. **Layers 1, 2, 3** in first pass — cheap, work with 1 sensor, ~1 hour code:
+   - `database.py::get_daily_rain_inferred_mm()` reading from `rain_credits` table
+   - `database.py::record_soil_reading()` writes to existing soil table, then evaluates rate cap + irrigation correlation + weather corroboration before inserting `pending` row in `rain_credits`
+   - Modify `irrigation.py::run_cycle` water-balance to add `get_daily_rain_inferred_mm()` to today's precipitation
+
+2. **Layer 4** after second sensor is online — ~30 min:
+   - Cross-sensor check inside `record_soil_reading` — require ≥2 sensors rising before crediting
+
+3. **Layer 5 + retroactive voiding** after 2 weeks of baseline data — ~2 hours:
+   - Need real soil-response curves from this specific soil to tune decay thresholds
+   - Background job (every 15 min) re-evaluates `pending` credits, promotes/voids based on decay signature
+   - Quarantine state machine + dashboard ⚠️ indicator
+
+4. **Audit dashboard tile** — show last 7 days of credits with status, void reasons. Lets user see if a kid is actively messing with the system.
+
+**Total work:** ~4 hours once sensors are physically installed. Defer all of it until then.
+
+### Why this design
+
+- **Quarantine, don't clean** — never try to "correct" a tampered reading; just stop trusting that sensor. Cleaning is fragile, quarantine is safe.
+- **Pending → confirmed flow** — gives the system 2 hours to discover tampering before any irrigation decision uses the credit
+- **Fail-open to model** — if all sensors are quarantined, the zone reverts to the ET₀ water-balance model it's used for the last year. Nothing breaks, nothing dies.
+- **No manual override required** — per user requirement, the system handles tampering autonomously
+- **Capped damage** — even an undetected attack costs at most one skipped watering, which is recoverable the next day
+
+### Cross-references
+- Rain detection investigation that led here: this same session (2026-06-03), probe results in `C:\Users\james\AppData\Local\Temp\rain-source-probe.py`
+- Sensor config: `config.yaml → soil_0..soil_3` (all currently `false`)
+- Hardware: capacitive soil probes already in the kit (no purchase needed)
+- Related: `weather.py::get_current()` provides the cloud_cover + humidity for Layer 3 (no changes needed there)
+
 

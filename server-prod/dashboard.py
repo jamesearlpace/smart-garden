@@ -302,7 +302,9 @@ def create_app(config, engine, weather, billing):
             return jsonify({"ok": False, "error": "Not authorized"}), 403
         resp = make_response(jsonify({"ok": True, "email": email}))
         token = _make_session_token(email)
-        resp.set_cookie("session", token, max_age=SESSION_MAX_AGE, httponly=True, samesite="Lax", secure=True)
+        # SameSite=Strict: cookie is never sent on cross-site requests. App is
+        # bookmarked / typed directly, so Strict is fine and blocks CSRF.
+        resp.set_cookie("session", token, max_age=SESSION_MAX_AGE, httponly=True, samesite="Strict", secure=True)
         return resp
 
     @app.route("/auth/logout")

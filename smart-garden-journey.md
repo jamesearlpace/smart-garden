@@ -479,6 +479,7 @@ Excluded garbage readings outside 8-15V range (floating pin before divider was w
 | smart-garden-server | ✅ closed | — | #15 banner past-time, #16 mm-as-inches, #17 forecast dark theme, #18 missing templates, #19 orphan routes, #20 dead templates, #21 forecast no sidebar, #22 mobile nav drift, #23 server clutter, #24 redundant breadcrumb, #25 sidebar footer drift — all SHIPPED 2026-06-03. See session log below. |
 | smart-garden-server | ✅ closed | — | #3 same-zone double-click leaked orphan `watering_event` rows — FIXED 2026-06-04: idempotent guard in `start_zone_watering()`. Orphan event 164 backfilled. See June 4 session log. |
 | smart-garden-server | ✅ closed | — | #4 `daily_summary` table had no populator (empty since inception) — FIXED 2026-06-04: `BillingCalculator.update_daily_summary()` + 23:55 scheduler job + 59-day backfill. See June 4 session log. |
+| smart-garden-server | ✅ closed | — | #5 `skip_event` table empty — `log_skip_event()` defined but never called. FIXED 2026-06-04: wired into `run_cycle()`'s skip branch with per-zone per-day de-dupe via `db.skip_event_exists_today()`. First cycle produced 7 rows (648 gal / $0.36 saved). See June 4 session log. |
 
 ---
 
@@ -513,7 +514,20 @@ Surfaced while auditing what other schema tables had no writers. `daily_summary`
   - 2026-06-04: `et0`/`rain` are `None` because `soil_balance` hasn't run yet for today (fills at 23:00) — tomorrow's run will overwrite with full values
 - Deployed: scp + restart 2026-06-04 08:15:38 PDT, service active, scheduler logs `BillingCalculator.update_daily_summary` job added cleanly.
 
-**Open follow-up:** `skip_event` table appears empty — none of the cycle-summary `zones_skipped` counts produce individual skip rows. Worth investigating: is `log_skip()` actually being called? If not, `gallons_saved` / `cost_avoided` will stay at 0 even after this fix. Separate issue, not yet filed.
+**Open follow-up:** `skip_event` table appears empty — none of the cycle-summary `zones_skipped` counts produce individual skip rows. Worth investigating: is `log_skip()` actually being called? If not, `gallons_saved` / `cost_avoided` will stay at 0 even after this fix. Separate issue, not yet filed. → **FIXED as #5 same session, see below.**
+
+### Issue #5 — `skip_event` table empty since inception
+
+Follow-up to #4. The `daily_summary.gallons_saved` / `cost_avoided` columns were always 0 because the source `skip_event` table had been empty since service start.
+
+- Root cause: `irrigation.py::log_skip_event()` and `database.py::log_skip()` both exist, but `run_cycle()`'s `elif action == "skip":` branch (line 793) only bumped a counter and wrote a `cycle_summary` aggregate row — it never called `log_skip_event()`. Per the comment on line 811 ("Log one summary row per cycle instead of per-zone skip events"), this was an intentional volume tradeoff that broke the savings tracking downstream.
+- Filed: [#5](https://github.com/jamesearlpace/smart-garden-server/issues/5)
+- Fix:
+  - New `db.skip_event_exists_today(zone_id) -> bool` in [database.py](../smart-garden-server-live/database.py).
+  - In `run_cycle()`'s skip branch, call `self.log_skip_event(zid, reason, decision["details"])` gated by `"manual mode" not in reason.lower() and not db.skip_event_exists_today(zid)`. The de-dupe is essential — with `poll_interval_sec=300`, naive logging would yield 288 cycles × 7 skipped zones = 2K rows/day all double-counting the same physical skip in the savings sum.
+- Deployed: scp + restart 2026-06-04 08:23:32 PDT.
+- Validation: first post-restart cycle (08:24:41) produced exactly 7 `skip_event` rows — one per installed zone with auto_mode=true (zones 7 and 8 correctly excluded as manual-mode). Second cycle at 08:24 didn't duplicate (de-dupe works). Re-ran backfill for today → `daily_summary` 2026-06-04 now shows `gallons_saved=648.0`, `cost_avoided=$0.36`. End-to-end working.
+- Historical data: not reconstructible — only per-cycle aggregates exist in `cycle_summary`. Pre-deployment `daily_summary` rows keep `gallons_saved=0` / `cost_avoided=0`. Only forward.
 
 ---
 

@@ -150,6 +150,20 @@ class IrrigationEngine:
         self._badge_online = False      # debounced "is the chip reachable"
         self._consecutive_successes = 0
 
+        # Recover from any watering_event rows left open by a prior crash
+        # or restart — they'd otherwise sit forever with end_ts=NULL,
+        # falsely marking the zone as actively watering and never crediting
+        # the soil balance. See issue #2.
+        try:
+            orphans = db.close_orphaned_watering_events()
+            for o in orphans:
+                log.warning(
+                    "Cleaned orphaned watering event %d (zone %d, started %s, reason=%s)",
+                    o["id"], o["zone_id"], o["start_ts"], o.get("trigger_reason"),
+                )
+        except Exception as e:
+            log.error("Failed to clean orphaned watering events: %s", e)
+
     # ΓöÇΓöÇ ESP32 communication ΓöÇΓöÇ
 
     def get_esp32_status(self, force_fresh: bool = False) -> dict | None:
@@ -239,6 +253,33 @@ class IrrigationEngine:
 
     def open_valve(self, zone_id: int, timeout: int | float = ESP32_TIMEOUT,
                    retry: bool = True) -> bool:
+        # HARDWARE LOCKOUT: only one valve open at a time. Before opening this
+        # zone, preempt any other zone that's currently tracked as running.
+        # All open paths go through here (scheduled run_cycle, /api/run manual,
+        # /api/valve raw open), so this is the chokepoint that makes parallel
+        # operation physically impossible. See
+        # https://github.com/jamesearlpace/smart-garden-server/issues/1
+        preempted = [z for z in list(self._active.keys()) if z != zone_id]
+        if preempted:
+            log.warning("Preemption: closing zone(s) %s before opening zone %d",
+                        preempted, zone_id)
+            for other in preempted:
+                try:
+                    self.stop_zone_watering(other, 0)
+                except Exception as e:
+                    log.error("Failed to cleanly stop zone %d during preemption: %s",
+                              other, e)
+                    # Hard fallback: raw close + drop from _active
+                    self.close_valve(other, timeout=timeout, retry=retry)
+                    self._active.pop(other, None)
+            # Belt-and-suspenders: tell the ESP32 to close everything in case
+            # an untracked valve is open (manual /api/valve open, drift, etc.).
+            try:
+                self.close_all(timeout=timeout, retry=retry)
+                time.sleep(0.5)  # let latching relays settle
+            except Exception as e:
+                log.error("close_all during preemption failed: %s", e)
+
         try:
             session = self._esp32 if retry else self._esp32_manual
             resp = session.post(f"{self.esp32_url}/api/valve",
@@ -573,11 +614,12 @@ class IrrigationEngine:
 
         # If weather scale is 0%, skip instead of opening the valve
         # BUT: manual overrides always run regardless of weather
-        if scale_pct == 0 and reason != "manual":
+        is_manual = reason.startswith("manual")
+        if scale_pct == 0 and not is_manual:
             log.info("Zone %d: weather scale 0%% ΓÇö skipping (rain: %.1fmm)",
                      zone_id, ws["rain_last_24h_mm"])
             return False
-        if scale_pct == 0 and reason == "manual":
+        if scale_pct == 0 and is_manual:
             log.info("Zone %d: weather scale 0%% but manual override ΓÇö running anyway",
                      zone_id)
             scale_pct = 100  # full runtime for manual
@@ -729,6 +771,22 @@ class IrrigationEngine:
                      zid, zone["name"], action, decision["reason"])
 
             if action == "water":
+                # INVARIANT: only one valve open at a time. Power budget (solar +
+                # SLA + H-bridge) and water-pressure plan both depend on it.
+                # If another zone is already running, defer to the next cycle
+                # rather than open a second valve in parallel. Worst-case wait
+                # for the second zone = poll_interval_sec (5 min) after the
+                # first one closes. Manual /api/run and /api/valve paths
+                # PREEMPT instead (see open_valve lockout). See
+                # https://github.com/jamesearlpace/smart-garden-server/issues/1
+                if self._active:
+                    busy = ", ".join(str(z) for z in self._active.keys())
+                    log.info("Zone %d: deferring ΓÇö zone(s) %s already running",
+                             zid, busy)
+                    defer_reason = "deferred ΓÇö another zone running"
+                    skip_reasons[defer_reason] = skip_reasons.get(defer_reason, 0) + 1
+                    n_skipped += 1
+                    continue
                 et_demand = decision["details"].get("et_demand_mm", 0)
                 self.start_zone_watering(zid, soil, et_demand)
                 n_watered += 1
@@ -738,8 +796,22 @@ class IrrigationEngine:
                 n_skipped += 1
                 if "window" in reason.lower():
                     n_outside += 1
+                # Persist at most one skip_event per zone per day so the
+                # daily savings rollup doesn't multi-count the same skip
+                # across 5-minute cycles. Manual-mode disables aren't
+                # weather-driven savings, so don't credit them.
+                if ("manual mode" not in reason.lower()
+                        and not db.skip_event_exists_today(zid)):
+                    self.log_skip_event(zid, reason, decision["details"])
             elif action == "close":
                 self.stop_zone_watering(zid, soil)
+
+        # Safety net: this loop should never leave more than one valve active.
+        # If it does, something opened a second valve between the guard and now
+        # (race, manual override, or future bug). Log loudly so it shows up.
+        if len(self._active) > 1:
+            log.error("INVARIANT VIOLATED: %d zones active after run_cycle: %s",
+                      len(self._active), list(self._active.keys()))
 
         # Log one summary row per cycle instead of per-zone skip events
         if n_skipped > 0 or n_watered > 0:

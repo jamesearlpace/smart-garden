@@ -249,6 +249,37 @@ def end_watering(event_id: int, soil_after: float, duration_sec: int,
     conn.close()
 
 
+def close_orphaned_watering_events() -> list[dict]:
+    """Close any watering_event rows left open by a prior crash/restart.
+
+    Sets end_ts=now, duration_sec=0, est_gallons=0 (we can't trust that the
+    valve was actually open for the whole gap) and tags trigger_reason with
+    `[orphaned_cleanup]`. Under-credit is safer than over-credit — the
+    balance model will just decide to water again next cycle if needed.
+    Returns the closed rows so the caller can log them individually.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, zone_id, start_ts, trigger_reason FROM watering_event "
+        "WHERE end_ts IS NULL"
+    ).fetchall()
+    if not rows:
+        conn.close()
+        return []
+    conn.execute(
+        "UPDATE watering_event "
+        "SET end_ts = strftime('%Y-%m-%dT%H:%M:%S','now','localtime'), "
+        "    duration_sec = COALESCE(duration_sec, 0), "
+        "    est_gallons = COALESCE(est_gallons, 0), "
+        "    est_cf = COALESCE(est_cf, 0), "
+        "    trigger_reason = COALESCE(trigger_reason, '') || ' [orphaned_cleanup]' "
+        "WHERE end_ts IS NULL"
+    )
+    conn.commit()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def log_skip(zone_id: int, reason: str, est_gallons_saved: float,
              conditions: str = None):
     est_cf = est_gallons_saved / 7.48
@@ -260,6 +291,17 @@ def log_skip(zone_id: int, reason: str, est_gallons_saved: float,
     )
     conn.commit()
     conn.close()
+
+
+def skip_event_exists_today(zone_id: int) -> bool:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM skip_event "
+        "WHERE zone_id = ? AND DATE(ts) = DATE('now', 'localtime') LIMIT 1",
+        (zone_id,),
+    ).fetchone()
+    conn.close()
+    return row is not None
 
 
 def log_cycle_summary(zones_evaluated: int, zones_skipped: int,

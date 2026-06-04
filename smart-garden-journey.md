@@ -529,6 +529,16 @@ Follow-up to #4. The `daily_summary.gallons_saved` / `cost_avoided` columns were
 - Validation: first post-restart cycle (08:24:41) produced exactly 7 `skip_event` rows — one per installed zone with auto_mode=true (zones 7 and 8 correctly excluded as manual-mode). Second cycle at 08:24 didn't duplicate (de-dupe works). Re-ran backfill for today → `daily_summary` 2026-06-04 now shows `gallons_saved=648.0`, `cost_avoided=$0.36`. End-to-end working.
 - Historical data: not reconstructible — only per-cycle aggregates exist in `cycle_summary`. Pre-deployment `daily_summary` rows keep `gallons_saved=0` / `cost_avoided=0`. Only forward.
 
+### `/api/audit` + `/audit` HTML — DB-table health introspection (NEW)
+
+Direct response to the architectural finding that bugs #4 and #5 were silently-empty tables for months with no visible signal. Added a runtime endpoint that enumerates every table, reports row count, last write timestamp, last-24h count, and flags `EMPTY` (no rows ever) or `STALE` (recent writes stopped) against a per-table cadence expectation. Self-contained HTML page at `/audit` renders the same data with status pills.
+
+- New routes added to [dashboard.py](../smart-garden-server-live/dashboard.py): `/api/audit` (JSON) and `/audit` (HTML, inline template — no `templates/audit.html` file needed).
+- `AUDIT_TABLE_SPECS` lists all 13 tables with their timestamp column, expected max age in hours, and a human label. Date-typed columns (`daily_summary.date`, `soil_balance.date`, `billing_cycle.month`) get day-resolution age math (no false positives mid-morning).
+- Deployed: scp + restart 2026-06-04 09:05:56 PDT.
+- **First run already surfaced a real bug:** `sensor_log` is STALE — last write 2026-05-26T23:13:54 (200+ hours ago) despite cycles running every 5 min and `weather_log`/`cycle_summary`/`system_health` all current. Sensor logging path has been broken for 8 days. Confirmed `billing_cycle` is EMPTY (known dead schema, flagged as expected).
+- Rollback: single-file revert — `dashboard.py.bak.audit-20260604-090308` lives on the server. No schema changes, no behavior changes to write paths.
+
 ---
 
 ## Session Log: 2026-06-03 (Site Polish Sweep — 11 issues closed)

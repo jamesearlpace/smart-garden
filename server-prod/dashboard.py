@@ -576,10 +576,18 @@ def create_app(config, engine, weather, billing):
             }), 400
         ok = False
         if action == "open":
+            # Route the raw toggle through start_zone_watering so the run
+            # is tracked in _active and writes a watering_event row.
+            # Without this, get_daily_irrigation_mm() never credits manual
+            # toggle runs and the scheduler thinks the zone still needs
+            # water. Mirrors what /api/run does. See issue #2.
+            soil = db.get_latest_soil(zone_id)
+            soil_pct = soil["soil_pct"] if soil else 0
             ok = engine_command(
-                "open_valve",
-                zone_id,
-                timeout=ESP32_MANUAL_TIMEOUT,
+                "start_zone_watering",
+                zone_id, soil_pct, 0, "manual_toggle",
+                allow_weather_fetch=False,
+                command_timeout=ESP32_MANUAL_TIMEOUT,
                 retry=False,
             )
         elif action == "close":
@@ -1347,5 +1355,164 @@ def create_app(config, engine, weather, billing):
             return jsonify({"status": r.text})
         except Exception as e:
             return jsonify({"error": str(e)}), 502
+
+    # ── DB-table audit (catch silently-empty / silently-stale tables) ──
+    # (name, ts_col, ts_is_date, max_age_hours_or_None, label)
+    AUDIT_TABLE_SPECS = [
+        ("sensor_log",        "ts",          False, 1,    "Soil/moisture sensor readings"),
+        ("weather_log",       "ts",          False, 1,    "Weather observations"),
+        ("watering_event",    "start_ts",    False, 168,  "Watering events (sparse — days between OK)"),
+        ("skip_event",        "ts",          False, 1,    "Per-zone skip decisions"),
+        ("daily_summary",     "date",        True,  48,   "Nightly cost/savings rollup"),
+        ("billing_cycle",     "month",       True,  None, "Monthly bill cache (KNOWN UNUSED — dead schema)"),
+        ("system_health",     "ts",          False, 1,    "ESP32 health (rssi/heap/temp)"),
+        ("soil_balance",      "date",        True,  48,   "Per-zone water balance (nightly)"),
+        ("connectivity_log",  "ts",          False, 1,    "ESP32 reachability log"),
+        ("cycle_summary",     "ts",          False, 1,    "Per-cycle aggregate decisions"),
+        ("sensor_fault",      "detected_ts", False, None, "Active sensor fault flags (rare events)"),
+        ("server_health_log", "ts",          False, 1,    "Pi disk/cpu/db-size"),
+        ("forecast_snapshot", "ts",          False, 25,   "Daily forecast snapshot"),
+    ]
+
+    def _audit_one(conn, name, ts_col, is_date, max_age_h, label):
+        try:
+            row_count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        except Exception as e:
+            return {"table": name, "label": label, "status": "ERROR", "error": str(e)}
+        last_ts = None
+        rows_24h = 0
+        if row_count > 0:
+            try:
+                last_ts = conn.execute(f"SELECT MAX({ts_col}) FROM {name}").fetchone()[0]
+                if is_date:
+                    rows_24h = conn.execute(
+                        f"SELECT COUNT(*) FROM {name} "
+                        f"WHERE {ts_col} >= date('now','localtime','-1 day')"
+                    ).fetchone()[0]
+                else:
+                    rows_24h = conn.execute(
+                        f"SELECT COUNT(*) FROM {name} "
+                        f"WHERE {ts_col} >= datetime('now','localtime','-1 day')"
+                    ).fetchone()[0]
+            except Exception:
+                pass
+        age_hours = None
+        if last_ts:
+            try:
+                if is_date and len(last_ts) == 7:
+                    last_dt = datetime.strptime(last_ts + "-01", "%Y-%m-%d")
+                    this_month_first = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    age_hours = max(0.0, (this_month_first - last_dt).total_seconds() / 3600)
+                elif is_date:
+                    last_dt = datetime.strptime(last_ts, "%Y-%m-%d")
+                    today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    age_hours = max(0.0, (today_midnight - last_dt).total_seconds() / 3600)
+                else:
+                    age_hours = (datetime.now() - datetime.strptime(last_ts[:19], "%Y-%m-%dT%H:%M:%S")).total_seconds() / 3600
+            except Exception:
+                pass
+        if row_count == 0:
+            status = "EMPTY"
+        elif max_age_h is not None and age_hours is not None and age_hours > max_age_h:
+            status = "STALE"
+        else:
+            status = "OK"
+        return {
+            "table": name, "label": label, "rows": row_count, "rows_24h": rows_24h,
+            "last_write": last_ts,
+            "age_hours": round(age_hours, 2) if age_hours is not None else None,
+            "max_age_hours": max_age_h, "status": status,
+        }
+
+    @app.route("/api/audit")
+    def api_audit():
+        """Runtime DB-table health audit — row counts, last writes, staleness flags."""
+        conn = db.get_conn()
+        try:
+            tables = [_audit_one(conn, *spec) for spec in AUDIT_TABLE_SPECS]
+        finally:
+            conn.close()
+        summary = {
+            "ok":    sum(1 for r in tables if r["status"] == "OK"),
+            "stale": sum(1 for r in tables if r["status"] == "STALE"),
+            "empty": sum(1 for r in tables if r["status"] == "EMPTY"),
+            "error": sum(1 for r in tables if r["status"] == "ERROR"),
+        }
+        return jsonify({
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "summary": summary,
+            "tables": tables,
+        })
+
+    @app.route("/audit")
+    def audit_page():
+        """Self-contained HTML view of /api/audit — no template file needed."""
+        html = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Smart Garden — System Audit</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:24px;background:#0f1419;color:#e6edf3;}
+h1{margin:0 0 4px 0;font-size:20px;}
+.sub{color:#7d8590;font-size:13px;margin-bottom:16px;}
+.summary{display:flex;gap:12px;margin-bottom:18px;}
+.pill{padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;}
+.pill.ok{background:#1a3e2a;color:#7ee787;}
+.pill.stale{background:#3e2e16;color:#f0b429;}
+.pill.empty{background:#3e1a1a;color:#ff7b72;}
+.pill.error{background:#3e1a1a;color:#ff7b72;}
+table{border-collapse:collapse;width:100%;font-size:13px;background:#161b22;border-radius:8px;overflow:hidden;}
+th{background:#21262d;text-align:left;padding:10px 12px;font-weight:600;color:#7d8590;}
+td{padding:10px 12px;border-top:1px solid #21262d;vertical-align:top;}
+.status{font-weight:600;padding:2px 8px;border-radius:4px;font-size:11px;text-transform:uppercase;}
+.status.ok{background:#1a3e2a;color:#7ee787;}
+.status.stale{background:#3e2e16;color:#f0b429;}
+.status.empty{background:#3e1a1a;color:#ff7b72;}
+.status.error{background:#3e1a1a;color:#ff7b72;}
+.label{color:#7d8590;font-size:11px;}
+.num{text-align:right;font-variant-numeric:tabular-nums;}
+button{background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;}
+button:hover{background:#30363d;}
+a{color:#58a6ff;}
+</style></head>
+<body>
+<h1>Smart Garden — DB Audit</h1>
+<div class="sub" id="meta">Loading…</div>
+<div class="summary" id="summary"></div>
+<button onclick="load()">Refresh</button>
+<p class="sub" style="margin-top:18px;">Catches silently-empty tables (no writer wired up) and silently-stale tables (writer broken). Bugs #4 (daily_summary) and #5 (skip_event) would have appeared here as EMPTY the day they shipped.</p>
+<table id="t"><thead><tr>
+<th>Table</th><th>Status</th><th class="num">Rows</th><th class="num">Last 24h</th>
+<th>Last write</th><th class="num">Age (h)</th><th class="num">Max age</th>
+</tr></thead><tbody></tbody></table>
+<script>
+async function load(){
+  const r = await fetch('/api/audit');
+  const d = await r.json();
+  document.getElementById('meta').textContent = 'Generated ' + d.generated_at;
+  const s = d.summary;
+  document.getElementById('summary').innerHTML =
+    `<span class="pill ok">${s.ok} OK</span>` +
+    `<span class="pill stale">${s.stale} STALE</span>` +
+    `<span class="pill empty">${s.empty} EMPTY</span>` +
+    (s.error ? `<span class="pill error">${s.error} ERROR</span>` : '');
+  const tb = document.querySelector('#t tbody');
+  tb.innerHTML = '';
+  for (const t of d.tables){
+    const tr = document.createElement('tr');
+    const fmt = (v) => v === null || v === undefined ? '—' : v;
+    tr.innerHTML =
+      `<td><strong>${t.table}</strong><div class="label">${t.label || ''}</div></td>` +
+      `<td><span class="status ${t.status.toLowerCase()}">${t.status}</span></td>` +
+      `<td class="num">${fmt(t.rows)}</td>` +
+      `<td class="num">${fmt(t.rows_24h)}</td>` +
+      `<td>${fmt(t.last_write)}</td>` +
+      `<td class="num">${fmt(t.age_hours)}</td>` +
+      `<td class="num">${fmt(t.max_age_hours)}</td>`;
+    tb.appendChild(tr);
+  }
+}
+load();
+</script>
+</body></html>"""
+        return Response(html, mimetype="text/html")
 
     return app

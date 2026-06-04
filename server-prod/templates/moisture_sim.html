@@ -2479,6 +2479,18 @@ function refresh() {
         // Inline banner logic (bug #23: function call kept failing silently)
         try {
           var _banner = document.getElementById('next-water-banner');
+          var _cz = (typeof getCurrentZone === 'function') ? getCurrentZone() : null;
+          if (_cz && (_cz.auto_mode === false || !_cz.installed)) {
+            // Manual / not-installed: engine won't auto-water — don't show a predicted date.
+            // Mirrors updateNextWateringBanner(); the inline copy added for bug #23 had dropped
+            // this guard, so manual zones (e.g. Garden drip) showed a fake "next watering" date.
+            _banner.style.display = 'flex';
+            document.getElementById('nw-value').textContent = _cz.installed ? '✋ Manual mode' : '⛔ Not installed';
+            document.getElementById('nw-value').style.color = '#94a3b8';
+            document.getElementById('nw-detail').textContent = _cz.installed
+              ? 'Engine will not auto-water this zone. Toggle to Automatic to follow the chart.'
+              : 'Zone is not installed — no auto-watering.';
+          } else {
           var _curM = 50, _madM = 50;
           for (var _i = data.length - 1; _i >= 0; _i--) {
             if (!data[_i].isForecast) { _curM = data[_i].moisture; _madM = data[_i].madNow; break; }
@@ -2521,6 +2533,7 @@ function refresh() {
               document.getElementById('nw-value').style.color = _ha2 < 24 ? '#f59e0b' : '#22c55e';
               document.getElementById('nw-detail').textContent = '~' + _ts2 + ' · ' + Math.round(_curM) + '% → MAD ' + Math.round(_madM) + '%';
             } else { _banner.style.display = 'none'; }
+          }
           }
         } catch(e) { console.error('Banner error:', e); }
       }

@@ -1642,6 +1642,22 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Physical TODO unchanged (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees (raw 4095 = open circuit); once a sensor is sealed + placed, use `/calibrate` to capture its real dry/wet.
 
+---
+
+## 2026-06-05 — Calibration polish: nav tab, drift tracking, recalibration advice (commits c0ac526, 4dbbdfb)
+
+**Context:** Follow-on to the calibration build. Three additions + one scientific decision.
+
+**1. Calibrate nav tab (commit 6f43fc8):** Added 🎛️ Calibrate to the sidebar + mobile bottom-nav on Home and Schedule pages; `/calibrate` page got its own top nav links. Was previously only reachable via a back-link.
+
+**2. In-ground calibration guidance + drift tracking (commit c0ac526):** James asked to calibrate against saturated soil + dried-off sensor (not a cup), and wanted drift telemetry — while correctly noting in-ground readings can't show drift (seasonal confound). KEY INSIGHT: drift is measurable only by comparing the SAME controlled reference capture (dry-in-air / saturated-soil) over time — the reference state is constant, so any change between successive captures is pure sensor drift. Built `calibration_log` table + `get_calibration_drift()` (delta, days, per-30d rate between the 2 latest captures per sensor+point). `/calibrate` shows a per-sensor drift line, color-coded (green <120, amber <300, red ≥300 counts). Rewrote instructions: saturate→wait for raw to settle→Set Wet; pull out, dry off→wait→Set Dry; emphasis on waiting for the number to STOP MOVING (surface-film lag).
+
+**3. Recalibration recommendation (commit 4dbbdfb):** James wanted the page to TELL him when/why to recalibrate, not just show numbers. Added `_calibration_advice()` → per-sensor banner with status (✅ Good / 👀 Watch / 🔧 Recalibrate soon / ⏰ Recalibrate now / ❌ Hardware issue) + plain-English reason. Logic: dead/railed → hardware issue (calibration won't fix); never calibrated → due; **live raw outside the calibrated window → "pinned at 0%/100%, recapture Dry/Wet"** (provably-wrong endpoints, the clever check); age ≥45d → due, ≥75d → overdue; drift ≥120 counts → adds "and it's drifting". Verified live on all 4 sensors.
+
+**4. SCIENTIFIC DECISION — rejected passive wet-drift auto-calibration:** Considered continuously inferring drift from the post-watering saturation point (soil reaches ~field capacity after each watering = a recurring natural wet reference). James said "stick with what's more scientific" — correct. Passive inference is confounded: post-watering saturation varies with temp, starting dryness, compaction, rain-on-irrigation, so the "drift" would be partly real, partly soil variability, indistinguishable. The manual two-point method uses CONTROLLED reference states (deliberate air-dry + saturated) with no confounds — that's why METER/extension labs use controlled references. **Drift detection stays tied to deliberate recalibrations only.** Dry-end especially can't be inferred (in-ground soil never reaches air-dry). Not built — intentionally.
+
+**Sensor work wrapped here.** Net: server-side calibration, `/calibrate` UI + nav tab, invalid-reading guard, drift tracking, recalibration advice. Sensors remain observe-only (`soil_sensor: null`). ET model is and stays the decision-maker. Cheap capacitive = supporting eyes (consumable), not the brain.
+
 
 
 

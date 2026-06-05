@@ -2464,8 +2464,8 @@ function renderBatteryChart(d){
         tooltip: { callbacks: { label: function(ctx){ return ctx.dataset.label+': raw '+ctx.parsed.x.toFixed(2)+'V → '+ctx.parsed.y.toFixed(2)+'V'; } } }
       },
       scales: {
-        x: { title:{display:true,text:'ESP32 raw (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} },
-        y: { title:{display:true,text:'Wanderer actual (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} }
+        x: { type:'linear', title:{display:true,text:'ESP32 raw (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} },
+        y: { type:'linear', title:{display:true,text:'Wanderer actual (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} }
       }
     }
   });

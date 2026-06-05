@@ -1834,7 +1834,8 @@ a{color:#58a6ff;text-decoration:none;}
 </style></head>
 <body>
 <h1>🌱 Soil Sensor Calibration</h1>
-<div class="sub">Capture each sensor's dry & wet endpoints — saved to the server, no reflash. <a href="/moisture-sim">← Schedule</a></div>
+<div class="sub">Capture each sensor's dry & wet endpoints — saved to the server, no reflash.
+<a href="/">🏠 Home</a> · <a href="/moisture-sim">💧 Schedule</a> · <a href="/forecast">🌧️ Forecast</a> · <a href="/map">🗺️ Map</a></div>
 
 <div class="help">
 <b>How to calibrate (takes 1 minute per sensor):</b><br>

@@ -1888,12 +1888,7 @@ a{color:var(--blue);text-decoration:none}
     </div>
 
     <div class="card" style="padding:16px;margin-bottom:12px">
-      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px">🔋 Battery Voltage <span style="color:var(--text3);font-weight:400;font-size:.72rem">— tracks solar charge/discharge cycle (null until battery reporting enabled)</span></div>
-      <div style="height:140px"><canvas id="sh-chart-battery"></canvas></div>
-    </div>
-
-    <div class="card" style="padding:16px;margin-bottom:12px">
-      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px">📶 WiFi Reconnects <span style="color:var(--text3);font-weight:400;font-size:.72rem">— cumulative reconnects since last boot. Rising slope = unstable connection.</span></div>
+      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px"> WiFi Reconnects <span style="color:var(--text3);font-weight:400;font-size:.72rem">— cumulative reconnects since last boot. Rising slope = unstable connection.</span></div>
       <div style="height:140px"><canvas id="sh-chart-wifi-reconnects"></canvas></div>
     </div>
 
@@ -2041,17 +2036,6 @@ a{color:var(--blue);text-decoration:none}
 
     <div class="section-header"><h2>🧠 Event Log</h2></div>
     <div id="history-activity"></div>
-
-    <div class="section-header" style="margin-top:24px"><h2>📈 Analytics</h2>
-      <span class="aside"><em>Select a range and view charts</em></span>
-    </div>
-    <div id="history-analytics"></div>
-
-    <div class="section-header" style="margin-top:24px"><h2>💧 Water Usage & Billing</h2></div>
-    <div id="history-usage"></div>
-
-    <div class="section-header" style="margin-top:24px"><h2>🌤️ Weather History</h2></div>
-    <div id="history-weather"></div>
   </div>
 
   <!-- ═══ SETTINGS PANEL (composite) ═══ -->
@@ -2157,10 +2141,6 @@ function showPanel(id) {
   // Composite panels: move old panel content into composite containers
   if (id === 'history') {
     moveContent('p-activity', 'history-activity');
-    moveContent('p-analytics', 'history-analytics');
-    moveContent('p-usage', 'history-usage');
-    moveContent('p-weather', 'history-weather');
-    if (!AN.loaded) loadAnalytics();
   } else if (id === 'settings') {
     moveContent('p-config', 'settings-config');
     moveContent('p-schedule', 'settings-schedule');
@@ -4170,7 +4150,6 @@ function loadSensorHistory(hours) {
   // Sensor Fault Status (not a time-series, just current state)
   loadFaultStatus();
   // System Telemetry
-  loadBatteryChart('sh-chart-battery', '/api/health-history?hours=' + hours, hours);
   loadWifiReconnectsChart('sh-chart-wifi-reconnects', '/api/health-history?hours=' + hours, hours);
   loadCrashChart('sh-chart-crashes', '/api/health-history?hours=' + hours, hours);
   loadValveHealthChart('sh-chart-valve-health');

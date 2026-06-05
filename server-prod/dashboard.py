@@ -1093,6 +1093,37 @@ def create_app(config, engine, weather, billing):
             return None, None
         return round(raw_v, 4), engine.battery_raw_to_v(raw_v)
 
+    def _battery_fresh_reading(timeout_sec=12):
+        """Force the ESP32 to take a NEW battery sample, then return it.
+
+        The firmware only re-reads the battery ADC on its sensor interval
+        (hourly on the currently-flashed build), so a plain force_fresh fetch
+        just returns the same stale cached value. We kick fast-sample mode and
+        poll until the reported batteryV actually changes (a real ADC read
+        always jitters a few mV) or we time out. Returns (raw_v, corrected_v,
+        was_fresh)."""
+        baseline, _ = _battery_live_reading()
+        # Kick a short fast-sample window so the firmware re-reads every ~3s.
+        try:
+            engine.set_fast_sample(60, 3)
+        except Exception as e:
+            log.warning("battery fresh-read: fast-sample kick failed: %s", e)
+        deadline = time.time() + timeout_sec
+        last = baseline
+        while time.time() < deadline:
+            time.sleep(3.2)
+            raw_v, corrected_v = _battery_live_reading()
+            if raw_v is None:
+                continue
+            last = raw_v
+            # A genuinely new ADC sample differs from the stale cached value.
+            if baseline is None or abs(raw_v - baseline) > 1e-4:
+                return raw_v, corrected_v, True
+        # Timed out without a change — return whatever we last saw (may be stale).
+        if last is None:
+            return None, None, False
+        return last, engine.battery_raw_to_v(last), False
+
     def _battery_cal_snapshot():
         cal = config.get("battery_calibration") or {}
         points = cal.get("points") or []
@@ -1128,8 +1159,9 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/battery-calibration/add", methods=["POST"])
     def api_battery_calibration_add():
-        """Add a reference point. Body: {actual_v}. Captures the ESP32's raw
-        battery reading at this instant and pairs it with the real voltage."""
+        """Add a reference point. Body: {actual_v}. Forces the ESP32 to take a
+        FRESH battery sample (it otherwise only re-reads hourly) and pairs that
+        with the real Wanderer voltage the user just read."""
         data = request.get_json(silent=True) or {}
         try:
             actual_v = float(data.get("actual_v"))
@@ -1137,7 +1169,7 @@ def create_app(config, engine, weather, billing):
             return jsonify({"ok": False, "error": "actual_v (a number) required"}), 400
         if not (5.0 <= actual_v <= 18.0):
             return jsonify({"ok": False, "error": "actual_v %.2f is out of range for a 12V SLA (5–18V)" % actual_v}), 400
-        raw_v, _ = _battery_live_reading()
+        raw_v, _, was_fresh = _battery_fresh_reading()
         if raw_v is None:
             return jsonify({"ok": False, "error": "ESP32 isn't reporting a battery reading right now — try again in a moment"}), 400
         cal = config.get("battery_calibration") or {}
@@ -1148,8 +1180,20 @@ def create_app(config, engine, weather, billing):
             "actual_v": round(actual_v, 3),
         })
         saved, fit = _save_battery_calibration(points)
-        return jsonify({"ok": True, "captured": {"raw_v": round(raw_v, 4), "actual_v": actual_v},
+        return jsonify({"ok": True, "captured": {"raw_v": round(raw_v, 4), "actual_v": actual_v, "fresh": was_fresh},
                         "fit": fit, "snapshot": _battery_cal_snapshot()})
+
+    @app.route("/api/battery-calibration/live-refresh", methods=["POST"])
+    def api_battery_calibration_live_refresh():
+        """Force a fresh ESP32 battery sample and return the current live values
+        (without saving a point) — lets the user see the true current voltage
+        before entering the Wanderer reading."""
+        raw_v, corrected_v, was_fresh = _battery_fresh_reading()
+        if raw_v is None:
+            return jsonify({"ok": False, "error": "no battery reading"}), 400
+        legacy_v = round(raw_v * BATTERY_LEGACY_SCALE, 2)
+        return jsonify({"ok": True, "fresh": was_fresh,
+                        "live": {"raw_v": raw_v, "corrected_v": corrected_v, "legacy_v": legacy_v}})
 
     @app.route("/api/battery-calibration/delete", methods=["POST"])
     def api_battery_calibration_delete():
@@ -2209,8 +2253,8 @@ a{color:var(--blue);text-decoration:none;}
 
 <h2 style="font-size:16px;margin:18px 0 6px">🔋 Battery Voltage</h2>
 <div class="help">
-<b>Make the dashboard voltage match the real battery.</b> Open the junction box, read the true voltage off the <b>Wanderer charge controller</b>, type it in below, and tap <b>Add reading</b>. We capture what the ESP32 reports at that instant and fit a correction so the dashboard matches reality.<br>
-<span style="color:#7d8590">The divider you built (5 resistors instead of 4) reads slightly off and not perfectly linear. One reading already helps; add a few at different charge levels (morning low, midday charging) and the fit gets sharper. 2+ points → linear fit, 5+ → quadratic.</span>
+<b>Make the dashboard voltage match the real battery.</b> Open the junction box, read the true voltage off the <b>Wanderer charge controller</b>, type it in below, and tap <b>Add reading</b>. We force a fresh sample from the ESP32 at that instant (it normally only re-reads the battery on a long interval) and fit a correction so the dashboard matches reality.<br>
+<span style="color:#7d8590">The divider you built (5 resistors instead of 4) reads slightly off and not perfectly linear. One reading already helps; add a few at different charge levels (morning low, midday charging) and the fit gets sharper. 2+ points → linear fit, 5+ → quadratic. Capturing takes a few seconds while the ESP32 re-samples.</span>
 </div>
 <div id="battery-cal" class="card">Loading…</div>
 <div class="card" id="battery-chart-card" style="display:none">
@@ -2385,10 +2429,12 @@ function renderBattery(d){
   var liveHtml;
   if(hasLive){
     liveHtml = '<div class="row" style="align-items:flex-end">'
-      + '<div><div class="muted">ESP32 raw reading</div><div class="raw live">' + vfmt(live.raw_v) + '</div></div>'
+      + '<div><div class="muted">ESP32 raw reading</div><div class="raw live" id="bat-live-raw">' + vfmt(live.raw_v) + '</div></div>'
       + '<div style="text-align:center;color:#9ba8b5;font-size:20px">→</div>'
-      + '<div style="text-align:right"><div class="muted">dashboard shows</div><div class="raw" style="color:#16a34a">' + vfmt(live.corrected_v) + '</div></div>'
-      + '</div>';
+      + '<div style="text-align:right"><div class="muted">dashboard shows</div><div class="raw" style="color:#16a34a" id="bat-live-corr">' + vfmt(live.corrected_v) + '</div></div>'
+      + '</div>'
+      + '<div style="margin-top:6px"><button onclick="refreshBatteryLive()" id="bat-refresh-btn" style="font-size:12px;padding:5px 10px">🔄 Refresh reading now</button>'
+      + ' <span class="muted" id="bat-refresh-note">ESP32 samples the battery on its own interval — tap to force a fresh read.</span></div>';
   } else {
     liveHtml = '<div class="advice adv-overdue"><b>🔌 No battery reading</b> — the ESP32 isn\\'t reporting a voltage right now. Add a point once it\\'s back online.</div>';
   }
@@ -2471,20 +2517,44 @@ function renderBatteryChart(d){
   });
 }
 
+async function refreshBatteryLive(){
+  var btn = document.getElementById('bat-refresh-btn');
+  var note = document.getElementById('bat-refresh-note');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Reading…'; }
+  if(note){ note.textContent = 'Forcing a fresh ESP32 sample (a few seconds)…'; }
+  try{
+    var r = await fetch('/api/battery-calibration/live-refresh', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body:'{}'});
+    var d = await r.json();
+    if(d.ok){
+      var rawEl = document.getElementById('bat-live-raw');
+      var corrEl = document.getElementById('bat-live-corr');
+      if(rawEl) rawEl.textContent = vfmt(d.live.raw_v);
+      if(corrEl) corrEl.textContent = vfmt(d.live.corrected_v);
+      toast(d.fresh ? ('Fresh reading: ' + Number(d.live.raw_v).toFixed(2) + 'V') : 'Reading unchanged (may still be settling)');
+      if(note) note.textContent = d.fresh ? 'Fresh — captured a new ADC sample.' : 'No change detected; try once more.';
+    } else { toast(d.error || 'Refresh failed', true); }
+  }catch(e){ toast('Refresh failed', true); }
+  if(btn){ btn.disabled = false; btn.textContent = '🔄 Refresh reading now'; }
+}
+
 async function addBatteryPoint(){
   var inp = document.getElementById('bat-actual');
   var v = parseFloat(inp.value);
   if(isNaN(v)){ toast('Enter the voltage you read', true); return; }
+  var btn = document.querySelector('button[onclick="addBatteryPoint()"]');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Capturing fresh…'; }
   try{
     var r = await fetch('/api/battery-calibration/add', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({actual_v:v})});
     var d = await r.json();
     if(d.ok){
       var c = d.captured || {};
-      toast('Added: actual ' + Number(c.actual_v).toFixed(2) + 'V @ raw ' + Number(c.raw_v).toFixed(2) + 'V');
+      var freshNote = c.fresh ? '' : ' (cached — ESP32 didn\\'t re-sample in time)';
+      toast('Added: actual ' + Number(c.actual_v).toFixed(2) + 'V @ raw ' + Number(c.raw_v).toFixed(2) + 'V' + freshNote);
       inp.value='';
       renderBattery(d.snapshot);
     } else { toast(d.error || 'Add failed', true); }
   }catch(e){ toast('Add failed', true); }
+  if(btn){ btn.disabled = false; btn.textContent = '➕ Add reading'; }
 }
 
 async function deleteBatteryPoint(ts){

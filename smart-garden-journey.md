@@ -1623,6 +1623,25 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Status:** Diagnosis done. Calibration plan documented, NOT yet built. Sensors remain observe-only (`soil_sensor: null` everywhere) so the bad readings affect nothing operationally.
 
+---
+
+## 2026-06-05 — Sensor research settled + server-side calibration BUILT (commit 46f7a25)
+
+**Context:** Long research thread on whether the cheap capacitive sensors are usable. Settled conclusions (evidence-backed): the **concept** of soil-moisture-informed irrigation is legit (UF/IFAS AE437, UMN Extension, EPA WaterSense — the "bypass" architecture where a sensor can SKIP a scheduled/ET-modeled watering is the textbook design, and James already built it). The **weak link** is the $2 bare capacitive board: sealing buys months-to-a-year in gentle spots, NOT permanence; pros use TDR/sealed-potted probes (METER, Soil Scout) that don't use fiberglass. Verdict: **ET model stays the brain; capacitive sensors are supporting "eyes" (rain detection, dashboard cross-check, optional skip-gate) — consumables, not the decision-maker.** James already owns the right cheap boards (5-pack capacitive) — don't buy more; the value is in software. He may seal them for the beds + treat lawn ones as consumables, or add one sealed ECOWITT WH51L (~$40) later if he wants durable in-lawn ground-truth. All optional.
+
+**BUILT — off-chip calibration (the thing that makes the owned sensors pull their weight):**
+- **Why:** calibration was baked into firmware (`#define SOIL_DRY/WET` in main.cpp) → every tweak = USB flash → endless loop (calibration is iterative). The ESP32 already sends raw ADC and the server already stores it, so calibration can live server-side.
+- **`config.yaml` `soil_calibration`** — per-sensor `{name, dry, wet}` for channels 0-3.
+- **`irrigation.py`:** `get_soil_calibration()`, `soil_raw_to_pct()` (linear dry→0%/wet→100%, clamped, **invalid guard: raw ≤1 or ≥4094 → None** so a dead sensor reads "no data" not a fake 100%/0%). `run_cycle()` logs the server-computed pct and builds the per-zone soil map from it.
+- **`dashboard.py`:** `/api/calibration` (GET live raw+cal+pct), `/api/calibration/capture` (POST — grab live raw as dry/wet), `/api/calibration/set` (POST — manual). **`/calibrate`** — self-contained mobile UI: Start Live Mode (fast sampling), per-sensor live raw + %, one-tap **Set Dry (in air)** / **Set Wet (in water)** capture buttons, manual fields, auto-refresh.
+- **Tuning is now:** open `/calibrate` → hold sensor in air, Set Dry → dip in water, Set Wet. Done. **No reflash, ever. Recalibrate as often as you want.**
+
+**Verified live (Playwright + authcurl):** Fruit Trees raw 4095 → **null/invalid** (the guard works — it was showing a fake 0%); Garden 2114→69%, Grapes 1535→98%. Capture button round-trip confirmed (clicked Set Dry on Grapes → toast "Saved dry=1535" → config written → re-rendered → reset). Engine compiles, service active, no errors.
+
+**Notes:** Sensors still observe-only (`soil_sensor: null` everywhere) so this is display/telemetry only — safe. `yaml.dump` strips config.yaml comments on any config write (pre-existing); values persist. Firmware step 2 (strip pct, report raw only) still optional — server overrides pct so not blocking.
+
+**Physical TODO unchanged (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees (raw 4095 = open circuit); once a sensor is sealed + placed, use `/calibrate` to capture its real dry/wet.
+
 
 
 

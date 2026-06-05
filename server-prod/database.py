@@ -205,6 +205,21 @@ def init_db():
             detail         TEXT                -- human-readable explanation
         );
         CREATE INDEX IF NOT EXISTS idx_rain_event_ts ON rain_event(ts);
+
+        -- Calibration capture log: every time a sensor's dry or wet endpoint is
+        -- (re)captured, we record the raw value + timestamp. Drift is measured by
+        -- comparing successive captures of the SAME endpoint — the reference
+        -- state (dry-in-air / saturated-soil) is constant, so any change in the
+        -- captured raw is sensor drift, cleanly separated from seasonal moisture.
+        CREATE TABLE IF NOT EXISTS calibration_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
+            sensor_idx  INTEGER NOT NULL,   -- soil channel 0-3
+            point       TEXT NOT NULL,      -- 'dry' | 'wet'
+            raw         INTEGER NOT NULL,   -- captured ADC raw value
+            source      TEXT                -- 'capture' (live) | 'manual'
+        );
+        CREATE INDEX IF NOT EXISTS idx_calib_sensor ON calibration_log(sensor_idx, point, ts);
     """)
     # ── Column migrations (ALTER TABLE is no-op if column exists) ──
     for col, coltype in [("wifi_reconnects", "INTEGER"), ("crash_count", "INTEGER"),
@@ -272,6 +287,85 @@ def get_rain_events(days: int = 7) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Calibration-log helpers (drift tracking) ──
+
+def log_calibration(sensor_idx: int, point: str, raw: int, source: str = "capture"):
+    """Record a calibration endpoint capture for drift history."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO calibration_log (sensor_idx, point, raw, source) "
+        "VALUES (?, ?, ?, ?)",
+        (sensor_idx, point, int(raw), source),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_calibration_history(sensor_idx: int = None, limit: int = 50) -> list[dict]:
+    """Calibration captures, newest first. Optionally for one sensor."""
+    conn = get_conn()
+    if sensor_idx is None:
+        rows = conn.execute(
+            "SELECT * FROM calibration_log ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM calibration_log WHERE sensor_idx = ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (sensor_idx, limit),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_calibration_drift() -> list[dict]:
+    """Per-sensor/per-endpoint drift: compares the most recent capture of each
+    (sensor, point) against the one before it. Returns the raw delta, days
+    between, and a per-30-day drift rate. The reference state is controlled
+    (dry-in-air / saturated soil), so this delta is pure sensor drift — NOT
+    seasonal moisture change (which only affects in-ground readings)."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT sensor_idx, point, raw, ts FROM calibration_log ORDER BY ts DESC"
+    ).fetchall()
+    conn.close()
+    # Group by (sensor_idx, point), preserving newest-first order.
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault((r["sensor_idx"], r["point"]), []).append(r)
+    out = []
+    from datetime import datetime
+    for (idx, point), captures in groups.items():
+        latest = captures[0]
+        entry = {
+            "sensor_idx": idx,
+            "point": point,
+            "latest_raw": latest["raw"],
+            "latest_ts": latest["ts"],
+            "captures": len(captures),
+            "prev_raw": None,
+            "delta": None,
+            "days": None,
+            "drift_per_30d": None,
+        }
+        if len(captures) >= 2:
+            prev = captures[1]
+            entry["prev_raw"] = prev["raw"]
+            entry["delta"] = latest["raw"] - prev["raw"]
+            try:
+                t1 = datetime.strptime(latest["ts"][:19], "%Y-%m-%dT%H:%M:%S")
+                t0 = datetime.strptime(prev["ts"][:19], "%Y-%m-%dT%H:%M:%S")
+                days = (t1 - t0).total_seconds() / 86400.0
+                entry["days"] = round(days, 1)
+                if days > 0.5:
+                    entry["drift_per_30d"] = round(entry["delta"] / days * 30.0, 0)
+            except Exception:
+                pass
+        out.append(entry)
+    return out
 
 
 # ── Insert helpers ──

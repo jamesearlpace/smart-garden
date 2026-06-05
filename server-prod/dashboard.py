@@ -857,6 +857,11 @@ def create_app(config, engine, weather, billing):
         if raw <= engine.SOIL_RAW_MIN or raw >= engine.SOIL_RAW_MAX:
             return jsonify({"ok": False, "error": f"reading {raw} looks invalid (dead/disconnected) — not captured"}), 400
         entry = _save_calibration(idx, **{point: raw})
+        # Record for drift history (reference-state capture over time).
+        try:
+            db.log_calibration(idx, point, raw, source="capture")
+        except Exception as e:
+            log.warning("log_calibration failed: %s", e)
         return jsonify({"ok": True, "index": idx, "point": point, "raw": raw, "calibration": entry})
 
     @app.route("/api/calibration/set", methods=["POST"])
@@ -878,7 +883,24 @@ def create_app(config, engine, weather, billing):
         if dry is not None and wet is not None and dry == wet:
             return jsonify({"ok": False, "error": "dry and wet cannot be equal"}), 400
         entry = _save_calibration(idx, dry=dry, wet=wet, name=name)
+        # Record manual endpoint edits for drift history too.
+        try:
+            if dry is not None:
+                db.log_calibration(idx, "dry", dry, source="manual")
+            if wet is not None:
+                db.log_calibration(idx, "wet", wet, source="manual")
+        except Exception as e:
+            log.warning("log_calibration (manual) failed: %s", e)
         return jsonify({"ok": True, "index": idx, "calibration": entry})
+
+    @app.route("/api/calibration/history")
+    def api_calibration_history():
+        """Calibration capture history + computed drift per sensor/endpoint."""
+        idx = optional_query_int("index", min_value=0, max_value=7)
+        return jsonify({
+            "drift": db.get_calibration_drift(),
+            "history": db.get_calibration_history(idx, limit=60),
+        })
 
     @app.route("/api/run", methods=["POST"])
     def api_run_zone():
@@ -1817,6 +1839,7 @@ button:disabled{opacity:.5;cursor:default;}
 .muted{color:#7d8590;font-size:12px;}
 .endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;}
 .endpoints b{color:#e6edf3;}
+.drift{font-size:12px;color:#adbac7;margin:2px 0 8px;padding:6px 8px;background:#0d1117;border-radius:6px;}
 .badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;}
 .b-ok{background:#1a3e2a;color:#7ee787;}
 .b-bad{background:#3e1a1a;color:#ff7b72;}
@@ -1838,11 +1861,16 @@ a{color:#58a6ff;text-decoration:none;}
 <a href="/">🏠 Home</a> · <a href="/moisture-sim">💧 Schedule</a> · <a href="/forecast">🌧️ Forecast</a> · <a href="/map">🗺️ Map</a></div>
 
 <div class="help">
-<b>How to calibrate (takes 1 minute per sensor):</b><br>
+<b>How to calibrate (do it in the ground, the way it really sits):</b><br>
 1. Click <b>Start Live Mode</b> so raw readings refresh every few seconds.<br>
-2. Hold the sensor in <b>open air</b> (dry) → click <b>Set Dry</b> on that sensor.<br>
-3. Dip the blade in a <b>cup of water</b> to the line (wet) → click <b>Set Wet</b>.<br>
-That's it — the % now reads correctly. Recalibrate any time it drifts.
+2. <b>Saturate the soil</b> around the buried sensor (pour water / soak it), let the live raw <b>stop moving</b>, then tap <b>Set Wet</b>.<br>
+3. Pull the sensor out, <b>dry it off</b> (wipe on your shirt, shake, blow on it), let it sit in air until the live raw <b>settles steady</b>, then tap <b>Set Dry</b>.<br>
+<b>Wait for the number to stop changing before each capture</b> — there's a few-second lag while surface water clears. You're freezing two steady reference points, not timing the transition.<br>
+<span style="color:#7d8590">Tip: saturated soil is a truer "100%" than a cup of water (cup reads wetter than soil ever gets).</span>
+</div>
+
+<div class="help" style="border-color:#1f4a5c">
+<b>📉 Drift tracking:</b> Each time you recalibrate, we log the raw value of the dry/wet capture. Because those captures are always the <b>same physical reference</b> (air = dry, saturated = wet), any change between them is <b>real sensor drift</b> — not the seasonal moisture change that fools the in-ground reading. The drift number below shows how far each endpoint moved since your last calibration. Big jumps = the sensor is aging; recalibrate (and eventually replace).
 </div>
 
 <div class="bar">
@@ -1866,12 +1894,36 @@ function toast(msg, isErr){
 
 function fmt(v){ return (v===null||v===undefined) ? '—' : v; }
 
+var DRIFT = {};  // "idx|point" -> drift entry
+
 async function load(){
   try{
     var r = await fetch('/api/calibration');
     var d = await r.json();
+    // Pull drift history in parallel (best-effort).
+    try{
+      var hr = await fetch('/api/calibration/history');
+      var hd = await hr.json();
+      DRIFT = {};
+      (hd.drift||[]).forEach(function(e){ DRIFT[e.sensor_idx + '|' + e.point] = e; });
+    }catch(e){}
     render(d);
   }catch(e){ /* keep last view */ }
+}
+
+function driftLine(idx){
+  var dry = DRIFT[idx + '|dry'];
+  var wet = DRIFT[idx + '|wet'];
+  function part(label, e){
+    if(!e) return label + ': <span class="muted">no history</span>';
+    if(e.delta === null || e.delta === undefined)
+      return label + ': <span class="muted">1 capture (' + e.latest_raw + ')</span>';
+    var sign = e.delta > 0 ? '+' : '';
+    var sev = Math.abs(e.delta) >= 300 ? 'color:#ff7b72' : Math.abs(e.delta) >= 120 ? 'color:#f0b429' : 'color:#7ee787';
+    var rate = (e.drift_per_30d !== null && e.drift_per_30d !== undefined) ? ' (' + (e.drift_per_30d>0?'+':'') + e.drift_per_30d + '/mo)' : '';
+    return label + ': <span style="' + sev + '">' + sign + e.delta + ' over ' + (e.days||'?') + 'd' + rate + '</span>';
+  }
+  return '<div class="drift">📉 drift since last cal — ' + part('dry', dry) + ' · ' + part('wet', wet) + '</div>';
 }
 
 function render(d){
@@ -1896,6 +1948,7 @@ function render(d){
       +   '<div style="text-align:right"><div class="muted">moisture</div><div class="pct">' + (valid ? s.pct + '%' : '—') + '</div></div>'
       + '</div>'
       + '<div class="endpoints"><span>dry (0%): <b>' + s.dry + '</b></span><span>wet (100%): <b>' + s.wet + '</b></span></div>'
+      + driftLine(s.index)
       + '<div class="actions">'
       +   '<button class="btn-dry" onclick="capture(' + s.index + ',\\'dry\\')">☀️ Set Dry (in air)</button>'
       +   '<button class="btn-wet" onclick="capture(' + s.index + ',\\'wet\\')">💧 Set Wet (in water)</button>'

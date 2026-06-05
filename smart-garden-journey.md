@@ -1,7 +1,20 @@
 # Smart Garden — Journey Doc
 
-**Status:** ✅ **System operational — ET₀ water balance mode (no soil sensors).** Per-zone Manual/Auto toggle deployed. Multi-year backtest done. Grass-starvation audit complete — engine math is conservative, but `precip_rate_iph` in config is **uncalibrated** and likely overstated → could under-water by ~2× until catch-can test is done. **Post-Issue-#1 audit series complete (2026-06-04): 15 of 16 open issues closed across data-layer fixes, security hardening, XSS sweep, and race-condition fix; only #16 (cam-upload) remains, explicitly deferred.**
-**Last Updated:** 2026-06-04
+**Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
+**Last Updated:** 2026-06-05
+**Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
+
+> **RESUME HERE — current state as of 2026-06-05 (read the dated entries at the bottom for details):**
+> - **Sync-groups SHIPPED + verified** (first live run watered all 7 turf zones together 4–5:45 AM, no errors). front_yard=[0,1], backyard_grass=[2,3,4,5,6]. Window widened 04:00→08:00.
+> - **Soil balance credited immediately** after watering (not 11 PM) — predictor/banner/forecast reflect a completed watering in real time.
+> - **Forecast-vs-Actual audit cleaned up** — group-aware snapshot, manual runs excluded, water/skip collision fixed (48.9%→99% on live data).
+> - **Sensor strategy SETTLED** (evidence-backed): ET model = brain; cheap capacitive sensors = consumable supporting eyes (rain detection, dashboard cross-check, optional skip-gate). NOT a permanent/accurate lawn sensor. Pros use TDR/sealed-potted; passive auto-cal REJECTED as unscientific.
+> - **Calibration system BUILT** — `/calibrate` page + nav tab: server-side per-sensor dry/wet (no reflash), invalid-reading guard, drift tracking, recalibration advice. Sensors still `soil_sensor: null` (observe-only).
+> - **Dashboard charts cleaned up** — removed duplicate injected Analytics/Usage/Weather sections + dup battery from History, deleted orphaned p-analytics panel, fixed all 6 Chart.js console errors.
+> - **Physical TODO (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees sensor (raw 4095 = open circuit); then use `/calibrate` to capture real dry/wet.
+> - **Pending firmware flash (USB only, NEVER OTA):** crashLoop fix + 5-min sampling interval (committed, not flashed). Optional: strip pct math from firmware (server overrides it).
+> - **Still open / future:** `precip_rate_iph` uncalibrated (catch-can test); cycle-soak configured-but-unimplemented (engine runs 24min straight — highest-impact attended fix); rain-detection observe-only; journey doc 149KB needs archive-split.
+
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (84KB, all dated session logs, hardware build notes, deployment post-mortems). This doc keeps only what every new session needs.
@@ -1657,6 +1670,30 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 **4. SCIENTIFIC DECISION — rejected passive wet-drift auto-calibration:** Considered continuously inferring drift from the post-watering saturation point (soil reaches ~field capacity after each watering = a recurring natural wet reference). James said "stick with what's more scientific" — correct. Passive inference is confounded: post-watering saturation varies with temp, starting dryness, compaction, rain-on-irrigation, so the "drift" would be partly real, partly soil variability, indistinguishable. The manual two-point method uses CONTROLLED reference states (deliberate air-dry + saturated) with no confounds — that's why METER/extension labs use controlled references. **Drift detection stays tied to deliberate recalibrations only.** Dry-end especially can't be inferred (in-ground soil never reaches air-dry). Not built — intentionally.
 
 **Sensor work wrapped here.** Net: server-side calibration, `/calibrate` UI + nav tab, invalid-reading guard, drift tracking, recalibration advice. Sensors remain observe-only (`soil_sensor: null`). ET model is and stays the decision-maker. Cheap capacitive = supporting eyes (consumable), not the brain.
+
+---
+
+## 2026-06-05 — Dashboard chart cleanup ("lots of graphs, some duplicate")
+
+**Context:** James noticed the dashboard had many overlapping/duplicate charts. Audited all 36 `<canvas>` charts across index.html (SPA panels), moisture_sim.html, forecast_merged.html.
+
+**Findings:**
+- "Blank/incomplete charts" (Crash Events, Valve Health) were a FALSE ALARM — verified live they render fine with data (the subagent's grep missed the function calls). Don't re-flag them.
+- Real problem = duplication. The History panel (`p-history`) is a COMPOSITE that injected whole old panels (`p-analytics`, `p-usage`, `p-weather`) at its bottom via `moveContent()`, duplicating its own curated `sh-chart-*` set. Plus a duplicate battery chart.
+
+**Fixes (commits 5927c60, d66b8de, 8e0f8b1):**
+1. Removed the injected Analytics/Usage/Weather sections + duplicate `sh-chart-battery` from History (commit 5927c60).
+2. Deleted the now-orphaned `p-analytics` panel — but FIRST relocated its live "Rain & Wetting Events" card into History (it's a real observe-only feature). Commit d66b8de.
+3. Fixed all 6 Chart.js `"reading 'x' of null"` console errors — scatter-marker datasets (reboot ✖, failure dots, crash resets, soil spike/railed dots) were full-length arrays padded with `null`; rebuilt them as arrays of only real points (commit 8e0f8b1). Verified 0 console errors, all 28 charts render.
+
+**KEPT (look dead but aren't — do NOT delete):**
+- `p-weather` + `p-usage` panels: hidden (no nav) BUT `renderUI()` populates their elements (`wx-temp`, `tier-track`, `billing-breakdown`...) every 30s refresh. Deleting them crashes the live dashboard with null-element errors. Left a code comment explaining.
+- `p-config`, `p-schedule`, `p-system`, `p-health`, `p-wiring`, `p-about`, `p-activity`: still injected into Settings/History composites via `moveContent()`. Not dead.
+- 5 "🔮 Planned Sensors" placeholder cards (DS18B20, BME280, INA219, YF-S201, BH1750): intentional roadmap stubs, not bugs.
+
+**Reachable nav panels:** home, zones, history, settings, cam (+ external pages /map, /forecast, /moisture-sim, /calibrate). Everything else is composite-injected or intentionally hidden-but-wired.
+
+**Dashboard cleanup wrapped.** History panel no longer double-shows metrics, console is clean, ~120 lines of dead/duplicate code removed across the session.
 
 
 

@@ -446,7 +446,6 @@ a{color:var(--blue);text-decoration:none}
   <div class="sidebar-nav">
     <div class="nav-item active" data-panel="home"><span class="icon">🏠</span> Home</div>
     <div class="nav-item" data-panel="zones"><span class="icon">🌿</span> Zones</div>
-    <a href="/map" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🗺️</span> Zone Map</a>
     <div class="nav-item" data-panel="history"><span class="icon">📊</span> History</div>
     <div class="nav-item" data-panel="settings"><span class="icon">⚙️</span> Settings</div>
     <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
@@ -2735,7 +2734,7 @@ function loadDHTBoxChart(canvasId, url, hours) {
         borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3, yAxisID: 'y1'
       },
       {
-        label: 'Condensation Risk Temp (°F)', data: data.map(function(r,i){return {x:timestamps[i],y:condensationTemp[i]};}),
+        label: 'Condensation Risk', data: data.map(function(r,i){return {x:timestamps[i],y:condensationTemp[i]};}),
         borderColor: '#f59e0b', backgroundColor: 'transparent',
         borderWidth: 1.5, borderDash: [6,4], pointRadius: 0, fill: false, tension: 0.3, yAxisID: 'y',
         hidden: false
@@ -3056,8 +3055,18 @@ function render(d) {
           '</div></div>';
       })() +
       '<div class="zone-meta-row">' +
-      '<span class="zone-meta-item">Dry: <strong>'+z.dry_trigger+'%</strong></span>' +
-      '<span class="zone-meta-item">Target: <strong>'+z.wet_target+'%</strong></span>' +
+      (function() {
+        // With a real soil sensor the dry/wet % thresholds drive decisions and
+        // are worth showing. Without one (ET water-balance brain), those %s are
+        // meaningless — show the refill/full depths the brain actually uses.
+        var b = balMap[z.id];
+        if (hasSoil || !b) {
+          return '<span class="zone-meta-item">Dry: <strong>'+z.dry_trigger+'%</strong></span>' +
+                 '<span class="zone-meta-item">Target: <strong>'+z.wet_target+'%</strong></span>';
+        }
+        return '<span class="zone-meta-item" title="Refills when the water balance drops to this depletion (MAD)">Refill: <strong>'+fmt(b.mad_mm,1)+' mm</strong></span>' +
+               '<span class="zone-meta-item" title="Total available water at field capacity (TAW)">Full: <strong>'+fmt(b.taw_mm,1)+' mm</strong></span>';
+      })() +
       '<span class="zone-meta-item">Max: <strong>'+z.max_runtime_min+' min</strong></span>' +
       '<span class="zone-meta-item">'+z.est_gpm+' gpm</span>' +
       (z.cycle_soak ? '<span class="zone-meta-item">♻️ Cycle/Soak</span>' : '') +
@@ -5570,7 +5579,6 @@ function cfgSave() {
   <div class="mobile-nav-inner">
     <div class="mob-nav-item active" data-panel="home"><span class="mob-icon">🏠</span>Home</div>
     <div class="mob-nav-item" data-panel="zones"><span class="mob-icon">🌿</span>Zones</div>
-    <a href="/map" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🗺️</span>Map</a>
     <div class="mob-nav-item" data-panel="history"><span class="mob-icon">📊</span>History</div>
     <div class="mob-nav-item" data-panel="settings"><span class="mob-icon">⚙️</span>Settings</div>
     <a href="/forecast" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🌧️</span>Forecast</a>

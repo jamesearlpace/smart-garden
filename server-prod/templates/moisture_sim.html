@@ -514,15 +514,6 @@ h2 { margin: 0; font-size: 1.05rem; }
 var ZONES = {{ zones | tojson }};
 // Sync groups (overlapping turf zones that water together). {name: [zone_ids]}.
 var WATER_GROUPS = {{ water_groups | tojson }};
-// zone_id -> array of sibling zone_ids in its sync group (incl. itself).
-var ZONE_GROUP_SIBLINGS = (function() {
-  var m = {};
-  for (var g in WATER_GROUPS) {
-    var ids = WATER_GROUPS[g] || [];
-    ids.forEach(function(zid) { m[zid] = ids; });
-  }
-  return m;
-})();
 
 // Restore filters from URL hash (e.g. #zone=6&days=30&year=2026)
 function parseHash() {
@@ -2247,6 +2238,67 @@ function predictZoneSchedule(zoneId, liveData, forecast7) {
   return { curM: curM, madPct: madPct, nights: nights, isDrip: isDrip, isAuto: isAuto, installed: z && z.installed };
 }
 
+// Coordinated schedule for a sync group — mirrors the engine: the WHOLE group
+// waters on any night an auto member hits its MAD trigger, and every member
+// refills together that same night. So all members share identical fire nights
+// (deep + infrequent), instead of each drifting onto its own date. Returns a
+// {zoneId: pred} map shaped exactly like predictZoneSchedule's return.
+function predictGroupSchedule(memberIds, perZone, forecast7) {
+  var MM_PER_IN_P = 25.4;
+  var st = {};
+  memberIds.forEach(function(id) {
+    var p = predictZoneSchedule(id, perZone[id], forecast7); // for curM, madPct, isAuto
+    if (!p) return;
+    var brain = getZoneBrainConfig(id);
+    var z = null;
+    for (var zi = 0; zi < ZONES.length; zi++) { if (ZONES[zi].id === id) { z = ZONES[zi]; break; } }
+    st[id] = {
+      m: p.curM, curM: p.curM, madPct: p.madPct, brain: brain,
+      rootDepth: brain.rootDepthIn,
+      maxRun: (z && z.max_runtime_min) || brain.maxRuntimeMin || 24,
+      isAuto: p.isAuto, isDrip: p.isDrip, installed: z && z.installed, nights: []
+    };
+  });
+  for (var di = 0; di < 7; di++) {
+    var fc = forecast7[di] || { et0: 4.5, rain: 0 };
+    var rainIn = (fc.rain || 0) / MM_PER_IN_P;
+    var nightMonth = new Date(Date.now() + (di + 1) * 86400000).getMonth() + 1;
+    var rainSkip = (fc.rain || 0) >= 0.25; // rain is site-wide → skips the whole group
+    // Drain every member through the day.
+    for (var id in st) {
+      var s = st[id];
+      var et0In = (fc.et0 || 0) / MM_PER_IN_P;
+      var kc = getSeasonalKc(s.brain, nightMonth);
+      s.m = s.m - (et0In * kc / s.rootDepth) * 100 + (rainIn * 0.65 / s.rootDepth) * 100;
+    }
+    // Group fires if ANY auto member is at/below its MAD (and it's not raining).
+    var groupFires = false;
+    for (var id2 in st) { if (st[id2].isAuto && st[id2].m <= st[id2].madPct) { groupFires = true; break; } }
+    if (rainSkip) groupFires = false;
+    // Record the night for every member.
+    for (var id3 in st) {
+      var s3 = st[id3];
+      var willWater = false, skipReason = null;
+      if (groupFires && s3.isAuto) {
+        willWater = true;
+        var refillPct = (s3.maxRun / 60) * s3.brain.precipRate / s3.rootDepth * 100;
+        s3.m = Math.min(100, s3.m + refillPct);
+      } else if (rainSkip && s3.isAuto && s3.m <= s3.madPct) {
+        skipReason = 'rain skip';
+      } else if (!s3.isAuto && s3.m <= s3.madPct) {
+        skipReason = s3.isDrip ? 'drip · manual' : 'manual mode';
+      }
+      s3.nights.push({ willWater: willWater, runtimeMin: willWater ? s3.maxRun : 0, skipReason: skipReason, projM: s3.m, mad: s3.madPct });
+    }
+  }
+  var out = {};
+  for (var idr in st) {
+    var sr = st[idr];
+    out[idr] = { curM: sr.curM, madPct: sr.madPct, nights: sr.nights, isDrip: sr.isDrip, isAuto: sr.isAuto, installed: sr.installed };
+  }
+  return out;
+}
+
 function fmtNight(offset) {
   // Matches single-zone banner logic: if past 7 AM, "next water" is tomorrow's 4 AM, else today's 4 AM.
   var d = new Date();
@@ -2316,29 +2368,19 @@ function refreshAllZones() {
     var zonesNeedingNow = 0, zonesSoon = 0, totalGalWeek = 0;
     var firingByNight = [0, 0, 0, 0, 0, 0, 0]; // # zones watering each of next 7 nights
 
-    // Pre-pass: compute each zone's prediction + its own first-fire night, then
-    // apply sync-group coordination so grouped turf zones show ONE shared date
-    // (the earliest any group member fires). Mirrors the engine's water_groups.
-    var _preds = {}, _ownFire = {};
-    ZONES.forEach(function(z) {
-      var p = predictZoneSchedule(z.id, perZone[z.id], forecast7);
-      _preds[z.id] = p;
-      var ff = -1;
-      if (p) { for (var ni = 0; ni < p.nights.length; ni++) { if (p.nights[ni].willWater) { ff = ni; break; } } }
-      _ownFire[z.id] = ff;
-    });
-    function groupFirstFire(zid) {
-      var sibs = ZONE_GROUP_SIBLINGS[zid];
-      if (!sibs) return _ownFire[zid];
-      var earliest = -1;
-      sibs.forEach(function(s) {
-        var p = _preds[s];
-        if (!p || !p.isAuto) return;       // only auto installed siblings count
-        var ff = _ownFire[s];
-        if (ff >= 0 && (earliest < 0 || ff < earliest)) earliest = ff;
-      });
-      return earliest >= 0 ? earliest : _ownFire[zid];
+    // Pre-pass: build a predicted schedule per zone. Zones in a sync group use a
+    // coordinated group simulation (all members water on the same nights); all
+    // other zones predict independently. predFor() returns the right one per zone.
+    var _grpSched = {};
+    for (var gname in WATER_GROUPS) {
+      var _res = predictGroupSchedule(WATER_GROUPS[gname] || [], perZone, forecast7);
+      for (var _mid in _res) _grpSched[_mid] = _res[_mid];
     }
+    function predFor(zid) {
+      return _grpSched[zid] || predictZoneSchedule(zid, perZone[zid], forecast7);
+    }
+    var _preds = {};
+    ZONES.forEach(function(z) { _preds[z.id] = predFor(z.id); });
 
     ZONES.forEach(function(z) {
       var ld = perZone[z.id];
@@ -2348,8 +2390,9 @@ function refreshAllZones() {
           + '<td colspan="9" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
         return;
       }
-      // Group-synced first-fire night (grouped zones share the earliest).
-      var firstFire = groupFirstFire(z.id);
+      // First-fire night (for grouped zones this is already the shared group night).
+      var firstFire = -1;
+      for (var ni = 0; ni < pred.nights.length; ni++) { if (pred.nights[ni].willWater) { firstFire = ni; break; } }
       if (!(vacationOn && pred.isAuto)) {
         pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
       }
@@ -2415,7 +2458,7 @@ function refreshAllZones() {
 
     ZONES.forEach(function(z) {
       var ld = perZone[z.id];
-      var pred = predictZoneSchedule(z.id, ld, forecast7);
+      var pred = _preds[z.id];
       schedHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>';
       if (!pred) {
         for (var nx = 0; nx < 7; nx++) schedHtml += '<td class="az-cell-none">—</td>';

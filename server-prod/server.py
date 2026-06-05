@@ -1450,7 +1450,12 @@ def main():
         log.info("Shutting down...")
         try:
             stop_scheduler()
-            engine.close_all(timeout=1, retry=False)
+            # Best-effort valve close on shutdown. 3s (was 1s) so a normal
+            # shutdown actually reaches the ESP32 and closes cleanly instead of
+            # logging a timeout error; still short enough not to hang exit if the
+            # controller is unreachable. The firmware also closes all valves on
+            # its next boot, so this is belt-and-suspenders either way.
+            engine.close_all(timeout=3, retry=False)
         finally:
             logging.shutdown()
             # sys.exit() only exits the main thread. If an APScheduler or

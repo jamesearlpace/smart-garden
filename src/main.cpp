@@ -452,13 +452,19 @@ void handleApiStatus() {
     health["resetReasonName"] = (ri >= 0 && ri <= 10) ? resetNames[ri] : "Other";
     health["deepSleepThreshold"] = SAFE_MODE_THRESHOLD * 2;
     health["safeModeThreshold"] = SAFE_MODE_THRESHOLD;
-    // Valve health: detect crash-loop evidence (close count >> open count)
+    // Valve health (informational): close count >> open count is NORMAL here,
+    // because every boot safely closes all valves (≈10 closes, 0 opens). So the
+    // close/open ratio must NOT be used to infer a crash loop.
     int totalOpens = 0, totalCloses = 0;
     for (int i = 0; i < NUM_VALVES; i++) { totalOpens += valveOpenCount[i]; totalCloses += valveCloseCount[i]; }
     health["totalValveOpens"] = totalOpens;
     health["totalValveCloses"] = totalCloses;
     health["valveCloseOpenRatio"] = totalOpens > 0 ? (float)totalCloses / totalOpens : 0;
-    health["crashLoopEvidence"] = (totalCloses > totalOpens * 3 && bootCount > 100);
+    // Real crash-loop detection: several recent crashes AND still freshly booted
+    // (low uptime). crashCount resets to 0 on a clean WiFi recovery, so a high
+    // value means repeated bad resets; pairing it with low uptime avoids the old
+    // false-positive that fired forever once bootCount passed 100.
+    health["crashLoopEvidence"] = (crashCount >= 3 && (millis() / 1000) < 300);
 
     // Fallback schedule status
     JsonObject fb = doc["fallback"].to<JsonObject>();

@@ -9,14 +9,21 @@ esp32:
   reboot_token: garden-reboot-9847
 watering_window:
   start: 04:00
-  end: 07:00
+  end: 08:00
   evening_start: '20:00'
   evening_end: '22:00'
   evening_zones: []
+# Sync groups: overlapping turf zones water on the same night. When any zone in
+# a group hits its MAD trigger, the whole group waters together that cycle.
+# Zone ids are 0-based (display Zone N = id N-1). Manual/drip zones (Garden id7,
+# Grapes id8) are auto_mode=False and are intentionally NOT grouped.
+water_groups:
+  front_yard: [0, 1]          # Zone 1 Front Yard A + Zone 2 Front Yard B
+  backyard_grass: [2, 3, 4, 5, 6]  # Zones 3-7: Encl Backyard A/B, SE, S, SW
 sensors:
   dht22: false
-  soil_0: false
-  soil_1: false
+  soil_0: true
+  soil_1: true
   soil_2: false
   soil_3: false
 zones:
@@ -31,8 +38,8 @@ zones:
   - 0.9
   - 0.95
   - 0.85
-  dry_trigger: 45
-  wet_target: 75
+  dry_trigger: 45.0
+  wet_target: 75.0
   max_runtime_min: 24
   cycle_soak: true
   cycle_run_min: 8
@@ -271,3 +278,4 @@ dashboard:
   port: 5125
   host: 0.0.0.0
   threads: 16
+vacation_mode: false

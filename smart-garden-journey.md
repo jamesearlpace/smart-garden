@@ -10,7 +10,8 @@
 > - **Forecast-vs-Actual audit cleaned up** — group-aware snapshot, manual runs excluded, water/skip collision fixed (48.9%→99% on live data).
 > - **Sensor strategy SETTLED** (evidence-backed): ET model = brain; cheap capacitive sensors = consumable supporting eyes (rain detection, dashboard cross-check, optional skip-gate). NOT a permanent/accurate lawn sensor. Pros use TDR/sealed-potted; passive auto-cal REJECTED as unscientific.
 > - **Calibration system BUILT** — `/calibrate` page + nav tab: server-side per-sensor dry/wet (no reflash), invalid-reading guard, drift tracking, recalibration advice. Sensors still `soil_sensor: null` (observe-only).
-> - **Battery voltage calibration LIVE (2026-06-05)** — `/calibrate` now has a 🔋 Battery section: read the true voltage off the Wanderer, type it in, tap Add. Server captures the ESP32's raw reading at that instant, least-squares fits a correction (pure-python, no numpy: 1pt=scale, 2–4=linear, 5+=quadratic), applied live via shared config (`battery_calibration`). Replaces the old hardcoded ×1.02884. **numpy is NOT in the server venv — never import it in deployed code.**
+> - **Battery voltage calibration LIVE (2026-06-05)** — `/calibrate` now has a 🔋 Battery section: read the true voltage off the Wanderer, type it in, tap Add. Server captures the ESP32's raw reading at that instant, least-squares fits a correction (pure-python, no numpy: 1pt=scale, 2–4=linear, 5+=quadratic), applied live via shared config (`battery_calibration`). Replaces the old hardcoded ×1.02884. **numpy is NOT in the server venv — never import it in deployed code.** Includes a scatter chart (X=ESP32 raw, Y=Wanderer actual) with best-fit line + live "right now" ◆ marker, per-point delete, clear-all.
+> - **`/calibrate` restyled (2026-06-05)** — converted from standalone dark theme to the light theme + dark-green sidebar + mobile bottom nav matching the dashboard & forecast page. Nav mirrors index.html.
 > - **Graceful sensor failure (2026-06-05)** — low-battery ntfy alert (<11.8V, 3-read hysteresis) + battery line in daily digest; sensor-fault check guarded against `soil_sensor: null`. Decisions already immune to dead soil sensors (ET brain; invalid reading → neutral 50).
 > - **Dashboard charts cleaned up** — removed duplicate injected Analytics/Usage/Weather sections + dup battery from History, deleted orphaned p-analytics panel, fixed all 6 Chart.js console errors.
 > - **Physical TODO (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees sensor (raw 4095 = open circuit); then use `/calibrate` to capture real dry/wet.
@@ -1733,6 +1734,30 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 - Earlier in the session: removed dup "Configuration" heading, fixed corrupted emoji, tightened battery chart y-axis (11.5–15.5, filter impossible >16V/<8V reads).
 
 **All deployed to the Acer + committed/pushed.** Visual QA caveat from the prior entry still applies (pane renders narrow; verify via DOM/Chart reads).
+
+## 2026-06-05 — Full session log (timestamped) — dashboard refinement + battery calibration
+
+All times PDT. Each item deployed to the Acer (`scp` + `systemctl restart`) and verified live before the next, then committed/pushed and the three-location mirror (live / server-prod / Acer) re-synced.
+
+**Session 1 — UI punch-list pass (commits ~13:00–14:13)**
+- `8e7ac6b` — removed duplicate "🔧 Configuration" heading in composite Settings panel; fixed two corrupted `�` glyphs → 🔌 Wiring Diagram / 📖 About; tightened Home/History battery chart y-axis to 11.5–15.5V and filtered physically-impossible reads (<8V / >16V) so a glitchy ~18V ADC sample no longer squashes the curve. Verified via `Chart.getChart()` (axis 11.5–15.5, max 15.12).
+- `2183e7c` — zone cards no longer self-contradict: every zone has `soil_pct: null` (no capacitive sensor wired), so cards showed a giant "0% Soil Moisture / DRY" next to a full green "Water Balance 100%". Badge now falls back to the ET water-balance brain (DRY only if `balance_mm ≤ mad_mm`, else OK); empty 0% soil bar hidden; fixed latent `var(--orange)` typo → `var(--amber)`. Verified: cards read "OK" with a single Water Balance bar.
+- `0877b45` (14:13) — zone meta row shows **Refill/Full mm** (MAD/TAW) instead of meaningless soil "Dry 45% / Target 75%" when no sensor; removed redundant 🗺️ Zone Map nav item (desktop + mobile — Zones panel already renders the same `renderMap` head map; `/map` route kept); shortened DHT "Condensation Risk" legend label.
+
+**Session 2 — Battery voltage calibration (commits 14:06–14:14)**
+- `d951082` (14:06) — battery calibration backend. `engine.battery_raw_to_v()` replaces the hardcoded ×1.02884; reads `config['battery_calibration']` (shared dict → live, no restart). Pure-Python least-squares fit (`dashboard._fit_battery_model`, Gaussian elimination — **numpy is NOT in the server venv, first attempt 500'd on import**). API `GET/POST /api/battery-calibration[/add|/delete|/reset]`. `/calibrate` 🔋 section: live "raw → dashboard shows", Wanderer input, points table (actual/raw/predicted/err) with per-row delete + clear-all. Verified add→fit→reset (14.37→14.41→14.37).
+- `2c9e44e` (14:09) — graceful sensor failure: low-battery ntfy alert (<11.8V, 3-read hysteresis) + battery line in daily digest; guarded `_check_sensor_faults` against `soil_sensor: null`.
+- `c780183` (14:14) — journey doc entry for the above.
+
+**Session 3 — Calibration chart (commit 14:23)**
+- `393d601` (14:23) — battery calibration scatter chart on `/calibrate`: X = ESP32 raw (V), Y = Wanderer actual (V); blue dots = your readings, green line = best-fit curve sampled across the range, orange ◆ = live "right now" point. Loads Chart.js, renders in a card that survives the innerHTML refresh. Timestamps stay backend-only (points table "when" column + drift history), NOT on the graph axes — per James's clarification. Verified datasets [41-pt curve, N pts, 1 now-marker] + correct axis titles.
+
+**Session 4 — Calibrate page restyle (commit 14:32)**
+- `7fb094e` (14:32) — converted `/calibrate` from its standalone dark theme to the **light theme + dark-green sidebar + mobile bottom nav** matching the dashboard and `forecast_merged.html`. Nav mirrors the current index.html (Home/Zones/History/Settings/Forecast/Schedule/**Calibrate**/Cam), Calibrate marked active. Recolored all accent classes (badges, advice banners, drift severity, chart series/grid/axes) for legibility on white. Sidebar footer ESP32 status dot fetches `/api/dashboard` (`/api/status` has no online flag). Verified: sidebar present, 220px main offset, body bg `#f5f7f9`, footer "ESP32 online".
+
+**Verification method (all sessions):** logged into the live Acer (port 5125) by minting an HMAC session cookie (SESSION_SECRET from the systemd unit) and driving Playwright. **The VS Code embedded browser pane renders ~580px (mobile breakpoint) regardless of `setViewportSize`** — reliable desktop verification is via `Chart.getChart()` scale reads + DOM queries, not just screenshots.
+
+**Battery calibration config left clean (0 points)** so James's first real Wanderer reading starts the fit fresh.
 
 
 

@@ -795,6 +795,16 @@ class IrrigationEngine:
         log.info("%s watering stopped: %ds, ~%.1f gal",
                  self._zone_label(zone_id), duration_sec, est_gallons)
 
+        # Credit the irrigation to the soil balance NOW (don't wait for the
+        # 11 PM batch) so the dashboard predictor / banner / forecast reflect
+        # the just-completed watering immediately. Defensive: a balance-calc
+        # error must never break valve finalization.
+        try:
+            self.update_zone_balance(zone_id)
+        except Exception:
+            log.exception("%s: post-watering balance update failed (non-fatal)",
+                          self._zone_label(zone_id))
+
     def log_skip_event(self, zone_id: int, reason: str, conditions: dict):
         """Log that we skipped watering ΓÇö estimates what WOULD have been used."""
         zone = self.zones[zone_id]
@@ -1117,6 +1127,59 @@ class IrrigationEngine:
         zone = self.zones[zone_id]
         mad_pct = zone.get("mad_pct", self._default_mad_pct) / 100.0
         return self.get_zone_taw_mm(zone_id) * mad_pct
+
+    def update_zone_balance(self, zone_id: int):
+        """Recompute today's soil-water balance for ONE zone, immediately.
+
+        Called right after a zone finishes watering so the credited irrigation
+        shows up in the balance (and therefore in the dashboard predictor /
+        banner / forecast) in real time, instead of waiting for the 11 PM
+        daily-balance batch. Uses the SAME checkbook math as
+        update_daily_balances and is idempotent — it rebuilds today's row from
+        yesterday's close, so the 11 PM finalizer recomputes identically (and
+        picks up any later rain / evening watering).
+        """
+        zone = self.zones.get(zone_id)
+        if zone is None:
+            return
+        today = date.today().isoformat()
+        et0 = self.weather.get_today_et0()
+        rain_last_24h = self.weather.get_rain_last_24h()
+        season_idx = self.weather.get_season_index()
+
+        taw_mm = self.get_zone_taw_mm(zone_id)
+        mad_mm = self.get_zone_mad_mm(zone_id)
+
+        # Starting balance = yesterday's close (carry today's forward if a row
+        # already exists for today, mirroring update_daily_balances / bug #7).
+        prev = db.get_soil_balance(zone_id)
+        if prev and prev["date"] != today:
+            balance = prev["balance_mm"]
+        elif prev and prev["date"] == today:
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            yprev = next((h for h in db.get_soil_balance_history(zone_id, days=2)
+                          if h["date"] == yesterday), None)
+            balance = yprev["balance_mm"] if yprev else prev["balance_mm"]
+        else:
+            balance = taw_mm
+
+        kc = zone["kc"][season_idx] if season_idx >= 0 else 0
+        etc_mm = et0 * kc
+        precip_rate = zone.get("precip_rate_iph", 1.0)
+        irrig_mm = db.get_daily_irrigation_mm(zone_id, today, precip_rate)
+
+        balance = balance - etc_mm + rain_last_24h + irrig_mm
+        balance = max(0, min(balance, taw_mm))
+
+        db.upsert_soil_balance(
+            zone_id=zone_id, day=today, et0_mm=et0, kc=kc,
+            etc_mm=etc_mm, rain_mm=rain_last_24h,
+            irrigation_mm=irrig_mm, balance_mm=balance,
+            taw_mm=taw_mm, mad_mm=mad_mm,
+        )
+        log.info("%s balance updated post-watering: %.1fmm / %.1fmm TAW "
+                 "(irrig=%.1fmm, MAD=%.1fmm)",
+                 self._zone_label(zone_id), balance, taw_mm, irrig_mm, mad_mm)
 
     def update_daily_balances(self):
         """Update soil water balance for all zones (called daily by scheduler).

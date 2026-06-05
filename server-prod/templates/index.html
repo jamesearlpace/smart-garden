@@ -4098,7 +4098,9 @@ function loadConnectivityChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
     var latency = data.map(function(r){ return {x:new Date(r.ts),y:r.success ? r.latency_ms : null}; });
-    var fails = data.map(function(r){ return r.success ? null : {x:new Date(r.ts),y:0}; });
+    // Sparse markers: build only real points (no nulls) — Chart.js parseObjectData
+    // throws "reading 'x' of null" if a {x,y} dataset contains null entries.
+    var fails = data.filter(function(r){ return !r.success; }).map(function(r){ return {x:new Date(r.ts),y:0}; });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
@@ -4132,11 +4134,13 @@ function loadSoilDualChart(canvasId, url, hours) {
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    // Detect spikes for annotation dots
-    var spikePct = data.map(function(r,i) {
-      if (i === 0) return null;
+    // Detect spikes for annotation dots. Build only real points (no nulls) so
+    // Chart.js parseObjectData doesn't throw "reading 'x' of null".
+    var spikePct = [];
+    data.forEach(function(r,i) {
+      if (i === 0) return;
       var jump = Math.abs((r.pct||0) - (data[i-1].pct||0));
-      return jump > 15 ? {x: new Date(r.ts), y: r.pct} : null;
+      if (jump > 15) spikePct.push({x: new Date(r.ts), y: r.pct});
     });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
@@ -4176,8 +4180,9 @@ function loadSoilNoiseChart(canvasId, url, hours) {
       });
       return;
     }
-    var spikeVal = data.map(function(r){ return r.spike ? {x:new Date(r.ts),y:r.jump} : null; });
-    var railedVal = data.map(function(r){ return r.railed ? {x:new Date(r.ts),y:r.stddev} : null; });
+    // Sparse markers — only real points (no nulls) to avoid Chart.js null .x throw.
+    var spikeVal = data.filter(function(r){ return r.spike; }).map(function(r){ return {x:new Date(r.ts),y:r.jump}; });
+    var railedVal = data.filter(function(r){ return r.railed; }).map(function(r){ return {x:new Date(r.ts),y:r.stddev}; });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
@@ -4242,7 +4247,7 @@ function loadSoilWifiChart(canvasId, noiseUrl, healthUrl, hours) {
                 String(d.getHours()).padStart(2,'0')+':'+String(Math.floor(d.getMinutes()/5)*5).toString().padStart(2,'0');
       return {x: new Date(r.ts), y: healthMap[key] || null};
     });
-    var spikeDots = noise.map(function(r) { return r.spike ? {x:new Date(r.ts),y:r.jump} : null; });
+    var spikeDots = noise.filter(function(r){ return r.spike; }).map(function(r){ return {x:new Date(r.ts),y:r.jump}; });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
@@ -4271,17 +4276,19 @@ function loadUptimeChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     if (!data.length) return;
     var uptimeHrs = data.map(function(r){ return {x:new Date(r.ts),y:r.uptime_sec ? Math.round(r.uptime_sec / 3600 * 10) / 10 : null}; });
-    // Detect reboots: where uptime drops or boot_count changes
-    var reboots = data.map(function(r, i) {
-      if (i === 0) return null;
+    // Detect reboots: where uptime drops or boot_count changes. Build only the
+    // real marker points (no nulls) — a {x,y} dataset with null entries makes
+    // Chart.js parseObjectData throw "reading 'x' of null".
+    var reboots = [];
+    data.forEach(function(r, i) {
+      if (i === 0) return;
       var prevUp = data[i-1].uptime_sec || 0;
       var curUp = r.uptime_sec || 0;
       var prevBoot = data[i-1].boot_count || 0;
       var curBoot = r.boot_count || 0;
-      if (curUp < prevUp - 60 || curBoot > prevBoot) return {x:new Date(r.ts),y:0}; // plot at y=0 for visibility
-      return null;
+      if (curUp < prevUp - 60 || curBoot > prevBoot) reboots.push({x:new Date(r.ts),y:0});
     });
-    var rebootCount = reboots.filter(function(r){return r !== null;}).length;
+    var rebootCount = reboots.length;
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
@@ -4709,11 +4716,12 @@ function loadCrashChart(canvasId, url, hours) {
     canvas.style.display = '';
     // Show crash_count as stepped line, highlight jumps
     var crashes = data.map(function(r){ return {x:new Date(r.ts),y:r.crash_count}; });
-    // Detect resets (crash count drops) — mark with red dots
-    var resetPts = data.map(function(r, i){
-      if (i === 0) return null;
-      if (r.crash_count != null && data[i-1].crash_count != null && r.crash_count < data[i-1].crash_count) return {x:new Date(r.ts),y:r.crash_count};
-      return null;
+    // Detect resets (crash count drops) — mark with red dots. Build only real
+    // points (no nulls) so Chart.js parseObjectData doesn't throw on null .x.
+    var resetPts = [];
+    data.forEach(function(r, i){
+      if (i === 0) return;
+      if (r.crash_count != null && data[i-1].crash_count != null && r.crash_count < data[i-1].crash_count) resetPts.push({x:new Date(r.ts),y:r.crash_count});
     });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {

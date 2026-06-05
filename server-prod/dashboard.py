@@ -774,11 +774,26 @@ def create_app(config, engine, weather, billing):
     # ── Soil sensor calibration (live, no firmware reflash) ──
 
     def _calibration_snapshot():
-        """Live raw readings + each sensor's stored calibration + computed pct."""
+        """Live raw readings + each sensor's stored calibration + computed pct +
+        a per-sensor recalibration recommendation."""
         status = engine.get_esp32_status(force_fresh=True) or {}
         soil = status.get("soil", []) or []
         sysd = status.get("system", {}) or {}
         sensors_cfg = config.get("sensors", {})
+        # Drift + last-calibration timestamps (keyed by sensor_idx).
+        try:
+            drift = db.get_calibration_drift()
+        except Exception:
+            drift = []
+        last_cal = {}      # idx -> most recent calibration ts (any point)
+        drift_by_idx = {}  # idx -> max |delta| across its points
+        for e in drift:
+            i = e["sensor_idx"]
+            ts = e.get("latest_ts")
+            if ts and (i not in last_cal or ts > last_cal[i]):
+                last_cal[i] = ts
+            if e.get("delta") is not None:
+                drift_by_idx[i] = max(drift_by_idx.get(i, 0), abs(e["delta"]))
         out = []
         # Cover every configured calibration slot plus any soil channel the chip
         # reports, so newly-wired sensors show up even before config is updated.
@@ -786,14 +801,22 @@ def create_app(config, engine, weather, billing):
         for idx in range(n):
             cal = engine.get_soil_calibration(idx)
             raw = soil[idx].get("raw") if idx < len(soil) else None
+            pct = engine.soil_raw_to_pct(idx, raw)
+            advice = _calibration_advice(
+                idx, raw, pct, cal,
+                last_cal.get(idx), drift_by_idx.get(idx),
+                bool(sensors_cfg.get(f"soil_{idx}", False)),
+            )
             out.append({
                 "index": idx,
                 "name": cal["name"],
                 "dry": cal["dry"],
                 "wet": cal["wet"],
                 "raw": raw,
-                "pct": engine.soil_raw_to_pct(idx, raw),
+                "pct": pct,
                 "enabled": bool(sensors_cfg.get(f"soil_{idx}", False)),
+                "last_cal": last_cal.get(idx),
+                "advice": advice,
             })
         return {
             "sensors": out,
@@ -801,6 +824,62 @@ def create_app(config, engine, weather, billing):
             "remain_sec": sysd.get("fastSampleRemainSec", 0),
             "esp32_ok": bool(status),
         }
+
+    # How often to recommend recalibration (days).
+    CAL_DUE_SOON_DAYS = 45
+    CAL_OVERDUE_DAYS = 75
+
+    def _calibration_advice(idx, raw, pct, cal, last_cal_ts, max_drift, enabled):
+        """Decide whether a sensor should be recalibrated and WHY. Returns
+        {status, reason} where status ∈ ok|info|due|overdue|bad. The reasons
+        are concrete so the user knows what to do, not just 'recalibrate'."""
+        from datetime import datetime
+        # 1. Dead / disconnected — calibration can't help, it's hardware.
+        if raw is None:
+            return {"status": "bad", "reason": "No reading — sensor disabled or not reporting."}
+        try:
+            rawi = int(raw)
+        except (TypeError, ValueError):
+            rawi = None
+        if rawi is not None and (rawi <= engine.SOIL_RAW_MIN or rawi >= engine.SOIL_RAW_MAX):
+            return {"status": "bad",
+                    "reason": "Reading is railed (%s) — sensor looks dead or disconnected. Check wiring/reseat; calibration won't fix this." % rawi}
+        # 2. Never calibrated — still on factory defaults.
+        if last_cal_ts is None:
+            return {"status": "due",
+                    "reason": "Never calibrated — using factory defaults (3500/1500). Calibrate once for accurate readings."}
+        # 3. Live raw outside the calibrated window → endpoints are wrong.
+        dry, wet = cal["dry"], cal["wet"]
+        if rawi is not None and dry != wet:
+            if rawi < wet:
+                return {"status": "due",
+                        "reason": "Reading is wetter than your calibrated wet point (raw %s < wet %s) — it's pinned at 100%%. Recapture Wet." % (rawi, wet)}
+            if rawi > dry:
+                return {"status": "due",
+                        "reason": "Reading is drier than your calibrated dry point (raw %s > dry %s) — it's pinned at 0%%. Recapture Dry." % (rawi, dry)}
+        # 4. Age-based: recommend periodic recalibration.
+        days = None
+        try:
+            days = (datetime.now() - datetime.strptime(last_cal_ts[:19], "%Y-%m-%dT%H:%M:%S")).total_seconds() / 86400.0
+        except Exception:
+            pass
+        drift_note = ""
+        if max_drift is not None and max_drift >= 120:
+            drift_note = " Last recalibration moved by %d counts, so it's drifting." % max_drift
+        if days is not None:
+            if days >= CAL_OVERDUE_DAYS:
+                return {"status": "overdue",
+                        "reason": "%d days since last calibration (overdue — recalibrate every ~%d days).%s" % (int(days), CAL_DUE_SOON_DAYS, drift_note)}
+            if days >= CAL_DUE_SOON_DAYS:
+                return {"status": "due",
+                        "reason": "%d days since last calibration — due for a refresh soon.%s" % (int(days), drift_note)}
+        # 5. Healthy.
+        if max_drift is not None and max_drift >= 120:
+            return {"status": "info",
+                    "reason": "Calibrated %d days ago, but drifting (%d counts last time). Watch it." % (int(days) if days else 0, max_drift)}
+        if days is not None:
+            return {"status": "ok", "reason": "Calibrated %d days ago — looks good." % int(days)}
+        return {"status": "ok", "reason": "Calibrated — looks good."}
 
     def _save_calibration(idx, *, dry=None, wet=None, name=None):
         """Persist one sensor's calibration into config.yaml (atomic)."""
@@ -1840,6 +1919,13 @@ button:disabled{opacity:.5;cursor:default;}
 .endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;}
 .endpoints b{color:#e6edf3;}
 .drift{font-size:12px;color:#adbac7;margin:2px 0 8px;padding:6px 8px;background:#0d1117;border-radius:6px;}
+.advice{font-size:13px;margin:8px 0 4px;padding:8px 10px;border-radius:6px;line-height:1.45;border-left:3px solid;}
+.advice b{font-weight:700;}
+.adv-ok{background:rgba(34,197,94,.10);border-color:#3fb950;color:#7ee787;}
+.adv-info{background:rgba(88,166,255,.10);border-color:#58a6ff;color:#9cd2ff;}
+.adv-due{background:rgba(240,180,41,.12);border-color:#f0b429;color:#f0c674;}
+.adv-overdue{background:rgba(255,123,114,.12);border-color:#ff7b72;color:#ffa198;}
+.adv-bad{background:rgba(255,123,114,.16);border-color:#ff7b72;color:#ff7b72;}
 .badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;}
 .b-ok{background:#1a3e2a;color:#7ee787;}
 .b-bad{background:#3e1a1a;color:#ff7b72;}
@@ -1941,8 +2027,15 @@ function render(d){
     var badge = !s.enabled ? '<span class="badge b-off">disabled</span>'
               : valid ? '<span class="badge b-ok">reading ' + s.pct + '%</span>'
               : '<span class="badge b-bad">' + (railed ? 'invalid (dead/disconnected)' : 'no reading') + '</span>';
+    // Recalibration recommendation banner.
+    var adv = s.advice || {status:'ok', reason:''};
+    var advCls = {ok:'adv-ok', info:'adv-info', due:'adv-due', overdue:'adv-overdue', bad:'adv-bad'}[adv.status] || 'adv-ok';
+    var advIcon = {ok:'✅', info:'👀', due:'🔧', overdue:'⏰', bad:'❌'}[adv.status] || '✅';
+    var advLabel = {ok:'Good', info:'Watch', due:'Recalibrate soon', overdue:'Recalibrate now', bad:'Hardware issue'}[adv.status] || 'Good';
+    var advHtml = '<div class="advice ' + advCls + '"><b>' + advIcon + ' ' + advLabel + '</b> — ' + (adv.reason||'') + '</div>';
     html += '<div class="card">'
       + '<div class="row"><span class="nm">#' + s.index + ' · ' + (s.name||'') + '</span>' + badge + '</div>'
+      + advHtml
       + '<div class="row" style="margin-top:6px">'
       +   '<div><div class="muted">live raw</div><div class="raw live">' + fmt(s.raw) + '</div></div>'
       +   '<div style="text-align:right"><div class="muted">moisture</div><div class="pct">' + (valid ? s.pct + '%' : '—') + '</div></div>'

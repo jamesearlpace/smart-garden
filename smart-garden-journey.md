@@ -1599,6 +1599,30 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Next Steps / follow-ups (NOT done):** (1) early-recompute debits the full day's ET immediately (slightly pessimistic in the morning, consistent with the 11 PM write — acceptable); (2) cycle-soak still unimplemented; (3) rain-detection still observe-only; (4) journey doc 131KB — archive-split overdue.
 
+---
+
+## 2026-06-05 — Soil sensor diagnosis + PLAN: move calibration off-chip (escape the reflash loop)
+
+**Context:** James checked whether the soil sensors recovered overnight, then noticed Grapes reads 100% (clearly wrong — drip bed, not hooked up, not saturated) and worried about being stuck in an endless "one more flash" calibration loop.
+
+**Diagnosis (data-confirmed, no bench test needed):**
+- **Cold/condensation theory CONFIRMED by overnight data.** sensor_log hourly raw for the 2 enabled channels: fine 2–8 PM (raw ~2000–2370), **dropped to raw 0 at 9 PM, stayed 0 ALL NIGHT (9 PM–6 AM) straight through the 4 AM watering window, recovered to ~1300–1900 at 7 AM** as it warmed. Exactly the "off at night when cold" pattern. Unsealed capacitive sensors (555-timer electronics exposed on top) short on dew, recover when dry/warm.
+- **Live ESP32 /api/status (mid-day, warm):** Garden raw 1993→75%, Grapes raw 1467→100%, Fruit Trees raw 4095→0% (RAIL-HIGH = open circuit, genuinely dead/disconnected), South Lawn raw 2060→72%. 3 of 4 alive.
+- **Grapes is NOT broken** — it tracks Garden in lockstep (both died 9 PM, both revived 7:20 AM), gives steady mid-range raw 1467. The 100% is a CALIBRATION artifact: firmware `map(1467, SOIL_DRY=3500, SOIL_WET=1500, 0,100)` = 101.6% → clamped 100%. This sensor's true wet-point is below the global 1500.
+- **Data-quality bug:** raw 0 (cold-dead) converts to 100% (worst-case misread: dead looks soaking-wet); raw 4095 → 0%. Harmless now (sensors observe-only, `soil_sensor: null` on every zone) but must be guarded before any sensor drives watering.
+
+**THE PLAN (agreed, not yet built) — move calibration from firmware to server config:**
+- **Problem:** calibration lives in firmware (`#define SOIL_DRY 3500 / SOIL_WET 1500` in `src/main.cpp` ~line 333). Every tweak = recompile + USB flash. Calibration is iterative → endless reflash loop. (And NEVER OTA — brownout brick risk.)
+- **Key enabler:** the ESP32 ALREADY sends `raw` in every reading (`{"name":"Grapes","raw":1467,"pct":100}`) and the server ALREADY stores `soil_raw`. The server is just trusting the chip's `pct` — it has everything to compute pct itself.
+- **Plan:**
+  1. **Server-side first (NO flash):** add `soil_calibration:` to `config.yaml` — per-sensor `{name, dry, wet}` (channels 0–3). In `irrigation.py` `run_cycle()` where `db.log_sensor(idx, sensor["pct"], sensor["raw"])` is called (~line 952) AND the soil-reading map (`soil_readings[zone["id"]] = soil_list[sensor_idx]["pct"]` ~line 989), compute pct from `sensor["raw"]` using the config calibration instead of trusting `sensor["pct"]`. Add invalid-reading guard: raw 0 and raw 4095 → None/"invalid" (not fake 100%/0%). **Tuning becomes: edit YAML + `systemctl restart` (2 sec, remote, no USB).**
+  2. **Firmware later (while at the device anyway, optional):** strip pct math from `src/main.cpp`, report raw only. One-time flash; server already overrides pct in step 1 so NO rush, not blocking.
+- **Why:** kills the reflash cycle, gives per-sensor calibration, makes dead-sensor detection honest. Step 1 delivers the whole benefit today without touching the ESP32.
+
+**Physical TODO (James, when out at the device):** (1) seal the top half of each sensor board (conformal coat / epoxy / heat-shrink above the soil line, leave blade+connector exposed) to stop the nightly cold/condensation dropouts; (2) reseat/replace the Fruit Trees sensor (raw 4095 = open circuit, a real hardware fault, NOT condensation); (3) note each sensor's actual dry-air + in-water raw values for the config calibration.
+
+**Status:** Diagnosis done. Calibration plan documented, NOT yet built. Sensors remain observe-only (`soil_sensor: null` everywhere) so the bad readings affect nothing operationally.
+
 
 
 

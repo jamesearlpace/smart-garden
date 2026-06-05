@@ -1157,80 +1157,6 @@ a{color:var(--blue);text-decoration:none}
     <div class="card activity-feed" id="activity-feed"></div>
   </div>
 
-  <!-- ═══ ANALYTICS PANEL ═══ -->
-  <div class="panel" id="p-analytics">
-    <div class="analytics-controls">
-      <div class="range-btns">
-        <button class="range-btn" data-days="7">7 Days</button>
-        <button class="range-btn active" data-days="30">30 Days</button>
-        <button class="range-btn" data-days="90">90 Days</button>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <label style="font-size:.8rem;color:var(--text2)">Zone:</label>
-        <select class="zone-select" id="an-zone-filter"><option value="">All Zones</option></select>
-      </div>
-    </div>
-
-    <!-- Stats Overview -->
-    <div class="stats-row" id="an-stats-row">
-      <div class="card an-stat-card"><div class="an-val" id="an-total-cycles" style="color:var(--text)">—</div><div class="an-label">Decision Cycles</div><div class="an-sub" id="an-cycles-sub"></div></div>
-      <div class="card an-stat-card"><div class="an-val" id="an-water-events" style="color:var(--blue)">—</div><div class="an-label">Watering Events</div><div class="an-sub" id="an-water-sub"></div></div>
-      <div class="card an-stat-card"><div class="an-val" id="an-zones-skipped" style="color:var(--amber)">—</div><div class="an-label">Zone-Skips</div><div class="an-sub" id="an-skip-sub"></div></div>
-      <div class="card an-stat-card"><div class="an-val" id="an-gallons-used" style="color:var(--cyan)">—</div><div class="an-label">Gallons Used</div><div class="an-sub" id="an-gallons-sub"></div></div>
-      <div class="card an-stat-card"><div class="an-val" id="an-outside-window" style="color:var(--text2)">—</div><div class="an-label">Outside Window</div><div class="an-sub" id="an-outside-sub">Skipped (not in schedule)</div></div>
-      <div class="card an-stat-card"><div class="an-val" id="an-soil-delta" style="color:var(--teal)">—</div><div class="an-label">Avg Soil Improvement</div><div class="an-sub">Before → After watering</div></div>
-    </div>
-
-    <!-- Daily Usage Chart -->
-    <div class="section-header"><h2>📊 Daily Water Usage & Skip Activity</h2></div>
-    <div class="card" style="padding:20px;margin-bottom:24px"><div class="chart-wrap"><canvas id="chart-usage"></canvas></div></div>
-
-    <!-- Soil Moisture Trends -->
-    <div class="section-header">
-      <h2>🌿 Soil Moisture Trends</h2>
-      <select class="zone-select" id="soil-zone-select"><option value="all">All Zones</option></select>
-    </div>
-    <div class="card" style="padding:20px;margin-bottom:24px"><div class="chart-wrap"><canvas id="chart-soil"></canvas></div></div>
-
-    <!-- Rain & Wetting Events (soil-rise detection, observe-only) -->
-    <div class="section-header">
-      <h2>🌧️ Rain &amp; Wetting Events</h2>
-      <span style="font-size:.72rem;color:var(--text3)">soil-rise detection · observe-only (not yet affecting watering)</span>
-    </div>
-    <div class="card" id="rain-events-card" style="padding:16px;margin-bottom:24px">
-      <div id="rain-events-summary" style="font-size:.82rem;color:var(--text2);margin-bottom:10px">Loading…</div>
-      <div id="rain-events-list"></div>
-    </div>
-
-    <!-- Decision Breakdown + Skip Reasons -->
-    <div class="two-col">
-      <div>
-        <div class="section-header"><h2>🧠 Decision Breakdown</h2></div>
-        <div class="card" style="padding:20px"><div class="chart-wrap" style="min-height:260px"><canvas id="chart-decisions"></canvas></div></div>
-      </div>
-      <div>
-        <div class="section-header"><h2>🚫 Skip Reasons</h2></div>
-        <div class="card" style="padding:20px"><div class="chart-wrap" style="min-height:260px"><canvas id="chart-skips"></canvas></div></div>
-      </div>
-    </div>
-
-    <!-- Weather & ET₀ Overlay -->
-    <div class="section-header" style="margin-top:24px"><h2>🌡️ Weather & ET₀ History</h2></div>
-    <div class="card" style="padding:20px;margin-bottom:24px"><div class="chart-wrap"><canvas id="chart-weather"></canvas></div></div>
-
-    <!-- Decision Audit Log -->
-    <div class="section-header" style="margin-top:24px">
-      <h2>📋 Decision Audit Log</h2>
-      <span class="aside" id="an-log-count"></span>
-    </div>
-    <div class="card decision-log-wrap">
-      <table class="config-table">
-        <thead><tr><th>Time</th><th>Type</th><th>Zone</th><th>Reason</th><th>Soil Before</th><th>Soil After</th><th>Duration</th><th>Gallons</th><th>ET₀</th><th>Conditions</th></tr></thead>
-        <tbody id="decision-log-body"></tbody>
-      </table>
-    </div>
-  </div>
-
   <!-- ═══ SCHEDULE PANEL ═══ -->
   <div class="panel" id="p-schedule">
     <div class="section-header">
@@ -1246,7 +1172,8 @@ a{color:var(--blue);text-decoration:none}
     <div class="skip-rules-grid" id="skip-rules"></div>
   </div>
 
-  <!-- ═══ WEATHER PANEL ═══ -->
+  <!-- ═══ WEATHER PANEL (not in nav — but its elements are populated every
+       refresh by renderUI; kept wired to avoid null-element crashes) ═══ -->
   <div class="panel" id="p-weather">
     <div class="weather-current">
       <div class="card weather-hero" id="wx-hero">
@@ -1266,7 +1193,8 @@ a{color:var(--blue);text-decoration:none}
     <div class="forecast-grid" id="wx-forecast"></div>
   </div>
 
-  <!-- ═══ WATER USAGE PANEL ═══ -->
+  <!-- ═══ WATER USAGE PANEL (not in nav — elements populated every refresh
+       by renderUI; kept wired to avoid null-element crashes) ═══ -->
   <div class="panel" id="p-usage">
     <div class="stats-row" style="margin-bottom:24px">
       <div class="savings-highlight" id="savings-box">
@@ -2032,6 +1960,14 @@ a{color:var(--blue);text-decoration:none}
           No light data yet — sensor not connected
         </div>
       </div>
+    </div>
+
+    <div class="section-header" style="margin-top:24px"><h2>🌧️ Rain &amp; Wetting Events</h2>
+      <span class="aside" style="font-size:.72rem;color:var(--text3)">soil-rise detection · observe-only (not yet affecting watering)</span>
+    </div>
+    <div class="card" id="rain-events-card" style="padding:16px;margin-bottom:24px">
+      <div id="rain-events-summary" style="font-size:.82rem;color:var(--text2);margin-bottom:10px">Loading…</div>
+      <div id="rain-events-list"></div>
     </div>
 
     <div class="section-header"><h2>🧠 Event Log</h2></div>

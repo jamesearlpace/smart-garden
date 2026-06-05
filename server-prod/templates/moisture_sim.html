@@ -334,12 +334,12 @@ h2 { margin: 0; font-size: 1.05rem; }
       <span id="mode-toggle-label">Mode</span>
     </button>
     <div class="range-btns" id="range-btns">
-      <button data-days="7">7d</button>
+      <button data-days="7" class="active">7d</button>
       <button data-days="30">30d</button>
       <button data-days="60">60d</button>
       <button data-days="90">90d</button>
       <button data-days="153">153d</button>
-      <button data-days="9999" class="active">Full Season</button>
+      <button data-days="9999">Full Season</button>
     </div>
     <select id="year-select">
       <option value="2026" selected>2026 (Live)</option>
@@ -528,7 +528,7 @@ var hashParams = parseHash();
 
 var allZonesMode = (hashParams.zone === 'all');
 var currentZoneId = (hashParams.zone && hashParams.zone !== 'all') ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
-var currentDays = hashParams.days ? parseInt(hashParams.days) : 9999;
+var currentDays = hashParams.days ? parseInt(hashParams.days) : 7;
 var selectedYear = hashParams.year || '2026';
 var weatherCache = {};
 var liveDataCache = {};
@@ -2565,7 +2565,15 @@ function refresh() {
               document.getElementById('nw-value').textContent = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][_d2.getDay()] + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][_d2.getMonth()] + ' ' + _d2.getDate() + ' ~4 AM';
               document.getElementById('nw-value').style.color = _ha2 < 24 ? '#f59e0b' : '#22c55e';
               document.getElementById('nw-detail').textContent = '~' + _ts2 + ' · ' + Math.round(_curM) + '% → MAD ' + Math.round(_madM) + '%';
-            } else { _banner.style.display = 'none'; }
+            } else {
+              // Moisture won't drop below MAD within the 7-day forecast window.
+              // Show "> 7 days" instead of hiding the banner — every auto zone
+              // should report a next-watering, even if it's beyond the forecast.
+              _banner.style.display = 'flex';
+              document.getElementById('nw-value').textContent = '> 7 days';
+              document.getElementById('nw-value').style.color = '#22c55e';
+              document.getElementById('nw-detail').textContent = 'Soil stays above MAD ' + Math.round(_madM) + '% for the next 7 days — no watering expected soon.';
+            }
           }
           }
         } catch(e) { console.error('Banner error:', e); }

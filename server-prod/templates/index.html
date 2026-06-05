@@ -1976,7 +1976,6 @@ a{color:var(--blue);text-decoration:none}
 
   <!-- ═══ SETTINGS PANEL (composite) ═══ -->
   <div class="panel" id="p-settings">
-    <div class="section-header"><h2>🔧 Configuration</h2></div>
     <div id="settings-config"></div>
 
     <div class="section-header" style="margin-top:24px"><h2>📅 Schedule</h2></div>
@@ -2002,10 +2001,10 @@ a{color:var(--blue);text-decoration:none}
     <div class="section-header" style="margin-top:24px"><h2>🩺 Hardware Health</h2></div>
     <div id="settings-health"></div>
 
-    <div class="section-header" style="margin-top:24px"><h2>� Wiring Diagram</h2></div>
+    <div class="section-header" style="margin-top:24px"><h2>🔌 Wiring Diagram</h2></div>
     <div id="settings-wiring"></div>
 
-    <div class="section-header" style="margin-top:24px"><h2>�📖 About</h2></div>
+    <div class="section-header" style="margin-top:24px"><h2>📖 About</h2></div>
     <div id="settings-about"></div>
   </div>
 
@@ -4637,7 +4636,11 @@ function loadBatteryChart(canvasId, url, hours) {
       return;
     }
     canvas.style.display = '';
-    var volts = data.map(function(r){ return {x: new Date(r.ts), y: r.battery_v}; });
+    // Drop physically-impossible readings (12V SLA can't exceed ~15V or drop below ~8V).
+    // A glitchy ADC sample near 18V otherwise stretches the y-axis and squashes real data.
+    var volts = data
+      .filter(function(r){ return r.battery_v != null && r.battery_v >= 8 && r.battery_v <= 16; })
+      .map(function(r){ return {x: new Date(r.ts), y: r.battery_v}; });
     if (_ddCharts[canvasId]) _ddCharts[canvasId].destroy();
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'line',
@@ -4649,7 +4652,7 @@ function loadBatteryChart(canvasId, url, hours) {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: { x: shTimeAxis(hours),
-                  y: { title: { display: true, text: 'Volts' } } }
+                  y: { suggestedMin: 11.5, suggestedMax: 15, title: { display: true, text: 'Volts' } } }
       }
     });
   });

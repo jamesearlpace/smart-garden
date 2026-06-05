@@ -2085,53 +2085,127 @@ load();
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Soil Sensor Calibration — Smart Garden</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;padding:16px;background:#0f1419;color:#e6edf3;}
-h1{margin:0 0 2px 0;font-size:19px;}
-.sub{color:#7d8590;font-size:13px;margin-bottom:14px;}
+:root{
+  --bg:#f5f7f9;--card:#ffffff;--bg-card:#ffffff;
+  --border:#e8ecf0;--border-light:#f0f2f5;
+  --text:#1a2b3c;--text2:#5f7082;--text3:#9ba8b5;
+  --green:#22c55e;--green-dark:#16a34a;--green-light:#dcfce7;
+  --blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;
+  --bg-sidebar:#1b2e1f;--bg-sidebar-hover:rgba(255,255,255,.08);
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --sidebar-w:220px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.55;min-height:100vh;}
+
+/* ── Sidebar (cloned from dashboard) ── */
+.sidebar{position:fixed;top:0;left:0;width:var(--sidebar-w);height:100vh;background:var(--bg-sidebar);
+  color:#fff;display:flex;flex-direction:column;z-index:100;}
+.sidebar-brand{padding:24px 20px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar-brand .logo{font-size:1.8rem}
+.sidebar-brand .name{font-size:1.05rem;font-weight:700;letter-spacing:-.01em}
+.sidebar-brand .loc{font-size:.7rem;color:rgba(255,255,255,.5);margin-top:1px}
+.sidebar-nav{flex:1;padding:12px 10px;overflow-y:auto}
+.sidebar .nav-item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px;
+  cursor:pointer;transition:all .2s;color:rgba(255,255,255,.6);font-size:.88rem;font-weight:500;margin-bottom:2px;text-decoration:none}
+.sidebar .nav-item:hover{background:var(--bg-sidebar-hover);color:rgba(255,255,255,.85)}
+.sidebar .nav-item.active{background:rgba(34,197,94,.18);color:#4ade80;font-weight:600}
+.sidebar .nav-item .icon{font-size:1.15rem;width:24px;text-align:center}
+.sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,.08);font-size:.72rem;color:rgba(255,255,255,.35)}
+.sidebar-footer .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
+.sidebar-footer .status-dot.online{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.5)}
+.sidebar-footer .status-dot.offline{background:#f87171;box-shadow:0 0 6px rgba(248,113,113,.5)}
+
+.main{margin-left:var(--sidebar-w);min-height:100vh;padding:24px 32px 80px;max-width:1000px;}
+h1{margin:0 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:-.02em;}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:16px;}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
-button{background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;}
-button:hover{background:#30363d;}
+button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;}
+button:hover{background:var(--border-light);}
 button:disabled{opacity:.5;cursor:default;}
-.btn-dry{background:#3e2e16;border-color:#5c441f;color:#f0b429;}
-.btn-wet{background:#16303e;border-color:#1f4a5c;color:#56b6e6;}
-.btn-go{background:#1a3e2a;border-color:#1f5c3a;color:#7ee787;}
-.card{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:14px;margin-bottom:12px;}
+.btn-dry{background:#fef3c7;border-color:#f59e0b;color:#92400e;}
+.btn-wet{background:#dbeafe;border-color:#3b82f6;color:#1e40af;}
+.btn-go{background:#dcfce7;border-color:#16a34a;color:#166534;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
 .nm{font-weight:600;font-size:15px;}
 .live{font-variant-numeric:tabular-nums;}
-.raw{font-size:26px;font-weight:700;}
-.pct{font-size:22px;font-weight:700;}
-.muted{color:#7d8590;font-size:12px;}
-.endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;}
-.endpoints b{color:#e6edf3;}
-.drift{font-size:12px;color:#adbac7;margin:2px 0 8px;padding:6px 8px;background:#0d1117;border-radius:6px;}
+.raw{font-size:26px;font-weight:700;color:var(--text);}
+.pct{font-size:22px;font-weight:700;color:var(--text);}
+.muted{color:var(--text2);font-size:12px;}
+.endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;color:var(--text2);}
+.endpoints b{color:var(--text);}
+.drift{font-size:12px;color:var(--text2);margin:2px 0 8px;padding:6px 8px;background:var(--border-light);border-radius:6px;}
 .advice{font-size:13px;margin:8px 0 4px;padding:8px 10px;border-radius:6px;line-height:1.45;border-left:3px solid;}
 .advice b{font-weight:700;}
-.adv-ok{background:rgba(34,197,94,.10);border-color:#3fb950;color:#7ee787;}
-.adv-info{background:rgba(88,166,255,.10);border-color:#58a6ff;color:#9cd2ff;}
-.adv-due{background:rgba(240,180,41,.12);border-color:#f0b429;color:#f0c674;}
-.adv-overdue{background:rgba(255,123,114,.12);border-color:#ff7b72;color:#ffa198;}
-.adv-bad{background:rgba(255,123,114,.16);border-color:#ff7b72;color:#ff7b72;}
+.adv-ok{background:rgba(34,197,94,.10);border-color:#16a34a;color:#166534;}
+.adv-info{background:rgba(59,130,246,.10);border-color:#3b82f6;color:#1e40af;}
+.adv-due{background:rgba(245,158,11,.12);border-color:#f59e0b;color:#92400e;}
+.adv-overdue{background:rgba(239,68,68,.10);border-color:#ef4444;color:#991b1b;}
+.adv-bad{background:rgba(239,68,68,.14);border-color:#ef4444;color:#991b1b;}
 .badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;}
-.b-ok{background:#1a3e2a;color:#7ee787;}
-.b-bad{background:#3e1a1a;color:#ff7b72;}
-.b-off{background:#21262d;color:#7d8590;}
+.b-ok{background:#dcfce7;color:#166534;}
+.b-bad{background:#fee2e2;color:#991b1b;}
+.b-off{background:var(--border-light);color:var(--text2);}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
 .manual{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
-.manual input{width:74px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:5px;padding:6px;font-size:13px;}
+.manual input{width:74px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:6px;font-size:13px;}
 .manual input.nm{width:120px;}
-.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1a3e2a;color:#7ee787;padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;}
-.toast.err{background:#3e1a1a;color:#ff7b72;}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#dcfce7;color:#166534;padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;border:1px solid #16a34a;z-index:300;}
+.toast.err{background:#fee2e2;color:#991b1b;border-color:#ef4444;}
 .toast.show{opacity:1;}
-a{color:#58a6ff;text-decoration:none;}
-.help{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#adbac7;line-height:1.5;}
-.help b{color:#e6edf3;}
+a{color:var(--blue);text-decoration:none;}
+.help{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:14px;font-size:13px;color:var(--text2);line-height:1.5;box-shadow:var(--shadow);}
+.help b{color:var(--text);}
+
+/* ── Mobile bottom nav ── */
+.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:#fff;
+  border-top:1px solid var(--border);box-shadow:0 -2px 8px rgba(0,0,0,.05);z-index:200;padding:4px 0;}
+.mobile-nav-inner{display:flex;justify-content:space-around;}
+.mob-nav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 8px;
+  font-size:.62rem;color:var(--text2);text-decoration:none;cursor:pointer;font-weight:600;}
+.mob-nav-item.active{color:var(--green-dark);}
+.mob-nav-item .mob-icon{font-size:1.2rem;}
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .main{margin-left:0;padding:16px 16px 80px;}
+  .mobile-nav{display:block;}
+}
 </style></head>
 <body>
-<h1>🔧 Sensor Calibration</h1>
-<div class="sub">Tune the server-side calibration for the battery and soil sensors — saved to the server, no reflash.
-<a href="/">🏠 Home</a> · <a href="/moisture-sim">💧 Schedule</a> · <a href="/forecast">🌧️ Forecast</a> · <a href="/map">🗺️ Map</a></div>
+
+<!-- ═══ Sidebar ═══ -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">🌱</span>
+    <div>
+      <div class="name">Smart Garden</div>
+      <div class="loc">Duvall, WA</div>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
+    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
+    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Schedule</a>
+    <a href="/calibrate" class="nav-item active"><span class="icon">🎛️</span> Calibrate</a>
+    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
+  </div>
+  <div class="sidebar-footer">
+    <span class="status-dot" id="sb-dot"></span>
+    <span id="sb-status">Connecting…</span>
+    <div style="margin-top:6px">Auto-refresh</div>
+  </div>
+</nav>
+
+<div class="main">
+<h1>🎛️ Sensor Calibration</h1>
+<div class="sub">Tune the server-side calibration for the battery and soil sensors — saved to the server, no reflash.</div>
 
 <h2 style="font-size:16px;margin:18px 0 6px">🔋 Battery Voltage</h2>
 <div class="help">
@@ -2140,7 +2214,7 @@ a{color:#58a6ff;text-decoration:none;}
 </div>
 <div id="battery-cal" class="card">Loading…</div>
 <div class="card" id="battery-chart-card" style="display:none">
-  <div class="muted" style="margin-bottom:8px">Calibration curve — <b style="color:#56b6e6">your readings</b> (dots), <b style="color:#7ee787">best-fit</b> (line), <b style="color:#f0b429">right now</b> (◆). X = ESP32 raw, Y = Wanderer actual.</div>
+  <div class="muted" style="margin-bottom:8px">Calibration curve — <b style="color:#3b82f6">your readings</b> (dots), <b style="color:#16a34a">best-fit</b> (line), <b style="color:#d97706">right now</b> (◆). X = ESP32 raw, Y = Wanderer actual.</div>
   <div style="height:230px"><canvas id="bat-chart"></canvas></div>
 </div>
 
@@ -2154,7 +2228,7 @@ a{color:#58a6ff;text-decoration:none;}
 <span style="color:#7d8590">Tip: saturated soil is a truer "100%" than a cup of water (cup reads wetter than soil ever gets).</span>
 </div>
 
-<div class="help" style="border-color:#1f4a5c">
+<div class="help" style="border-color:#3b82f6">
 <b>📉 Drift tracking:</b> Each time you recalibrate, we log the raw value of the dry/wet capture. Because those captures are always the <b>same physical reference</b> (air = dry, saturated = wet), any change between them is <b>real sensor drift</b> — not the seasonal moisture change that fools the in-ground reading. The drift number below shows how far each endpoint moved since your last calibration. Big jumps = the sensor is aging; recalibrate (and eventually replace).
 </div>
 
@@ -2204,7 +2278,7 @@ function driftLine(idx){
     if(e.delta === null || e.delta === undefined)
       return label + ': <span class="muted">1 capture (' + e.latest_raw + ')</span>';
     var sign = e.delta > 0 ? '+' : '';
-    var sev = Math.abs(e.delta) >= 300 ? 'color:#ff7b72' : Math.abs(e.delta) >= 120 ? 'color:#f0b429' : 'color:#7ee787';
+    var sev = Math.abs(e.delta) >= 300 ? 'color:#ef4444' : Math.abs(e.delta) >= 120 ? 'color:#b45309' : 'color:#16a34a';
     var rate = (e.drift_per_30d !== null && e.drift_per_30d !== undefined) ? ' (' + (e.drift_per_30d>0?'+':'') + e.drift_per_30d + '/mo)' : '';
     return label + ': <span style="' + sev + '">' + sign + e.delta + ' over ' + (e.days||'?') + 'd' + rate + '</span>';
   }
@@ -2312,8 +2386,8 @@ function renderBattery(d){
   if(hasLive){
     liveHtml = '<div class="row" style="align-items:flex-end">'
       + '<div><div class="muted">ESP32 raw reading</div><div class="raw live">' + vfmt(live.raw_v) + '</div></div>'
-      + '<div style="text-align:center;color:#7d8590;font-size:20px">→</div>'
-      + '<div style="text-align:right"><div class="muted">dashboard shows</div><div class="raw" style="color:#7ee787">' + vfmt(live.corrected_v) + '</div></div>'
+      + '<div style="text-align:center;color:#9ba8b5;font-size:20px">→</div>'
+      + '<div style="text-align:right"><div class="muted">dashboard shows</div><div class="raw" style="color:#16a34a">' + vfmt(live.corrected_v) + '</div></div>'
       + '</div>';
   } else {
     liveHtml = '<div class="advice adv-overdue"><b>🔌 No battery reading</b> — the ESP32 isn\\'t reporting a voltage right now. Add a point once it\\'s back online.</div>';
@@ -2330,10 +2404,10 @@ function renderBattery(d){
     + '</div>';
   // Points table
   var rows = (d.points||[]).map(function(p){
-    var errCls = Math.abs(p.error_v) >= 0.3 ? 'color:#ff7b72' : Math.abs(p.error_v) >= 0.12 ? 'color:#f0b429' : 'color:#7ee787';
+    var errCls = Math.abs(p.error_v) >= 0.3 ? 'color:#ef4444' : Math.abs(p.error_v) >= 0.12 ? 'color:#b45309' : 'color:#16a34a';
     var sign = p.error_v > 0 ? '+' : '';
     return '<tr>'
-      + '<td style="color:#7d8590;font-size:11px">' + (p.ts||'').replace('T',' ') + '</td>'
+      + '<td style="color:#9ba8b5;font-size:11px">' + (p.ts||'').replace('T',' ') + '</td>'
       + '<td><b>' + vfmt(p.actual_v) + '</b></td>'
       + '<td>' + vfmt(p.raw_v) + '</td>'
       + '<td>' + vfmt(p.predicted_v) + '</td>'
@@ -2343,7 +2417,7 @@ function renderBattery(d){
   }).join('');
   var tableHtml = (d.points && d.points.length)
     ? '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
-      + '<thead><tr style="color:#7d8590;text-align:left;font-size:11px;text-transform:uppercase">'
+      + '<thead><tr style="color:#9ba8b5;text-align:left;font-size:11px;text-transform:uppercase">'
       + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th><th></th></tr></thead>'
       + '<tbody>' + rows + '</tbody></table>'
       + '<div class="actions"><button onclick="resetBattery()">🗑 Clear all points (revert to default)</button></div>'
@@ -2379,19 +2453,19 @@ function renderBatteryChart(d){
   if(_batChart) _batChart.destroy();
   _batChart = new Chart(canvas.getContext('2d'), {
     data: { datasets: [
-      { type:'line', label:'Best-fit', data:curve, borderColor:'#7ee787', borderWidth:2, pointRadius:0, tension:0, fill:false, order:3 },
-      { type:'scatter', label:'Your readings', data:pts, backgroundColor:'#56b6e6', borderColor:'#56b6e6', pointRadius:5, pointHoverRadius:7, order:2 },
-      { type:'scatter', label:'Right now', data:nowPt, backgroundColor:'#f0b429', borderColor:'#fff', borderWidth:2, pointRadius:8, pointHoverRadius:10, pointStyle:'rectRot', order:1 }
+      { type:'line', label:'Best-fit', data:curve, borderColor:'#16a34a', borderWidth:2, pointRadius:0, tension:0, fill:false, order:3 },
+      { type:'scatter', label:'Your readings', data:pts, backgroundColor:'#3b82f6', borderColor:'#3b82f6', pointRadius:5, pointHoverRadius:7, order:2 },
+      { type:'scatter', label:'Right now', data:nowPt, backgroundColor:'#f59e0b', borderColor:'#1a2b3c', borderWidth:2, pointRadius:8, pointHoverRadius:10, pointStyle:'rectRot', order:1 }
     ]},
     options: {
       responsive:true, maintainAspectRatio:false,
       plugins: {
-        legend: { labels:{ color:'#adbac7', boxWidth:10, font:{size:11} } },
+        legend: { labels:{ color:'#5f7082', boxWidth:10, font:{size:11} } },
         tooltip: { callbacks: { label: function(ctx){ return ctx.dataset.label+': raw '+ctx.parsed.x.toFixed(2)+'V → '+ctx.parsed.y.toFixed(2)+'V'; } } }
       },
       scales: {
-        x: { title:{display:true,text:'ESP32 raw (V)',color:'#7d8590',font:{size:11}}, ticks:{color:'#7d8590',font:{size:10}}, grid:{color:'#21262d'} },
-        y: { title:{display:true,text:'Wanderer actual (V)',color:'#7d8590',font:{size:11}}, ticks:{color:'#7d8590',font:{size:10}}, grid:{color:'#21262d'} }
+        x: { title:{display:true,text:'ESP32 raw (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} },
+        y: { title:{display:true,text:'Wanderer actual (V)',color:'#5f7082',font:{size:11}}, ticks:{color:'#5f7082',font:{size:10}}, grid:{color:'#e8ecf0'} }
       }
     }
   });
@@ -2433,9 +2507,40 @@ async function resetBattery(){
 }
 
 function restartPoll(){ if(pollTimer) clearInterval(pollTimer); pollTimer = setInterval(load, POLL_MS); }
+
+// Sidebar footer connectivity dot (mirrors the other pages).
+async function loadStatus(){
+  try{
+    var r = await fetch('/api/dashboard');
+    var d = await r.json();
+    var online = (d.esp32_online !== undefined) ? !!d.esp32_online : !!d.esp32;
+    var dot = document.getElementById('sb-dot');
+    var txt = document.getElementById('sb-status');
+    if(dot) dot.className = 'status-dot ' + (online ? 'online' : 'offline');
+    if(txt) txt.textContent = online ? 'ESP32 online' : 'ESP32 offline';
+  }catch(e){
+    var dot = document.getElementById('sb-dot');
+    if(dot) dot.className = 'status-dot offline';
+  }
+}
+
 load();
 loadBattery();
+loadStatus();
 restartPoll();</script>
+</div><!-- /.main -->
+
+<!-- ═══ Mobile bottom nav ═══ -->
+<div class="mobile-nav">
+  <div class="mobile-nav-inner">
+    <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
+    <a href="/#zones" class="mob-nav-item"><span class="mob-icon">🌿</span>Zones</a>
+    <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
+    <a href="/forecast" class="mob-nav-item"><span class="mob-icon">🌧️</span>Forecast</a>
+    <a href="/moisture-sim" class="mob-nav-item"><span class="mob-icon">💧</span>Schedule</a>
+    <a href="/calibrate" class="mob-nav-item active"><span class="mob-icon">🎛️</span>Calibrate</a>
+  </div>
+</div>
 </body></html>"""
         return Response(html, mimetype="text/html")
 

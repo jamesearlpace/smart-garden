@@ -1501,6 +1501,25 @@ Audited every page beyond the Schedule cockpit. Site structure: `/` index.html (
 
 **Firmware/PlatformIO facts:** repo `c:\MyCode\smart-garden`, env `esp32` is the production build (`board=esp32dev`), has all libs, builds clean. `power-test`/`ota` envs fail to build (missing MCP23017 lib in their own lib_deps — pre-existing, unrelated). pio at `$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe`. Upload: `pio run -e esp32 --target upload --upload-port COM5`.
 
+---
+
+## 2026-06-04 (cont.) — Valve race fix, crashLoop false-alarm, 5-min sampling, rain detection
+
+A run of fixes + the first real soil-sensor feature, after the sensors went live.
+
+**Valve stuck-open race (issue #34, commit db53171):** rapid valve switching left a valve physically ON but tracked OFF (dashboard showed all zones off). Cause: `open_valve()`'s preemption `close_all()` wiped the `_active` sentinel `start_zone_watering()` had just reserved for the zone being opened → valve opened but untracked → `safety_check` (only closed *tracked* zones) never closed it. Fix: re-establish tracking if the slot was cleared mid-open, + `safety_check` now reconciles firmware valve state vs `_active` every 2 min and force-closes any untracked-open valve. Skips reconcile mid-start; honors inverted wiring.
+
+**crashLoopEvidence false alarm (commit 8727919, firmware — pending flash):** the flag fired forever once bootCount>100 because every boot safely closes all 10 valves (≈10 closes, 0 opens) → ratio permanently skewed. Board is NOT actually crash-looping (boot# stable, resetReason=PowerOn, crashCount low). Replaced with `crashCount>=3 && uptimeSec<300`. Also bumped shutdown close_all timeout 1s→3s (server.py) to quiet log noise.
+
+**5-min sampling (commit f39f0ab, firmware — pending flash):** `SENSOR_READ_INTERVAL_MS` 3600000→300000. Negligible battery (sensors always powered, CPU always on, server already polls every 5 min → fresh values ride the existing poll). Enables rain inference. **Two firmware changes now queued for the next USB flash: crashLoop fix + 5-min sampling.**
+
+**Sensor placement (corrected by James):** sensors are in the **drip beds**, NOT turf — GPIO32 (yellow) = Zone 9/Grapes, GPIO33 (green) = Zone 8/Garden. Drip-only (not hand-watered), so a soil rise = rain OR recorded drip run OR tampering. Won't put a sensor in the lawn (mower/trimmer risk) → turf precip-rate calibration will be a one-time catch-can test instead, not a permanent probe. **Zone numbering: display = internal id + 1** (Garden id7=Zone 8, Grapes id8=Zone 9).
+
+**Rain / wetting detection (commit c8a0217) — OBSERVE-ONLY, deployed:** the real payoff of the sensors. `detect_soil_rise()` (irrigation.py, called after `log_sensor`, try/except-isolated) flags a soil rise ≥10 pct-pts above the sensor's own baseline and classifies it: **rain** (wet sky — precip/humidity≥85/solar<100 as cloud proxy — + no irrigation), **irrigation** (any zone watered in 90 min), **unexplained** (clear sky + no irrigation = possibly hand-watered). Soil-agnostic (relative rise, no per-sensor calibration). New `rain_event` table + helpers (database.py), `GET /api/rain-events` (dashboard.py), "🌧️ Rain & Wetting Events" tile on History (index.html). **Does NOT yet feed watering decisions** — records + displays only, fail-safe (conservative correlation never over-credits rain). Unit-tested (DB helpers + classification + round-trip + cleanup all pass). **FOLLOW-UP (not built, needs review):** wire confirmed rain credits into the water balance so the scheduler skips watering after real rain the API missed — the actual water savings. Do after the 5-min flash + watching it classify real events for a bit.
+
+**Sanity-check findings (for later, not yet done):** (1) `precip_rate_iph` per-zone is uncalibrated → catch-can test. (2) **cycle-soak is configured but NOT implemented** — engine runs 24 min straight instead of 8min×3 with soaks → runoff on clay. Highest-impact code fix but CHANGES watering behavior, so do it attended, not unattended. (3) sensors can't calibrate turf (they're in beds).
+
+
 
 
 

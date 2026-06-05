@@ -2475,20 +2475,24 @@ function renderBattery(d){
   var nPts = (d.points || []).length;
   var tableHtml;
   if (nPts) {
-    // Delete controls are gated behind an Edit toggle so precious readings
-    // aren't one stray tap from deletion.
     var editBtn = '<button onclick="toggleBatEdit()" style="padding:5px 12px;font-size:12px;'
         + (batEditMode ? 'background:#dcfce7;border-color:#16a34a;color:#166534' : '')
-        + '">' + (batEditMode ? '✓ Done editing' : '✏️ Edit readings') + '</button>';
-    var clearBtn = batEditMode
-      ? ' <button onclick="resetBattery()" style="padding:5px 12px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">🗑 Clear all points</button>'
-      : '';
-    tableHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
-      + '<thead><tr style="color:#9ba8b5;text-align:left;font-size:11px;text-transform:uppercase">'
-      + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th>'
-      + (batEditMode ? '<th></th>' : '') + '</tr></thead>'
-      + '<tbody>' + rows + '</tbody></table>'
-      + '<div class="actions" style="margin-top:10px">' + editBtn + clearBtn + '</div>';
+        + '">' + (batEditMode ? '✓ Done' : '✏️ Edit readings') + '</button>';
+    if (batEditMode) {
+      // Expanded: full table with per-row delete + clear-all.
+      var clearBtn = ' <button onclick="resetBattery()" style="padding:5px 12px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">🗑 Clear all points</button>';
+      tableHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
+        + '<thead><tr style="color:#9ba8b5;text-align:left;font-size:11px;text-transform:uppercase">'
+        + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th><th></th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table>'
+        + '<div class="actions" style="margin-top:10px">' + editBtn + clearBtn + '</div>';
+    } else {
+      // Collapsed: just a summary + Edit button. The table (and its delete
+      // controls) stay hidden so precious readings aren't a stray tap away.
+      tableHtml = '<div class="row" style="margin-top:12px;padding:10px 12px;background:var(--border-light);border-radius:8px">'
+        + '<span class="muted">' + nPts + ' calibration reading' + (nPts===1?'':'s') + ' saved · the curve above uses them</span>'
+        + editBtn + '</div>';
+    }
   } else {
     tableHtml = '<div class="muted" style="margin-top:10px">No reference points yet — add your first reading above.</div>';
     batEditMode = false;  // nothing to edit

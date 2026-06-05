@@ -10,6 +10,8 @@
 > - **Forecast-vs-Actual audit cleaned up** — group-aware snapshot, manual runs excluded, water/skip collision fixed (48.9%→99% on live data).
 > - **Sensor strategy SETTLED** (evidence-backed): ET model = brain; cheap capacitive sensors = consumable supporting eyes (rain detection, dashboard cross-check, optional skip-gate). NOT a permanent/accurate lawn sensor. Pros use TDR/sealed-potted; passive auto-cal REJECTED as unscientific.
 > - **Calibration system BUILT** — `/calibrate` page + nav tab: server-side per-sensor dry/wet (no reflash), invalid-reading guard, drift tracking, recalibration advice. Sensors still `soil_sensor: null` (observe-only).
+> - **Battery voltage calibration LIVE (2026-06-05)** — `/calibrate` now has a 🔋 Battery section: read the true voltage off the Wanderer, type it in, tap Add. Server captures the ESP32's raw reading at that instant, least-squares fits a correction (pure-python, no numpy: 1pt=scale, 2–4=linear, 5+=quadratic), applied live via shared config (`battery_calibration`). Replaces the old hardcoded ×1.02884. **numpy is NOT in the server venv — never import it in deployed code.**
+> - **Graceful sensor failure (2026-06-05)** — low-battery ntfy alert (<11.8V, 3-read hysteresis) + battery line in daily digest; sensor-fault check guarded against `soil_sensor: null`. Decisions already immune to dead soil sensors (ET brain; invalid reading → neutral 50).
 > - **Dashboard charts cleaned up** — removed duplicate injected Analytics/Usage/Weather sections + dup battery from History, deleted orphaned p-analytics panel, fixed all 6 Chart.js console errors.
 > - **Physical TODO (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees sensor (raw 4095 = open circuit); then use `/calibrate` to capture real dry/wet.
 > - **Pending firmware flash (USB only, NEVER OTA):** crashLoop fix + 5-min sampling interval (committed, not flashed). Optional: strip pct math from firmware (server overrides it).
@@ -1708,7 +1710,29 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Note on visual QA:** the VS Code embedded browser pane renders ~580px (mobile breakpoint) regardless of `setViewportSize`; reliable desktop verification is via `Chart.getChart()` scale reads + DOM queries, not just screenshots.
 
-**Remaining punch-list (not yet done — needs direction):** nav redundancy (Zones page leads with the aerial map AND there's a separate "Zone Map" nav item); zone meta row still shows soil "Dry 45% / Target 75%" thresholds that are meaningless without a sensor; Junction Box climate chart legend clips on the right on narrow widths.
+## 2026-06-05 — Battery voltage calibration + graceful sensor failure + UI punch-list
+
+**Context:** Second pass on the dashboard. James wanted (1) a way to calibrate battery voltage from the website by entering the real Wanderer reading, (2) sensors to "fail elegantly," and (3) the remaining punch-list items.
+
+**Battery voltage calibration (the big one):**
+- The firmware reports `batteryV` from its ADC + the divider James built (5 resistors instead of the design's 4 → reads slightly off). The server used to just multiply by a hardcoded `1.02884`.
+- Now: `config['battery_calibration']` holds reference points + fitted coeffs. `engine.battery_raw_to_v()` evaluates the polynomial (increasing-power order, clamped 5–18V, None for dead reads) and is applied at ingest. Because `config` is a **shared dict** between engine and dashboard, saving from the web applies the new correction **live, no restart**.
+- Fit logic (`dashboard._fit_battery_model`): **pure Python** least-squares (Gaussian elimination on normal equations) — 0 pts → legacy ×1.02884, 1 pt → scale-through-origin, 2–4 → linear, 5+ → quadratic. Shows RMSE. **Gotcha hit + fixed:** numpy is in system python3 but NOT the server's `.venv` → first deploy 500'd on `import numpy`. Replaced with pure-python. **Never import numpy in deployed smart-garden code.**
+- API: `GET/POST /api/battery-calibration[/add|/delete|/reset]`. `/add` body `{actual_v}` captures the ESP32's live raw reading and pairs it.
+- UI: 🔋 Battery Voltage section at the top of `/calibrate` — shows "ESP32 raw X.XXV → dashboard shows Y.YYV", input for the Wanderer reading, points table (actual/raw/predicted/err) with delete, reset, model+RMSE line.
+- Verified end-to-end: add→fit→reset cycle, live correction moved 14.37→14.41→back to 14.37. Config left clean (0 points) for James's real readings.
+
+**Graceful sensor failure:**
+- Decisions were already safe (ET brain; a dead soil sensor returns None → defaults to neutral 50, never a misleading 0%/100%).
+- Added: low-battery ntfy alert (<11.8V, 3 consecutive reads to dodge ADC glitches) + battery line in the daily digest. Guarded `_check_sensor_faults` against `soil_sensor: null` (would've called `get_sensor_flatline(None)`).
+
+**Punch-list:**
+- Zone cards: badge now driven by ET water-balance when no soil sensor (was misleading "0% DRY"); empty soil bar hidden; meta row shows **Refill/Full mm** (MAD/TAW) instead of meaningless soil %s.
+- Removed the redundant **🗺️ Zone Map** nav item (desktop + mobile) — the Zones panel already renders the same interactive head map (`renderMap`). `/map` route kept for direct links.
+- DHT "Junction Box Climate" legend: confirmed **not** clipping at desktop width (was a narrow-pane artifact); shortened the 3rd label to "Condensation Risk" for cleaner narrow rendering.
+- Earlier in the session: removed dup "Configuration" heading, fixed corrupted emoji, tightened battery chart y-axis (11.5–15.5, filter impossible >16V/<8V reads).
+
+**All deployed to the Acer + committed/pushed.** Visual QA caveat from the prior entry still applies (pane renders narrow; verify via DOM/Chart reads).
 
 
 

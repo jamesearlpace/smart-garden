@@ -3002,10 +3002,26 @@ function render(d) {
 
   var zgHtml = '';
   installedZones.forEach(function(z) {
-    var sp = z.soil_pct != null ? z.soil_pct : 0;
+    var hasSoil = z.soil_pct != null;
+    var sp = hasSoil ? z.soil_pct : 0;
     var color = soilColor(sp, z.dry_trigger, z.wet_target);
-    var statusCls = z.watering ? 'badge-watering' : sp < z.dry_trigger ? 'badge-dry' : sp > z.wet_target ? 'badge-wet' : 'badge-ok';
-    var statusTxt = z.watering ? 'WATERING' : sp < z.dry_trigger ? 'DRY' : sp > z.wet_target ? 'WET' : 'OK';
+    // Status badge: use the real soil sensor when one is installed, otherwise
+    // fall back to the ET water-balance brain. Most zones have no capacitive
+    // sensor wired (soil_pct null), so a soil-based badge would wrongly read
+    // "0% DRY" even right after a full watering.
+    var statusCls, statusTxt;
+    if (z.watering) { statusCls = 'badge-watering'; statusTxt = 'WATERING'; }
+    else if (hasSoil) {
+      statusCls = sp < z.dry_trigger ? 'badge-dry' : sp > z.wet_target ? 'badge-wet' : 'badge-ok';
+      statusTxt = sp < z.dry_trigger ? 'DRY' : sp > z.wet_target ? 'WET' : 'OK';
+    } else {
+      var bz = balMap[z.id];
+      if (bz) {
+        var lowZ = bz.balance_mm <= bz.mad_mm;
+        statusCls = lowZ ? 'badge-dry' : 'badge-ok';
+        statusTxt = lowZ ? 'DRY' : 'OK';
+      } else { statusCls = 'badge-ok'; statusTxt = 'OK'; }
+    }
     var typeLabel = z.type === 'drip' ? '💧 Drip' : '🔫 Sprinkler';
     var kc = z.kc ? (Array.isArray(z.kc) ? z.kc[si] : z.kc) : '?';
     var spark = sparkSVG(z.history_7d, color);
@@ -3015,20 +3031,24 @@ function render(d) {
       '<div class="zone-name">Zone '+(z.id+1)+' — '+esc(z.name)+'</div>' +
       '<div class="zone-type"><span class="type-icon">'+(z.type==='drip'?'💧':'🔫')+'</span> '+typeLabel+' · Kc '+kc+'</div>' +
       '</div><span class="zone-badge '+statusCls+'">'+statusTxt+'</span></div>' +
-      '<div class="soil-bar-wrap"><div class="soil-bar-labels">' +
-      '<span class="soil-pct" style="color:'+color+'">'+fmt(sp,0)+'%</span>' +
-      '<span class="soil-text">Soil Moisture</span></div>' +
-      '<div class="soil-bar"><div class="fill" style="width:'+pct(sp)+'%;background:'+color+'"></div>' +
-      '<div class="marker" style="left:'+z.dry_trigger+'%" title="Dry trigger '+z.dry_trigger+'%"></div>' +
-      '<div class="marker" style="left:'+z.wet_target+'%" title="Wet target '+z.wet_target+'%"></div>' +
-      '</div></div>' +
+      // Soil-moisture bar only when a real capacitive reading exists. Showing a
+      // hard "0%" bar on a zone with no sensor reads as broken/contradictory.
+      (hasSoil ? ('<div class="soil-bar-wrap"><div class="soil-bar-labels">' +
+        '<span class="soil-pct" style="color:'+color+'">'+fmt(sp,0)+'%</span>' +
+        '<span class="soil-text">Soil Moisture</span></div>' +
+        '<div class="soil-bar"><div class="fill" style="width:'+pct(sp)+'%;background:'+color+'"></div>' +
+        '<div class="marker" style="left:'+z.dry_trigger+'%" title="Dry trigger '+z.dry_trigger+'%"></div>' +
+        '<div class="marker" style="left:'+z.wet_target+'%" title="Wet target '+z.wet_target+'%"></div>' +
+        '</div></div>') : '') +
       (function() {
         var b = balMap[z.id];
         if (!b) return '';
         var bpct = b.taw_mm > 0 ? (b.balance_mm / b.taw_mm * 100) : 0;
         var madPct = b.taw_mm > 0 ? ((1 - b.mad_mm / b.taw_mm) * 100) : 50;
-        var bcolor = bpct > 60 ? 'var(--green)' : bpct > 30 ? 'var(--orange)' : 'var(--red)';
-        return '<div class="soil-bar-wrap" style="margin-top:6px"><div class="soil-bar-labels">' +
+        var bcolor = bpct > 60 ? 'var(--green)' : bpct > 30 ? 'var(--amber)' : 'var(--red)';
+        // No top margin when this is the only moisture bar (it leads the card).
+        var mt = hasSoil ? 'margin-top:6px' : '';
+        return '<div class="soil-bar-wrap" style="'+mt+'"><div class="soil-bar-labels">' +
           '<span class="soil-pct" style="color:'+bcolor+'">'+fmt(b.balance_mm,1)+' mm</span>' +
           '<span class="soil-text">Water Balance ('+fmt(bpct,0)+'% of '+fmt(b.taw_mm,1)+' mm TAW)</span></div>' +
           '<div class="soil-bar"><div class="fill" style="width:'+pct(bpct)+'%;background:'+bcolor+'"></div>' +

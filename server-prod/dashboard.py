@@ -2084,6 +2084,7 @@ load();
         html = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Soil Sensor Calibration — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;padding:16px;background:#0f1419;color:#e6edf3;}
 h1{margin:0 0 2px 0;font-size:19px;}
@@ -2138,6 +2139,10 @@ a{color:#58a6ff;text-decoration:none;}
 <span style="color:#7d8590">The divider you built (5 resistors instead of 4) reads slightly off and not perfectly linear. One reading already helps; add a few at different charge levels (morning low, midday charging) and the fit gets sharper. 2+ points → linear fit, 5+ → quadratic.</span>
 </div>
 <div id="battery-cal" class="card">Loading…</div>
+<div class="card" id="battery-chart-card" style="display:none">
+  <div class="muted" style="margin-bottom:8px">Calibration curve — <b style="color:#56b6e6">your readings</b> (dots), <b style="color:#7ee787">best-fit</b> (line), <b style="color:#f0b429">right now</b> (◆). X = ESP32 raw, Y = Wanderer actual.</div>
+  <div style="height:230px"><canvas id="bat-chart"></canvas></div>
+</div>
 
 <h2 style="font-size:16px;margin:22px 0 6px">🌱 Soil Sensors</h2>
 <div class="help">
@@ -2345,6 +2350,51 @@ function renderBattery(d){
     : '<div class="muted" style="margin-top:10px">No reference points yet — add your first reading above.</div>';
 
   el.innerHTML = liveHtml + modelHtml + inputHtml + tableHtml;
+  renderBatteryChart(d);
+}
+
+var _batChart = null;
+function batPredict(coeffs, x){ var y=0; for(var i=0;i<coeffs.length;i++){ y += coeffs[i]*Math.pow(x,i); } return y; }
+
+function renderBatteryChart(d){
+  var card = document.getElementById('battery-chart-card');
+  var canvas = document.getElementById('bat-chart');
+  if(!card || !canvas || typeof Chart === 'undefined') return;
+  var pts = (d.points||[]).map(function(p){ return {x:p.raw_v, y:p.actual_v}; });
+  var live = d.live || {};
+  var hasLive = live.raw_v !== null && live.raw_v !== undefined;
+  if(!pts.length && !hasLive){ card.style.display='none'; return; }
+  // X-range from the readings + the live point, padded a touch.
+  var xs = pts.map(function(p){ return p.x; });
+  if(hasLive) xs.push(live.raw_v);
+  var lo = Math.min.apply(null, xs), hi = Math.max.apply(null, xs);
+  if(hi - lo < 0.5){ var mid=(lo+hi)/2; lo=mid-0.75; hi=mid+0.75; }
+  var pad = Math.max(0.25, (hi-lo)*0.15); lo-=pad; hi+=pad;
+  // Sample the fit polynomial across the range.
+  var coeffs = d.coeffs || [0, 1.02884];
+  var curve=[], N=40;
+  for(var i=0;i<=N;i++){ var x=lo+(hi-lo)*i/N; curve.push({x:x, y:batPredict(coeffs,x)}); }
+  var nowPt = hasLive ? [{x:live.raw_v, y:(live.corrected_v!=null ? live.corrected_v : batPredict(coeffs,live.raw_v))}] : [];
+  card.style.display='';
+  if(_batChart) _batChart.destroy();
+  _batChart = new Chart(canvas.getContext('2d'), {
+    data: { datasets: [
+      { type:'line', label:'Best-fit', data:curve, borderColor:'#7ee787', borderWidth:2, pointRadius:0, tension:0, fill:false, order:3 },
+      { type:'scatter', label:'Your readings', data:pts, backgroundColor:'#56b6e6', borderColor:'#56b6e6', pointRadius:5, pointHoverRadius:7, order:2 },
+      { type:'scatter', label:'Right now', data:nowPt, backgroundColor:'#f0b429', borderColor:'#fff', borderWidth:2, pointRadius:8, pointHoverRadius:10, pointStyle:'rectRot', order:1 }
+    ]},
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins: {
+        legend: { labels:{ color:'#adbac7', boxWidth:10, font:{size:11} } },
+        tooltip: { callbacks: { label: function(ctx){ return ctx.dataset.label+': raw '+ctx.parsed.x.toFixed(2)+'V → '+ctx.parsed.y.toFixed(2)+'V'; } } }
+      },
+      scales: {
+        x: { title:{display:true,text:'ESP32 raw (V)',color:'#7d8590',font:{size:11}}, ticks:{color:'#7d8590',font:{size:10}}, grid:{color:'#21262d'} },
+        y: { title:{display:true,text:'Wanderer actual (V)',color:'#7d8590',font:{size:11}}, ticks:{color:'#7d8590',font:{size:10}}, grid:{color:'#21262d'} }
+      }
+    }
+  });
 }
 
 async function addBatteryPoint(){

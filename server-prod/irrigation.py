@@ -817,6 +817,48 @@ class IrrigationEngine:
         db.log_skip(zone_id, reason, est_gallons_saved,
                     json.dumps(conditions, default=str))
 
+    # ── Soil sensor calibration (server-side, no firmware reflash) ──
+    # The firmware reports a raw ADC value AND its own pct, but the pct uses a
+    # single hardcoded dry/wet pair baked into the binary. We ignore the
+    # firmware pct and recompute from raw using per-sensor endpoints stored in
+    # config['soil_calibration'] — editable live from the dashboard /calibrate
+    # page, so re-tuning never needs a USB flash.
+    SOIL_DEFAULT_DRY = 3500   # raw in open air → 0%
+    SOIL_DEFAULT_WET = 1500   # raw in water    → 100%
+    SOIL_RAW_MIN = 1          # raw <= this → invalid (cold/dead/short to GND)
+    SOIL_RAW_MAX = 4094       # raw >= this → invalid (open circuit / disconnected)
+
+    def get_soil_calibration(self, idx: int) -> dict:
+        """Return {name, dry, wet} for sensor idx, falling back to defaults."""
+        cal = (self.config.get("soil_calibration") or {})
+        entry = cal.get(idx) or cal.get(str(idx)) or {}
+        return {
+            "name": entry.get("name", f"Soil {idx}"),
+            "dry": entry.get("dry", self.SOIL_DEFAULT_DRY),
+            "wet": entry.get("wet", self.SOIL_DEFAULT_WET),
+        }
+
+    def soil_raw_to_pct(self, idx: int, raw) -> float | None:
+        """Convert a raw ADC reading to moisture % using sensor idx's calibration.
+
+        Returns None for invalid readings (raw missing, railed high = open
+        circuit, or 0 = cold/dead/short) so a dead sensor reads "no data"
+        instead of a misleading 100% (raw 0) or 0% (raw 4095). Linear map
+        between the calibrated dry (0%) and wet (100%) endpoints, clamped 0–100.
+        """
+        try:
+            raw = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if raw <= self.SOIL_RAW_MIN or raw >= self.SOIL_RAW_MAX:
+            return None
+        cal = self.get_soil_calibration(idx)
+        dry, wet = cal["dry"], cal["wet"]
+        if dry == wet:
+            return None
+        pct = (dry - raw) / (dry - wet) * 100.0
+        return round(max(0.0, min(100.0, pct)), 1)
+
     def _coerce_soil_sensor_index(self, zone: dict, soil_count: int) -> int | None:
         sensor_idx = zone.get("soil_sensor")
         if sensor_idx in (None, ""):
@@ -949,13 +991,19 @@ class IrrigationEngine:
             sensors_cfg = self.config.get("sensors", {})
             for idx, sensor in enumerate(soil_list):
                 if sensors_cfg.get(f"soil_{idx}", False):
-                    db.log_sensor(idx, sensor["pct"], sensor["raw"])
+                    # Recompute pct server-side from raw using this sensor's
+                    # calibration (ignore the firmware's hardcoded pct). None =
+                    # invalid reading (dead/cold/open) → logged as NULL pct.
+                    cal_pct = self.soil_raw_to_pct(idx, sensor.get("raw"))
+                    db.log_sensor(idx, cal_pct, sensor.get("raw"))
                     # Rain/wetting detection on the new reading. Fully isolated:
-                    # any failure must never break the watering cycle.
-                    try:
-                        self.detect_soil_rise(idx, sensor["pct"])
-                    except Exception as e:
-                        log.debug("detect_soil_rise(%d) failed: %s", idx, e)
+                    # any failure must never break the watering cycle. Skip when
+                    # the reading is invalid (no calibrated pct).
+                    if cal_pct is not None:
+                        try:
+                            self.detect_soil_rise(idx, cal_pct)
+                        except Exception as e:
+                            log.debug("detect_soil_rise(%d) failed: %s", idx, e)
 
             temp = status.get("temp", 0)
             hum = status.get("hum", 0)
@@ -986,7 +1034,12 @@ class IrrigationEngine:
             if sensor_idx is None:
                 # No soil sensor — that's fine, we use water balance model
                 continue
-            soil_readings[zone["id"]] = soil_list[sensor_idx]["pct"]
+            # Server-side calibrated pct (None if the reading is invalid).
+            cal_pct = self.soil_raw_to_pct(sensor_idx, soil_list[sensor_idx].get("raw"))
+            if cal_pct is None:
+                invalid_sensor_zones.add(zone["id"])
+                continue
+            soil_readings[zone["id"]] = cal_pct
 
         # Evaluate each zone (installed only)
         actions = []

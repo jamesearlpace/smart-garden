@@ -13,19 +13,39 @@ watering_window:
   evening_start: '20:00'
   evening_end: '22:00'
   evening_zones: []
-# Sync groups: overlapping turf zones water on the same night. When any zone in
-# a group hits its MAD trigger, the whole group waters together that cycle.
-# Zone ids are 0-based (display Zone N = id N-1). Manual/drip zones (Garden id7,
-# Grapes id8) are auto_mode=False and are intentionally NOT grouped.
 water_groups:
-  front_yard: [0, 1]          # Zone 1 Front Yard A + Zone 2 Front Yard B
-  backyard_grass: [2, 3, 4, 5, 6]  # Zones 3-7: Encl Backyard A/B, SE, S, SW
+  front_yard:
+  - 0
+  - 1
+  backyard_grass:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
 sensors:
   dht22: false
   soil_0: true
   soil_1: true
   soil_2: false
   soil_3: false
+soil_calibration:
+  0:
+    name: Garden
+    dry: 3500
+    wet: 1500
+  1:
+    name: Grapes
+    dry: 3500
+    wet: 1500
+  2:
+    name: Fruit Trees
+    dry: 3500
+    wet: 1500
+  3:
+    name: South Lawn
+    dry: 3500
+    wet: 1500
 zones:
 - id: 0
   name: Front Yard A

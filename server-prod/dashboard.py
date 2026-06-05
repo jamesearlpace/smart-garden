@@ -771,6 +771,115 @@ def create_app(config, engine, weather, billing):
                 counts[c] += 1
         return jsonify({"events": events, "counts": counts, "days": days})
 
+    # ── Soil sensor calibration (live, no firmware reflash) ──
+
+    def _calibration_snapshot():
+        """Live raw readings + each sensor's stored calibration + computed pct."""
+        status = engine.get_esp32_status(force_fresh=True) or {}
+        soil = status.get("soil", []) or []
+        sysd = status.get("system", {}) or {}
+        sensors_cfg = config.get("sensors", {})
+        out = []
+        # Cover every configured calibration slot plus any soil channel the chip
+        # reports, so newly-wired sensors show up even before config is updated.
+        n = max(len(soil), 4)
+        for idx in range(n):
+            cal = engine.get_soil_calibration(idx)
+            raw = soil[idx].get("raw") if idx < len(soil) else None
+            out.append({
+                "index": idx,
+                "name": cal["name"],
+                "dry": cal["dry"],
+                "wet": cal["wet"],
+                "raw": raw,
+                "pct": engine.soil_raw_to_pct(idx, raw),
+                "enabled": bool(sensors_cfg.get(f"soil_{idx}", False)),
+            })
+        return {
+            "sensors": out,
+            "fast_active": sysd.get("fastSampleActive", False),
+            "remain_sec": sysd.get("fastSampleRemainSec", 0),
+            "esp32_ok": bool(status),
+        }
+
+    def _save_calibration(idx, *, dry=None, wet=None, name=None):
+        """Persist one sensor's calibration into config.yaml (atomic)."""
+        cal = config.get("soil_calibration")
+        if not isinstance(cal, dict):
+            cal = {}
+            config["soil_calibration"] = cal
+        # YAML may load keys as int; normalize to int and clean any str dupes.
+        entry = cal.get(idx) or cal.get(str(idx)) or {}
+        cal.pop(str(idx), None)
+        if name is not None:
+            entry["name"] = name
+        if dry is not None:
+            entry["dry"] = int(dry)
+        if wet is not None:
+            entry["wet"] = int(wet)
+        entry.setdefault("name", f"Soil {idx}")
+        entry.setdefault("dry", engine.SOIL_DEFAULT_DRY)
+        entry.setdefault("wet", engine.SOIL_DEFAULT_WET)
+        cal[idx] = entry
+        write_config_atomic(config)
+        return entry
+
+    @app.route("/api/calibration")
+    def api_calibration():
+        """Current calibration + live raw readings for the calibrate UI."""
+        return jsonify(_calibration_snapshot())
+
+    @app.route("/api/calibration/capture", methods=["POST"])
+    def api_calibration_capture():
+        """Capture the live raw reading as this sensor's dry or wet endpoint.
+
+        Body: {"index": 0, "point": "dry"|"wet"}. Reads a fresh raw value from
+        the ESP32 and stores it as the chosen endpoint in config.yaml.
+        """
+        data = request.get_json(silent=True) or {}
+        try:
+            idx = int(data.get("index"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "index required"}), 400
+        point = data.get("point")
+        if point not in ("dry", "wet"):
+            return jsonify({"ok": False, "error": "point must be 'dry' or 'wet'"}), 400
+        status = engine.get_esp32_status(force_fresh=True) or {}
+        soil = status.get("soil", []) or []
+        if idx < 0 or idx >= len(soil):
+            return jsonify({"ok": False, "error": "sensor not reported by ESP32"}), 400
+        raw = soil[idx].get("raw")
+        try:
+            raw = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "no raw reading"}), 400
+        # Guard against capturing a dead/railed reading as an endpoint.
+        if raw <= engine.SOIL_RAW_MIN or raw >= engine.SOIL_RAW_MAX:
+            return jsonify({"ok": False, "error": f"reading {raw} looks invalid (dead/disconnected) — not captured"}), 400
+        entry = _save_calibration(idx, **{point: raw})
+        return jsonify({"ok": True, "index": idx, "point": point, "raw": raw, "calibration": entry})
+
+    @app.route("/api/calibration/set", methods=["POST"])
+    def api_calibration_set():
+        """Manually set a sensor's dry/wet/name. Body: {index, dry?, wet?, name?}."""
+        data = request.get_json(silent=True) or {}
+        try:
+            idx = int(data.get("index"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "index required"}), 400
+        dry = data.get("dry")
+        wet = data.get("wet")
+        name = data.get("name")
+        try:
+            dry = int(dry) if dry is not None else None
+            wet = int(wet) if wet is not None else None
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "dry/wet must be integers"}), 400
+        if dry is not None and wet is not None and dry == wet:
+            return jsonify({"ok": False, "error": "dry and wet cannot be equal"}), 400
+        entry = _save_calibration(idx, dry=dry, wet=wet, name=name)
+        return jsonify({"ok": True, "index": idx, "calibration": entry})
+
     @app.route("/api/run", methods=["POST"])
     def api_run_zone():
         """Run a zone for X minutes (manual override)."""
@@ -1676,6 +1785,168 @@ async function load(){
   }
 }
 load();
+</script>
+</body></html>"""
+        return Response(html, mimetype="text/html")
+
+    @app.route("/calibrate")
+    def calibrate_page():
+        """Self-contained soil-sensor calibration UI. Capture each sensor's
+        dry (in air) and wet (in water) raw endpoints with a button — stored in
+        config.yaml, applied server-side, no firmware reflash."""
+        html = """<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soil Sensor Calibration — Smart Garden</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;padding:16px;background:#0f1419;color:#e6edf3;}
+h1{margin:0 0 2px 0;font-size:19px;}
+.sub{color:#7d8590;font-size:13px;margin-bottom:14px;}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+button{background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;}
+button:hover{background:#30363d;}
+button:disabled{opacity:.5;cursor:default;}
+.btn-dry{background:#3e2e16;border-color:#5c441f;color:#f0b429;}
+.btn-wet{background:#16303e;border-color:#1f4a5c;color:#56b6e6;}
+.btn-go{background:#1a3e2a;border-color:#1f5c3a;color:#7ee787;}
+.card{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:14px;margin-bottom:12px;}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.nm{font-weight:600;font-size:15px;}
+.live{font-variant-numeric:tabular-nums;}
+.raw{font-size:26px;font-weight:700;}
+.pct{font-size:22px;font-weight:700;}
+.muted{color:#7d8590;font-size:12px;}
+.endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;}
+.endpoints b{color:#e6edf3;}
+.badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;}
+.b-ok{background:#1a3e2a;color:#7ee787;}
+.b-bad{background:#3e1a1a;color:#ff7b72;}
+.b-off{background:#21262d;color:#7d8590;}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.manual{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.manual input{width:74px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:5px;padding:6px;font-size:13px;}
+.manual input.nm{width:120px;}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1a3e2a;color:#7ee787;padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;}
+.toast.err{background:#3e1a1a;color:#ff7b72;}
+.toast.show{opacity:1;}
+a{color:#58a6ff;text-decoration:none;}
+.help{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:12px;margin-bottom:14px;font-size:13px;color:#adbac7;line-height:1.5;}
+.help b{color:#e6edf3;}
+</style></head>
+<body>
+<h1>🌱 Soil Sensor Calibration</h1>
+<div class="sub">Capture each sensor's dry & wet endpoints — saved to the server, no reflash. <a href="/moisture-sim">← Schedule</a></div>
+
+<div class="help">
+<b>How to calibrate (takes 1 minute per sensor):</b><br>
+1. Click <b>Start Live Mode</b> so raw readings refresh every few seconds.<br>
+2. Hold the sensor in <b>open air</b> (dry) → click <b>Set Dry</b> on that sensor.<br>
+3. Dip the blade in a <b>cup of water</b> to the line (wet) → click <b>Set Wet</b>.<br>
+That's it — the % now reads correctly. Recalibrate any time it drifts.
+</div>
+
+<div class="bar">
+  <button class="btn-go" id="liveBtn" onclick="startLive()">▶ Start Live Mode (fast readings)</button>
+  <span class="muted" id="liveState">Live mode off — readings update hourly</span>
+</div>
+
+<div id="cards"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+var POLL_MS = 3000;
+var pollTimer = null;
+
+function toast(msg, isErr){
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  setTimeout(function(){ t.className = 'toast' + (isErr ? ' err' : ''); }, 2500);
+}
+
+function fmt(v){ return (v===null||v===undefined) ? '—' : v; }
+
+async function load(){
+  try{
+    var r = await fetch('/api/calibration');
+    var d = await r.json();
+    render(d);
+  }catch(e){ /* keep last view */ }
+}
+
+function render(d){
+  var liveState = document.getElementById('liveState');
+  if(d.fast_active){
+    liveState.textContent = '🟢 Live mode ON — ' + d.remain_sec + 's left (readings every ~5s)';
+  } else {
+    liveState.textContent = 'Live mode off — readings update hourly';
+  }
+  var c = document.getElementById('cards');
+  var html = '';
+  d.sensors.forEach(function(s){
+    var valid = s.pct !== null && s.pct !== undefined;
+    var railed = s.raw !== null && (s.raw <= 1 || s.raw >= 4094);
+    var badge = !s.enabled ? '<span class="badge b-off">disabled</span>'
+              : valid ? '<span class="badge b-ok">reading ' + s.pct + '%</span>'
+              : '<span class="badge b-bad">' + (railed ? 'invalid (dead/disconnected)' : 'no reading') + '</span>';
+    html += '<div class="card">'
+      + '<div class="row"><span class="nm">#' + s.index + ' · ' + (s.name||'') + '</span>' + badge + '</div>'
+      + '<div class="row" style="margin-top:6px">'
+      +   '<div><div class="muted">live raw</div><div class="raw live">' + fmt(s.raw) + '</div></div>'
+      +   '<div style="text-align:right"><div class="muted">moisture</div><div class="pct">' + (valid ? s.pct + '%' : '—') + '</div></div>'
+      + '</div>'
+      + '<div class="endpoints"><span>dry (0%): <b>' + s.dry + '</b></span><span>wet (100%): <b>' + s.wet + '</b></span></div>'
+      + '<div class="actions">'
+      +   '<button class="btn-dry" onclick="capture(' + s.index + ',\\'dry\\')">☀️ Set Dry (in air)</button>'
+      +   '<button class="btn-wet" onclick="capture(' + s.index + ',\\'wet\\')">💧 Set Wet (in water)</button>'
+      + '</div>'
+      + '<div class="manual">'
+      +   '<span class="muted">manual:</span>'
+      +   '<input class="nm" id="nm' + s.index + '" placeholder="name" value="' + (s.name||'').replace(/"/g,'&quot;') + '">'
+      +   '<input id="dry' + s.index + '" type="number" placeholder="dry" value="' + s.dry + '">'
+      +   '<input id="wet' + s.index + '" type="number" placeholder="wet" value="' + s.wet + '">'
+      +   '<button onclick="saveManual(' + s.index + ')">Save</button>'
+      + '</div>'
+      + '</div>';
+  });
+  c.innerHTML = html;
+}
+
+async function startLive(){
+  var btn = document.getElementById('liveBtn');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  try{
+    var r = await fetch('/api/sensor-test', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({on:true, seconds:600, interval:5})});
+    var d = await r.json();
+    if(d.ok){ toast('Live mode on for 10 min'); POLL_MS = 2500; restartPoll(); }
+    else { toast(d.message || 'Failed', true); }
+  }catch(e){ toast('Failed to start live mode', true); }
+  btn.disabled = false; btn.textContent = '▶ Start Live Mode (fast readings)';
+}
+
+async function capture(idx, point){
+  try{
+    var r = await fetch('/api/calibration/capture', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({index:idx, point:point})});
+    var d = await r.json();
+    if(d.ok){ toast('Saved ' + point + ' = ' + d.raw + ' (sensor #' + idx + ')'); load(); }
+    else { toast(d.error || 'Capture failed', true); }
+  }catch(e){ toast('Capture failed', true); }
+}
+
+async function saveManual(idx){
+  var name = document.getElementById('nm'+idx).value;
+  var dry = document.getElementById('dry'+idx).value;
+  var wet = document.getElementById('wet'+idx).value;
+  try{
+    var r = await fetch('/api/calibration/set', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({index:idx, name:name, dry:dry, wet:wet})});
+    var d = await r.json();
+    if(d.ok){ toast('Saved sensor #' + idx); load(); }
+    else { toast(d.error || 'Save failed', true); }
+  }catch(e){ toast('Save failed', true); }
+}
+
+function restartPoll(){ if(pollTimer) clearInterval(pollTimer); pollTimer = setInterval(load, POLL_MS); }
+load();
+restartPoll();
 </script>
 </body></html>"""
         return Response(html, mimetype="text/html")

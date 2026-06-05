@@ -1583,6 +1583,22 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Next Steps / follow-ups (NOT done):** (1) 99% is inflated by ~89 trivially-correct `no_event` days — real signal is in the few water/skip days, watch it accumulate; (2) cycle-soak still configured-but-unimplemented (engine runs 24 min straight) — highest-impact future fix, do attended; (3) rain-detection still observe-only, not fed into watering; (4) journey doc 131KB — archive-split overdue.
 
+---
+
+## 2026-06-05 — Sync-groups' first live run + immediate balance credit
+
+**Context:** First real overnight run with sync-groups live. James checked in the morning, saw all 7 turf zones had watered correctly, then noticed the Schedule page predicted "all zones rerun tomorrow" and asked why — then "why are we waiting till 11pm."
+
+**First-run result (worked perfectly):** All 7 turf zones watered in series 4:00–5:45 AM, ~15 min / ~60 gal each (ET-scaled down from 24 min because ET₀ was low at 2.26mm — the brain working). Logs confirmed group sync: Front Yard B (10.2mm ≤ MAD) triggered, Front Yard A (20.2mm, still wet) rode along via "Group sync"; backyard A (10.8mm) triggered, B/SE/S/SW rode along. Garden/Grapes `skip - Manual mode` every cycle. No stuck valves, no errors. All logged `trigger_reason=soil_dry` — first clean engine-watering data for the Forecast-vs-Actual audit, which correctly predicted it.
+
+**Root cause of the "rerun tomorrow" display:** The soil balance is a daily checkbook (one `soil_balance` row per zone per day) closed once a day by `update_daily_balances()` at 11 PM. The irrigation credit was batched to 11 PM too — so after the 4 AM run, balances still read the pre-watering (below-MAD) values all day, and the predictor concluded the groups would re-trigger. A stale-data display lie, NOT a real re-trigger (same-day guard + 11 PM update prevented any actual double-watering).
+
+**Fix (commit 61ef458):** New `IrrigationEngine.update_zone_balance(zone_id)` recomputes one zone's balance with the same checkbook math (idempotent, bug-#7 carry-forward). `stop_zone_watering()` calls it right after `db.end_watering`, try/except-wrapped so a balance error can't break valve close. The 11 PM job stays as the end-of-day finalizer. Fixes the data at the SOURCE → predictor, banner, snapshot, moisture badge all reflect a completed watering in real time, no per-predictor patching. Manual backfill via `POST /api/balance/update`.
+
+**Verified:** backfilled this morning's run — Front Yard B 10.2→18.1mm (above MAD), all 7 turf zones above MAD. Schedule All-Zones now shows every turf zone status OK / next "> 7 days", 7-night "Zones firing" footer all dashes. Tomorrow the engine will correctly do nothing; next deep group soak in ~a week.
+
+**Next Steps / follow-ups (NOT done):** (1) early-recompute debits the full day's ET immediately (slightly pessimistic in the morning, consistent with the 11 PM write — acceptable); (2) cycle-soak still unimplemented; (3) rain-detection still observe-only; (4) journey doc 131KB — archive-split overdue.
+
 
 
 

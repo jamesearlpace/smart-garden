@@ -514,6 +514,14 @@ h2 { margin: 0; font-size: 1.05rem; }
 var ZONES = {{ zones | tojson }};
 // Sync groups (overlapping turf zones that water together). {name: [zone_ids]}.
 var WATER_GROUPS = {{ water_groups | tojson }};
+// Return the array of zone_ids in zid's sync group (incl. zid), or null if ungrouped.
+function groupMembersOf(zid) {
+  for (var g in WATER_GROUPS) {
+    var ids = WATER_GROUPS[g] || [];
+    if (ids.indexOf(zid) !== -1) return ids;
+  }
+  return null;
+}
 
 // Restore filters from URL hash (e.g. #zone=6&days=30&year=2026)
 function parseHash() {
@@ -2562,12 +2570,21 @@ function refresh() {
     loadMsg.style.display = 'inline';
     loadMsg.textContent = 'Loading 2026 live data…';
 
-    Promise.all([
-      fetch2026Weather(),
-      fetchLiveData(currentZoneId)
-    ]).then(function(results) {
+    // If this zone is in a sync group, also fetch its siblings so the banner can
+    // simulate the whole group (it may ride along with a drier sibling). Build a
+    // fetch list: [weather, currentZone, ...otherGroupMembers].
+    var _grpMembers = groupMembersOf(currentZoneId);
+    var _siblingIds = _grpMembers ? _grpMembers.filter(function(id) { return id !== currentZoneId; }) : [];
+    var _fetchList = [fetch2026Weather(), fetchLiveData(currentZoneId)];
+    _siblingIds.forEach(function(id) { _fetchList.push(fetchLiveData(id)); });
+
+    Promise.all(_fetchList).then(function(results) {
       loadMsg.style.display = 'none';
       var liveData = results[1];
+      // Map sibling live data by zone id (for group-aware banner prediction).
+      var _grpData = {};
+      _grpData[currentZoneId] = liveData;
+      _siblingIds.forEach(function(id, idx) { _grpData[id] = results[2 + idx]; });
       // Populate tuning panel with zone config from API
       if (liveData.zone) {
         tuneData = liveData.zone;
@@ -2600,57 +2617,47 @@ function refresh() {
               ? 'Engine will not auto-water this zone. Toggle to Automatic to follow the chart.'
               : 'Zone is not installed — no auto-watering.';
           } else {
-          var _curM = 50, _madM = 50;
-          for (var _i = data.length - 1; _i >= 0; _i--) {
-            if (!data[_i].isForecast) { _curM = data[_i].moisture; _madM = data[_i].madNow; break; }
-          }
-          if (_curM <= _madM) {
-            var _d = new Date();
-            if (_d.getHours() >= 7) _d.setDate(_d.getDate() + 1);
-            _d.setHours(4, 0, 0, 0);
-            var _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            var _mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-            var _ha = (_d.getTime() - Date.now()) / 3600000;
-            var _ts = _ha < 1 ? 'now' : _ha < 24 ? _ha.toFixed(0) + ' hours' : (_ha / 24).toFixed(1) + ' days';
-            _banner.style.display = 'flex';
-            document.getElementById('nw-value').textContent = _dn[_d.getDay()] + ' ' + _mn[_d.getMonth()] + ' ' + _d.getDate() + ' ~4 AM';
-            document.getElementById('nw-value').style.color = '#f59e0b';
-            document.getElementById('nw-detail').textContent = '~' + _ts + ' · moisture ' + Math.round(_curM) + '% below MAD ' + Math.round(_madM) + '% — needs water';
-          } else {
-            // Above MAD — estimate when it will cross
+            // Auto zone — predict next watering. If this zone is in a sync group,
+            // simulate the WHOLE group so the banner matches the All-Zones view
+            // (the zone may ride along with a drier sibling and water sooner than
+            // its own soil alone would require). Otherwise predict this zone solo.
             var _fc = (liveData && liveData.forecast_7day) || [];
-            var _brain = getZoneBrainConfig(currentZoneId);
-            var _m = _curM, _hit = null, _rd = _brain.rootDepthIn;
-            var _MM = 25.4;
-            for (var _fi = 0; _fi < _fc.length; _fi++) {
-              // Open-Meteo returns mm — convert to inches before dividing by root depth (in).
-              // Per-zone/season Kc (mirrors engine), per night's real date — was hardcoded 0.90.
-              var _kc = getSeasonalKc(_brain, new Date(Date.now() + (_fi + 1) * 86400000).getMonth() + 1);
-              _m = _m - (((_fc[_fi].et0 || 0) / _MM) * _kc / _rd) * 100 + (((_fc[_fi].rain || 0) / _MM) * 0.65 / _rd) * 100;
-              if (_m <= _madM) { _hit = _fi; break; }
+            var _pred;
+            if (_grpMembers && _grpMembers.length > 1) {
+              var _gs = predictGroupSchedule(_grpMembers, _grpData, _fc);
+              _pred = _gs[currentZoneId];
+            } else {
+              _pred = predictZoneSchedule(currentZoneId, liveData, _fc);
             }
-            if (_hit !== null) {
+            var _firstFire = -1;
+            if (_pred) { for (var _ni = 0; _ni < _pred.nights.length; _ni++) { if (_pred.nights[_ni].willWater) { _firstFire = _ni; break; } } }
+            var _madM = _pred ? _pred.madPct : 50;
+            var _curM = _pred ? _pred.curM : 50;
+            _banner.style.display = 'flex';
+            if (_firstFire >= 0) {
+              // Night index 0 = next 4 AM (tomorrow if past 7 AM) — mirrors fmtNight.
               var _d2 = new Date();
+              if (_d2.getHours() >= 7) _d2.setDate(_d2.getDate() + 1);
               _d2.setHours(4, 0, 0, 0);
-              _d2.setDate(_d2.getDate() + _hit);
-              // Roll to next day's 4 AM if target already passed (e.g. it's 11 PM and _hit=0)
-              if (_d2.getTime() < Date.now()) _d2.setDate(_d2.getDate() + 1);
+              _d2.setDate(_d2.getDate() + _firstFire);
+              var _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+              var _mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
               var _ha2 = (_d2.getTime() - Date.now()) / 3600000;
               var _ts2 = _ha2 < 1 ? 'now' : _ha2 < 24 ? _ha2.toFixed(0) + ' hours' : (_ha2 / 24).toFixed(1) + ' days';
-              _banner.style.display = 'flex';
-              document.getElementById('nw-value').textContent = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][_d2.getDay()] + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][_d2.getMonth()] + ' ' + _d2.getDate() + ' ~4 AM';
+              document.getElementById('nw-value').textContent = _dn[_d2.getDay()] + ' ' + _mn[_d2.getMonth()] + ' ' + _d2.getDate() + ' ~4 AM';
               document.getElementById('nw-value').style.color = _ha2 < 24 ? '#f59e0b' : '#22c55e';
-              document.getElementById('nw-detail').textContent = '~' + _ts2 + ' · ' + Math.round(_curM) + '% → MAD ' + Math.round(_madM) + '%';
+              var _detail = '~' + _ts2 + ' · moisture ' + Math.round(_curM) + '% / MAD ' + Math.round(_madM) + '%';
+              // Flag when this earlier date is driven by the group, not this zone's own soil.
+              if (_grpMembers && _grpMembers.length > 1 && _curM > _madM) {
+                _detail += ' · 🔗 synced with its zone group';
+              }
+              document.getElementById('nw-detail').textContent = _detail;
             } else {
-              // Moisture won't drop below MAD within the 7-day forecast window.
-              // Show "> 7 days" instead of hiding the banner — every auto zone
-              // should report a next-watering, even if it's beyond the forecast.
-              _banner.style.display = 'flex';
+              // Won't drop below MAD within the 7-day forecast window.
               document.getElementById('nw-value').textContent = '> 7 days';
               document.getElementById('nw-value').style.color = '#22c55e';
               document.getElementById('nw-detail').textContent = 'Soil stays above MAD ' + Math.round(_madM) + '% for the next 7 days — no watering expected soon.';
             }
-          }
           }
         } catch(e) { console.error('Banner error:', e); }
       }

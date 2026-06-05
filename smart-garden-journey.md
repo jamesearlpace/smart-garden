@@ -1759,6 +1759,18 @@ All times PDT. Each item deployed to the Acer (`scp` + `systemctl restart`) and 
 
 **Battery calibration config left clean (0 points)** so James's first real Wanderer reading starts the fit fresh.
 
+## 2026-06-05 ~14:40 — Battery raw was stale (frozen cache) + fresh-sample fix
+
+**James noticed** his 3 calibration captures all read raw 15.232V despite being seconds apart — suspected the ESP32 raw "isn't exactly what it really is, just stuck on the old number." **He was right.**
+
+**Root cause:** the ESP32 firmware samples the battery ADC only inside `readSensors()`, which runs on the sensor-read interval — **hourly on the currently-flashed build** (`SENSOR_READ_INTERVAL_MS` is 300000=5min in `src/config.h` now, but that 5-min build is committed-not-flashed; the device still runs the old hourly firmware). Between samples `cachedBatteryV` is frozen, so `/api/status` (and the calibration capture) returned the same stale value. Confirmed by polling the ESP32 directly: 15.23201 five times in a row, unchanging.
+
+**Proof it's a cache, not a stuck sensor:** kicked fast-sample mode (`POST /api/fastsample`, server-side `engine.set_fast_sample`) and batteryV immediately jittered 14.79→14.78→14.50→14.48→14.54→14.83V — and dropped from the stale 15.23 to the true ~14.5V. A real ADC read always jitters a few mV.
+
+**Fix (commit f4ba931):** `/api/battery-calibration/add` now calls new `_battery_fresh_reading()` — kicks a 60s/3s fast-sample window, polls `force_fresh` until the reported batteryV actually changes from the stale baseline (or 12s timeout), then captures that fresh value. New `POST /api/battery-calibration/live-refresh` + a "🔄 Refresh reading now" button let the user force a fresh read before entering the Wanderer voltage. "Add reading" shows a "⏳ Capturing fresh…" state (now takes a few seconds) and flags `(cached…)` if the ESP32 didn't re-sample in time. Verified: live-refresh returned `fresh:true`, 14.57→14.32V.
+
+**Takeaway for any reading-freshness work:** soil "Set Dry/Wet" capture has the same staleness (relies on the user hitting Start Live Mode first). The real durable fix is the pending 5-min firmware flash; until then, force fast-sample before any capture that needs a current value.
+
 
 
 

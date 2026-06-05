@@ -1191,6 +1191,16 @@ a{color:var(--blue);text-decoration:none}
     </div>
     <div class="card" style="padding:20px;margin-bottom:24px"><div class="chart-wrap"><canvas id="chart-soil"></canvas></div></div>
 
+    <!-- Rain & Wetting Events (soil-rise detection, observe-only) -->
+    <div class="section-header">
+      <h2>🌧️ Rain &amp; Wetting Events</h2>
+      <span style="font-size:.72rem;color:var(--text3)">soil-rise detection · observe-only (not yet affecting watering)</span>
+    </div>
+    <div class="card" id="rain-events-card" style="padding:16px;margin-bottom:24px">
+      <div id="rain-events-summary" style="font-size:.82rem;color:var(--text2);margin-bottom:10px">Loading…</div>
+      <div id="rain-events-list"></div>
+    </div>
+
     <!-- Decision Breakdown + Skip Reasons -->
     <div class="two-col">
       <div>
@@ -4070,8 +4080,46 @@ showPanel = function(id) {
   }
   if (id === 'history') {
     loadSensorHistory(window._shHours || 24);
+    loadRainEvents();
   }
 };
+
+// Rain & wetting events — soil-rise detection (observe-only).
+function loadRainEvents() {
+  fetch('/api/rain-events?days=14').then(function(r){ return r.json(); }).then(function(d){
+    var c = d.counts || {};
+    var sum = el('rain-events-summary');
+    sum.innerHTML = 'Last ' + (d.days||14) + ' days: ' +
+      '<b style="color:#3b82f6">' + (c.rain||0) + ' rain</b> · ' +
+      '<b style="color:var(--text2)">' + (c.irrigation||0) + ' irrigation</b> · ' +
+      '<b style="color:#f59e0b">' + (c.unexplained||0) + ' unexplained</b>';
+    var list = el('rain-events-list');
+    var evs = d.events || [];
+    if (evs.length === 0) {
+      list.innerHTML = '<div style="font-size:.78rem;color:var(--text3)">No wetting events detected yet. ' +
+        'Events appear when a soil sensor reading rises sharply (rain, irrigation, or hand-watering).</div>';
+      return;
+    }
+    var icon = {rain:'🌧️', irrigation:'💧', unexplained:'❓'};
+    var color = {rain:'#3b82f6', irrigation:'var(--text2)', unexplained:'#f59e0b'};
+    var html = '';
+    evs.slice(0, 30).forEach(function(e){
+      var t = e.ts ? new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+      var cl = e.classification || 'unexplained';
+      html += '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light)">' +
+        '<span style="font-size:1.1rem">' + (icon[cl]||'❓') + '</span>' +
+        '<div style="flex:1">' +
+          '<div style="font-size:.8rem;color:' + (color[cl]||'var(--text2)') + ';font-weight:600;text-transform:capitalize">' + cl +
+            ' <span style="color:var(--text3);font-weight:400">· sensor ' + e.sensor_idx + ' · +' + Math.round(e.rise_pct||0) + '%</span></div>' +
+          '<div style="font-size:.74rem;color:var(--text3)">' + esc(e.detail||'') + '</div>' +
+        '</div>' +
+        '<span style="font-size:.7rem;color:var(--text3);white-space:nowrap">' + t + '</span></div>';
+    });
+    list.innerHTML = html;
+  }).catch(function(){
+    el('rain-events-summary').textContent = 'Could not load wetting events.';
+  });
+}
 
 // Sensor History charts on History panel
 function loadSensorHistory(hours) {

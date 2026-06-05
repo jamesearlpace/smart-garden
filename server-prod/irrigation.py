@@ -804,6 +804,59 @@ class IrrigationEngine:
             return None
         return sensor_idx
 
+    # ── Rain / wetting detection (observe-only) ──
+    # When a soil sensor's reading rises significantly, classify the cause:
+    #   - irrigation: a zone watered recently → expected, not rain
+    #   - rain:       wet sky (precip / high humidity / low solar) + no irrigation
+    #   - unexplained: clear sky + no irrigation → possibly hand-watered/tampered
+    # Soil-type-agnostic: uses the RELATIVE rise above the sensor's own recent
+    # baseline, so mixed soils (garden loam, grape bed, etc.) all work without
+    # per-sensor calibration. Recorded + shown on the dashboard. Does NOT yet
+    # feed watering decisions — that's a reviewed follow-up once it proves out.
+    RISE_THRESHOLD_PCT = 10.0   # ≈200 raw ADC counts — well above sensor noise
+
+    def detect_soil_rise(self, sensor_idx: int, curr_pct: float):
+        if curr_pct is None:
+            return
+        prior = db.get_prior_soil_reading(sensor_idx, within_hours=6)
+        if not prior or prior.get("soil_pct") is None:
+            return  # no baseline yet
+        rise = curr_pct - prior["soil_pct"]
+        if rise < self.RISE_THRESHOLD_PCT:
+            return  # no significant wetting
+
+        # 1. Irrigation correlation (conservative: any zone in the last 90 min).
+        if db.any_watering_since(minutes=90):
+            classification = "irrigation"
+            sky = "n/a"
+            detail = (f"Soil rose +{rise:.0f}% — a zone watered in the last 90 min, "
+                      f"so this is irrigation, not rain.")
+        else:
+            # 2. Weather corroboration. solar_rad is a good cloud proxy
+            #    (low solar at midday = overcast).
+            wx = self.weather.get_current(allow_fetch=False) or {}
+            precip = wx.get("precip_mm") or 0
+            prob = wx.get("precip_prob") or 0
+            hum = wx.get("humidity") or 0
+            solar = wx.get("solar_rad")
+            wet_sky = (precip > 0 or prob >= 40 or hum >= 85
+                       or (solar is not None and solar < 100))
+            sky = (f"precip {precip:.1f}mm, prob {prob:.0f}%, hum {hum:.0f}%, "
+                   f"solar {solar if solar is not None else '?'}")
+            if wet_sky:
+                classification = "rain"
+                detail = (f"Soil rose +{rise:.0f}% with a wet sky and no irrigation "
+                          f"→ likely rain the weather API may have under-reported.")
+            else:
+                classification = "unexplained"
+                detail = (f"Soil rose +{rise:.0f}% with a clear sky and no irrigation "
+                          f"→ unexplained (possibly hand-watered).")
+
+        db.log_rain_event(sensor_idx, prior["soil_pct"], curr_pct, rise,
+                          classification, sky, detail)
+        log.info("Wetting event: sensor %d %+.0f%% → %s",
+                 sensor_idx, rise, classification)
+
     # ΓöÇΓöÇ Main loop (called by scheduler) ΓöÇΓöÇ
 
     def run_cycle(self):
@@ -842,6 +895,12 @@ class IrrigationEngine:
             for idx, sensor in enumerate(soil_list):
                 if sensors_cfg.get(f"soil_{idx}", False):
                     db.log_sensor(idx, sensor["pct"], sensor["raw"])
+                    # Rain/wetting detection on the new reading. Fully isolated:
+                    # any failure must never break the watering cycle.
+                    try:
+                        self.detect_soil_rise(idx, sensor["pct"])
+                    except Exception as e:
+                        log.debug("detect_soil_rise(%d) failed: %s", idx, e)
 
             temp = status.get("temp", 0)
             hum = status.get("hum", 0)

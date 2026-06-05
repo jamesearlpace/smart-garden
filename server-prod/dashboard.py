@@ -756,6 +756,19 @@ def create_app(config, engine, weather, billing):
             "interval_sec": sysd.get("sampleIntervalSec"),
         })
 
+    @app.route("/api/rain-events")
+    def api_rain_events():
+        """Recent soil-rise / wetting events classified as rain / irrigation /
+        unexplained. Observe-only — does not affect watering decisions yet."""
+        days = query_int("days", 7, min_value=1, max_value=90)
+        events = db.get_rain_events(days)
+        counts = {"rain": 0, "irrigation": 0, "unexplained": 0}
+        for e in events:
+            c = e.get("classification")
+            if c in counts:
+                counts[c] += 1
+        return jsonify({"events": events, "counts": counts, "days": days})
+
     @app.route("/api/run", methods=["POST"])
     def api_run_zone():
         """Run a zone for X minutes (manual override)."""

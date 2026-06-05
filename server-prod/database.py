@@ -188,6 +188,23 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_forecast_date ON forecast_snapshot(forecast_date);
         CREATE INDEX IF NOT EXISTS idx_forecast_zone ON forecast_snapshot(zone_id, forecast_date);
+
+        -- Soil-moisture "wetting events": when a sensor's reading rises
+        -- significantly, we classify the cause (rain / irrigation / unexplained).
+        -- Observe-only for now — recorded + shown on the dashboard, NOT yet fed
+        -- into watering decisions. See RainDetector in irrigation.py.
+        CREATE TABLE IF NOT EXISTS rain_event (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
+            sensor_idx     INTEGER NOT NULL,   -- soil channel 0-3 (GPIO 32-35)
+            prev_pct       REAL,
+            curr_pct       REAL,
+            rise_pct       REAL,
+            classification TEXT,               -- 'rain' | 'irrigation' | 'unexplained'
+            sky            TEXT,               -- weather snapshot summary
+            detail         TEXT                -- human-readable explanation
+        );
+        CREATE INDEX IF NOT EXISTS idx_rain_event_ts ON rain_event(ts);
     """)
     # ── Column migrations (ALTER TABLE is no-op if column exists) ──
     for col, coltype in [("wifi_reconnects", "INTEGER"), ("crash_count", "INTEGER"),
@@ -198,6 +215,63 @@ def init_db():
             pass  # column already exists
     conn.commit()
     conn.close()
+
+
+# ── Rain-event helpers (soil-rise detection) ──
+
+def get_prior_soil_reading(sensor_idx: int, within_hours: int = 6) -> dict | None:
+    """Most recent soil reading for a sensor BEFORE the newest one, within a
+    lookback window. Used as the baseline to detect a rise. Returns the 2nd-most
+    -recent row (the newest is the one we're evaluating)."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT soil_pct, soil_raw, ts FROM sensor_log "
+        "WHERE zone_id = ? AND ts >= datetime('now','localtime',?) "
+        "ORDER BY ts DESC LIMIT 2",
+        (sensor_idx, f"-{within_hours} hours"),
+    ).fetchall()
+    conn.close()
+    # Index 0 = newest (the reading just logged), index 1 = the prior baseline.
+    if len(rows) >= 2:
+        return dict(rows[1])
+    return None
+
+
+def any_watering_since(minutes: int = 90) -> bool:
+    """True if ANY zone has a watering event that started within the window.
+    Conservative irrigation-correlation: if anything watered recently, a soil
+    rise is attributed to irrigation, not rain (fail-safe: never over-credit rain)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM watering_event "
+        "WHERE start_ts >= datetime('now','localtime',?) LIMIT 1",
+        (f"-{minutes} minutes",),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def log_rain_event(sensor_idx: int, prev_pct: float, curr_pct: float,
+                   rise_pct: float, classification: str, sky: str, detail: str):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO rain_event (sensor_idx, prev_pct, curr_pct, rise_pct, "
+        "classification, sky, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (sensor_idx, prev_pct, curr_pct, rise_pct, classification, sky, detail),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_rain_events(days: int = 7) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM rain_event WHERE ts >= datetime('now','localtime',?) "
+        "ORDER BY ts DESC LIMIT 200",
+        (f"-{days} days",),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ── Insert helpers ──

@@ -1567,6 +1567,22 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Next Steps / follow-ups (NOT done):** (1) single-zone banner still shows each zone's own date, not the group's (All-Zones table is the synced view) — could add a "🔗 runs with Zone X" note; (2) 7-night grid per-night runtimes not group-adjusted; (3) cycle-soak still configured-but-unimplemented (engine runs 24 min straight) — highest-impact future fix, do attended; (4) **this journey doc is 131KB — needs archive-split per the 10KB guideline.**
 
+---
+
+## 2026-06-04 — Group-sync predictor parity (Schedule page) + Forecast-vs-Actual audit cleanup
+
+**Context:** After shipping sync-groups, James found the Schedule page still showed grouped zones on different dates, then that the single-zone banner disagreed with the All-Zones view, then asked whether the Forecast tab's telemetry actually worked. Three follow-on fixes.
+
+**Changes:**
+- **Predictor parity (`moisture_sim.html`):** the first sync-group pass only synced the "Next water" column via min-of-independent-predictions; the 7-night grid still predicted each zone solo. Replaced with `predictGroupSchedule()` — a true coordinated sim that steps all group members through the forecast together and waters/refills them as a unit. Both the status table and the grid now use it (commit d60cbb7). Then made the single-zone banner group-aware too: it fetches sibling data and runs the same group sim, so e.g. Front Yard A (88%) shows "Friday Jun 5 · 🔗 synced with its zone group" instead of "> 7 days" (commit 4dd8430).
+- **Forecast-vs-Actual audit cleanup (commit 2a1a59b):** the self-audit (daily 3:55 AM `save_daily_forecast_snapshot` → `forecast_snapshot` table → joined vs actual events) was showing a misleading 48.9%. Three pollutants fixed: (1) snapshot made group-aware (`_compute_group_water_set`) so grouped wet zones predict water-today instead of mispredicting; (2) manual "Run Now" runs (`trigger_reason LIKE 'manual%'` — 237 of 241 events!) excluded from "engine watered" so hand-tests don't count as forecast errors; (3) water+skip same-day collision resolved (watering takes precedence → no more meaningless "other" bucket), plus a new `early_water` outcome for "watered sooner than predicted = model ran wet".
+
+**Decisions:** The snapshot writer is the THIRD predictor (engine, moisture_sim.html JS, snapshot) — all three must mirror each other. The audit now measures the ENGINE's brain only (manual excluded), which is the calibration telemetry James wanted.
+
+**Current State:** All deployed + verified. Schedule page: all 7 turf zones show Fri 6/5, grid synced, banner consistent. Audit: 48.9%→99.0% on live 30d data, total_waterings 51→4, false_skips 2→0. 6/5 group-aware snapshot verified (Front Yard A bal 20.2 predicts water via sibling FYB at 10.2). Commits d60cbb7, 4dd8430, 2a1a59b — pushed, mirrored.
+
+**Next Steps / follow-ups (NOT done):** (1) 99% is inflated by ~89 trivially-correct `no_event` days — real signal is in the few water/skip days, watch it accumulate; (2) cycle-soak still configured-but-unimplemented (engine runs 24 min straight) — highest-impact future fix, do attended; (3) rain-detection still observe-only, not fed into watering; (4) journey doc 131KB — archive-split overdue.
+
 
 
 

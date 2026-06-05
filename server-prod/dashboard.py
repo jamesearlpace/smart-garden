@@ -2411,6 +2411,14 @@ async function saveManual(idx){
 /* ── Battery voltage calibration ── */
 function vfmt(v){ return (v===null||v===undefined) ? '—' : (Number(v).toFixed(2) + 'V'); }
 
+var batEditMode = false;     // delete controls hidden until the user taps Edit
+var _lastBatSnapshot = null; // remembered so the Edit toggle can re-render
+
+function toggleBatEdit(){
+  batEditMode = !batEditMode;
+  if(_lastBatSnapshot) renderBattery(_lastBatSnapshot);
+}
+
 async function loadBattery(){
   try{
     var r = await fetch('/api/battery-calibration');
@@ -2420,6 +2428,7 @@ async function loadBattery(){
 }
 
 function renderBattery(d){
+  _lastBatSnapshot = d;
   var el = document.getElementById('battery-cal');
   if(!el) return;
   var live = d.live || {};
@@ -2458,16 +2467,32 @@ function renderBattery(d){
       + '<td>' + vfmt(p.raw_v) + '</td>'
       + '<td>' + vfmt(p.predicted_v) + '</td>'
       + '<td style="' + errCls + '">' + sign + Number(p.error_v).toFixed(2) + '</td>'
-      + '<td><button onclick="deleteBatteryPoint(\\'' + (p.ts||'') + '\\')" style="padding:3px 8px;font-size:12px">✕</button></td>'
+      + (batEditMode
+          ? '<td><button onclick="deleteBatteryPoint(\\'' + (p.ts||'') + '\\')" title="Delete this reading" style="padding:3px 9px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">✕</button></td>'
+          : '')
       + '</tr>';
   }).join('');
-  var tableHtml = (d.points && d.points.length)
-    ? '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
+  var nPts = (d.points || []).length;
+  var tableHtml;
+  if (nPts) {
+    // Delete controls are gated behind an Edit toggle so precious readings
+    // aren't one stray tap from deletion.
+    var editBtn = '<button onclick="toggleBatEdit()" style="padding:5px 12px;font-size:12px;'
+        + (batEditMode ? 'background:#dcfce7;border-color:#16a34a;color:#166534' : '')
+        + '">' + (batEditMode ? '✓ Done editing' : '✏️ Edit readings') + '</button>';
+    var clearBtn = batEditMode
+      ? ' <button onclick="resetBattery()" style="padding:5px 12px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">🗑 Clear all points</button>'
+      : '';
+    tableHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
       + '<thead><tr style="color:#9ba8b5;text-align:left;font-size:11px;text-transform:uppercase">'
-      + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th><th></th></tr></thead>'
+      + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th>'
+      + (batEditMode ? '<th></th>' : '') + '</tr></thead>'
       + '<tbody>' + rows + '</tbody></table>'
-      + '<div class="actions"><button onclick="resetBattery()">🗑 Clear all points (revert to default)</button></div>'
-    : '<div class="muted" style="margin-top:10px">No reference points yet — add your first reading above.</div>';
+      + '<div class="actions" style="margin-top:10px">' + editBtn + clearBtn + '</div>';
+  } else {
+    tableHtml = '<div class="muted" style="margin-top:10px">No reference points yet — add your first reading above.</div>';
+    batEditMode = false;  // nothing to edit
+  }
 
   el.innerHTML = liveHtml + modelHtml + inputHtml + tableHtml;
   renderBatteryChart(d);

@@ -1695,6 +1695,21 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Dashboard cleanup wrapped.** History panel no longer double-shows metrics, console is clean, ~120 lines of dead/duplicate code removed across the session.
 
+## 2026-06-05 — UI refinement pass (visual QA via Playwright)
+
+**Context:** Iterating on the dashboard UI (sprinklers.savagepace.com) for clarity. Logged into the live Acer server (port 5125) by minting an HMAC session cookie (SESSION_SECRET from the systemd unit) and driving it with Playwright; verified each fix programmatically + screenshot.
+
+**Fixes shipped (all in `templates/index.html`, deployed + verified):**
+- **Zone cards no longer self-contradict.** Every zone has `soil_pct: null` (no capacitive sensor wired), so cards showed a giant orange "0% Soil Moisture / DRY" next to a full green "Water Balance 100%". Now: badge falls back to the ET water-balance brain when there's no soil sensor (DRY only if `balance_mm <= mad_mm`, else OK), and the empty "0%" soil bar is hidden entirely — Water Balance leads the card. When a real sensor exists, old soil-based behavior is preserved.
+- **Battery chart axis.** Was auto-scaling to 12–18V (a glitchy ~18V ADC sample stretched it, squashing real data). Now filters physically-impossible readings (<8V or >16V) and pins y to suggestedMin 11.5 / suggestedMax 15. Verified live: axis 11.5–15.5, data 12.5–15.1.
+- **Duplicate "🔧 Configuration" heading** in the composite Settings panel removed (the moved `p-config` content already brings its own header w/ Save/Reload).
+- **Corrupted `�` glyphs** in Settings section headers fixed → 🔌 Wiring Diagram, 📖 About.
+- Fixed latent `var(--orange)` typo (undefined var) → `var(--amber)` in the water-balance bar color.
+
+**Note on visual QA:** the VS Code embedded browser pane renders ~580px (mobile breakpoint) regardless of `setViewportSize`; reliable desktop verification is via `Chart.getChart()` scale reads + DOM queries, not just screenshots.
+
+**Remaining punch-list (not yet done — needs direction):** nav redundancy (Zones page leads with the aerial map AND there's a separate "Zone Map" nav item); zone meta row still shows soil "Dry 45% / Target 75%" thresholds that are meaningless without a sensor; Junction Box climate chart legend clips on the right on narrow widths.
+
 
 
 

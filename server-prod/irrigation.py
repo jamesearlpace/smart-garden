@@ -460,11 +460,16 @@ class IrrigationEngine:
         return False
 
     def evaluate_zone(self, zone_id: int, soil_pct: float,
-                      esp32_status: dict) -> dict:
+                      esp32_status: dict, group_water: set | None = None) -> dict:
         """Evaluate whether a zone should water, skip, or wait.
 
         Uses ET₀-based soil water balance model (not soil sensors).
         Waters when balance drops below MAD (Management Allowable Depletion).
+
+        group_water: optional set of zone_ids that should water this cycle due to
+        sync-group coordination (when any zone in a group hits MAD, the whole
+        group waters the same night). If this zone is in the set, the per-zone
+        water-balance skip is bypassed so it rides along with its group.
 
         Returns dict with:
             action: 'water', 'skip', 'wait', 'close'
@@ -534,9 +539,14 @@ class IrrigationEngine:
         conditions["mad_mm"] = mad_mm
 
         if balance_mm is not None and balance_mm > mad_mm:
-            return self._decision("skip", zone_id,
-                                  f"Water balance {balance_mm:.1f}mm > MAD {mad_mm:.1f}mm — soil has enough water",
-                                  conditions)
+            # Group sync: if a sibling zone in this zone's group triggered the
+            # group, ride along and water tonight even though this zone alone
+            # wouldn't yet — keeps overlapping turf zones on one schedule.
+            if not (group_water and zone_id in group_water):
+                return self._decision("skip", zone_id,
+                                      f"Water balance {balance_mm:.1f}mm > MAD {mad_mm:.1f}mm — soil has enough water",
+                                      conditions)
+            conditions["group_ride_along"] = True
 
         # 2. Same-day watering guard — skip only if today's accumulated runtime is
         #    already a substantial fraction of the daily cap. Short manual test runs
@@ -605,7 +615,12 @@ class IrrigationEngine:
                                   "Outside watering window ΓÇö will water at next window",
                                   conditions)
 
-        # ΓöÇΓöÇ WATER ΓöÇΓöÇ
+        # ── WATER ──
+        if conditions.get("group_ride_along"):
+            return self._decision("water", zone_id,
+                                  f"Group sync — watering with its zone group "
+                                  f"(balance {balance_mm:.1f}mm, MAD {mad_mm:.1f}mm)",
+                                  conditions)
         return self._decision("water", zone_id,
                               f"Water balance {balance_mm:.1f}mm <= MAD {mad_mm:.1f}mm ΓÇö watering",
                               conditions)
@@ -804,6 +819,36 @@ class IrrigationEngine:
             return None
         return sensor_idx
 
+    def _compute_group_water_set(self, installed_zones: list) -> set:
+        """Sync-group coordination: overlapping turf zones water on the same
+        night. config['water_groups'] is {name: [zone_ids]}. For each group, if
+        ANY installed auto zone in it is at/below MAD, ALL installed auto zones
+        in that group are flagged to water this cycle. Manual/drip zones
+        (auto_mode=False) are never grouped. Returns the set of zone_ids to
+        water-together. Empty if no groups configured."""
+        groups = self.config.get("water_groups") or {}
+        if not groups:
+            return set()
+        installed_auto = {z["id"] for z in installed_zones
+                          if z.get("auto_mode", True)}
+        result = set()
+        for gname, zone_ids in groups.items():
+            members = [zid for zid in zone_ids if zid in installed_auto]
+            if not members:
+                continue
+            triggered = False
+            for zid in members:
+                bal = db.get_soil_balance(zid)
+                if (bal and bal.get("balance_mm") is not None
+                        and bal["balance_mm"] <= self.get_zone_mad_mm(zid)):
+                    triggered = True
+                    break
+            if triggered:
+                result.update(members)
+                log.info("Water group '%s' triggered — syncing zones %s",
+                         gname, [self._zone_label(z) for z in members])
+        return result
+
     # ── Rain / wetting detection (observe-only) ──
     # When a soil sensor's reading rises significantly, classify the cause:
     #   - irrigation: a zone watered recently → expected, not rain
@@ -939,11 +984,14 @@ class IrrigationEngine:
         n_watered = 0
         n_skipped = 0
         n_outside = 0
+        # Sync groups: if any zone in a group hits MAD, the whole group waters
+        # together this cycle (overlapping turf on one schedule).
+        group_water = self._compute_group_water_set(installed_zones)
         for zone in installed_zones:
             zid = zone["id"]
             # Water balance model — no soil sensor needed
             soil = soil_readings.get(zid, 50)
-            decision = self.evaluate_zone(zid, soil, status)
+            decision = self.evaluate_zone(zid, soil, status, group_water=group_water)
             actions.append(decision)
 
             action = decision["action"]

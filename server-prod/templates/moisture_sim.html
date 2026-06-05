@@ -512,6 +512,17 @@ h2 { margin: 0; font-size: 1.05rem; }
 // CONFIG & STATE
 // ═══════════════════════════════════
 var ZONES = {{ zones | tojson }};
+// Sync groups (overlapping turf zones that water together). {name: [zone_ids]}.
+var WATER_GROUPS = {{ water_groups | tojson }};
+// zone_id -> array of sibling zone_ids in its sync group (incl. itself).
+var ZONE_GROUP_SIBLINGS = (function() {
+  var m = {};
+  for (var g in WATER_GROUPS) {
+    var ids = WATER_GROUPS[g] || [];
+    ids.forEach(function(zid) { m[zid] = ids; });
+  }
+  return m;
+})();
 
 // Restore filters from URL hash (e.g. #zone=6&days=30&year=2026)
 function parseHash() {
@@ -2305,18 +2316,40 @@ function refreshAllZones() {
     var zonesNeedingNow = 0, zonesSoon = 0, totalGalWeek = 0;
     var firingByNight = [0, 0, 0, 0, 0, 0, 0]; // # zones watering each of next 7 nights
 
+    // Pre-pass: compute each zone's prediction + its own first-fire night, then
+    // apply sync-group coordination so grouped turf zones show ONE shared date
+    // (the earliest any group member fires). Mirrors the engine's water_groups.
+    var _preds = {}, _ownFire = {};
+    ZONES.forEach(function(z) {
+      var p = predictZoneSchedule(z.id, perZone[z.id], forecast7);
+      _preds[z.id] = p;
+      var ff = -1;
+      if (p) { for (var ni = 0; ni < p.nights.length; ni++) { if (p.nights[ni].willWater) { ff = ni; break; } } }
+      _ownFire[z.id] = ff;
+    });
+    function groupFirstFire(zid) {
+      var sibs = ZONE_GROUP_SIBLINGS[zid];
+      if (!sibs) return _ownFire[zid];
+      var earliest = -1;
+      sibs.forEach(function(s) {
+        var p = _preds[s];
+        if (!p || !p.isAuto) return;       // only auto installed siblings count
+        var ff = _ownFire[s];
+        if (ff >= 0 && (earliest < 0 || ff < earliest)) earliest = ff;
+      });
+      return earliest >= 0 ? earliest : _ownFire[zid];
+    }
+
     ZONES.forEach(function(z) {
       var ld = perZone[z.id];
-      var pred = predictZoneSchedule(z.id, ld, forecast7);
+      var pred = _preds[z.id];
       if (!pred) {
         statusHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>'
           + '<td colspan="9" style="color:var(--text3); font-style:italic">no balance data yet</td></tr>';
         return;
       }
-      var firstFire = -1;
-      for (var ni = 0; ni < pred.nights.length; ni++) {
-        if (pred.nights[ni].willWater) { firstFire = ni; break; }
-      }
+      // Group-synced first-fire night (grouped zones share the earliest).
+      var firstFire = groupFirstFire(z.id);
       if (!(vacationOn && pred.isAuto)) {
         pred.nights.forEach(function(n, idx) { if (n.willWater) firingByNight[idx]++; });
       }

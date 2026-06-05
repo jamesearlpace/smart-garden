@@ -515,7 +515,9 @@ def create_app(config, engine, weather, billing):
         """Moisture simulation chart — historical, live 2026, and forecast."""
         # Show installed zones + all drip zones (so Garden/Grapes stay visible for monitoring even when disabled)
         zones = [z for z in config["zones"] if z.get("installed", False) or z.get("type") == "drip"]
-        return render_template("moisture_sim.html", zones=zones)
+        water_groups = config.get("water_groups") or {}
+        return render_template("moisture_sim.html", zones=zones,
+                               water_groups=water_groups)
 
     @app.route("/api/zone-config", methods=["POST"])
     def api_zone_config_update():

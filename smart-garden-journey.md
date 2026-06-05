@@ -1519,6 +1519,37 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **Sanity-check findings (for later, not yet done):** (1) `precip_rate_iph` per-zone is uncalibrated → catch-can test. (2) **cycle-soak is configured but NOT implemented** — engine runs 24 min straight instead of 8min×3 with soaks → runoff on clay. Highest-impact code fix but CHANGES watering behavior, so do it attended, not unattended. (3) sensors can't calibrate turf (they're in beds).
 
+## 2026-06-04 (late, ~11 PM) — Soil sensors all reading 0: field hardware diagnosis (UNRESOLVED, parked)
+
+**Symptom:** James added a 4th sensor and tried to get them showing on the website. During the session ALL FOUR soil channels (GPIO 32/33/34/35) went to a hard **raw 0** (which maps to a misleading "100%" through the inverted calibration) — including GPIO 32 & 33 which had been reading fine earlier in the day (~2200 / ~1340). Confirmed live via fast-sample (not stale frames).
+
+**What we systematically RULED OUT (multimeter + server telemetry):**
+- **NOT the software / dashboard / ESP32 reachability** — board online, server healthy, fast-sample working.
+- **NOT a board crash from the work** — boot# 120→121 + uptime reset was just James power-cycling while testing wires (he confirmed). resetReason=PowerOn, not a brownout.
+- **NOT the sensors being 5V-damaged** — the purchased part is rated **3.3–5.5V** ("5PCS Capacitive Analog Soil Moisture Sensor 3.3~5.5V"), so running at 5V is IN SPEC. (I was wrong to worry about this earlier — corrected.)
+- **NOT (solely) a missing common ground** — James added a DIRECT wire from ESP32 GND → the sensors' shared ground. Still all 0.
+- **Power IS present:** measured **5V across each sensor's VCC↔GND, at the sensor module's own pins** (3-pin modules: +, −, data).
+
+**The decisive measurement:** at a sensor's OWN pins, with 5V confirmed across +/−, James measured **GND↔DATA = 0V on two different sensors.** A powered capacitive sensor ALWAYS outputs ~1–3V on data (high/dry ~2.5–3V, low/wet ~1V). 0V at the sensor's own data pin = the sensor is not producing a signal at the source.
+
+**The breakthrough clue — TIME + COLD:** it's **~11 PM and cold**. James recalled that historically these sensors **"turn off at night when it gets cold"** — the data showed the junction-box sensor dropping out on cold nights and returning when warm. This reframes everything.
+
+**Most likely root cause (per research + known behavior of these cheap 555-timer capacitive sensors):**
+1. **Condensation/dew on the unsealed top electronics at night** — these boards are NOT sealed; only the lower blade is meant for soil. Dew on the 555 oscillator/chip shorts it → output collapses to **0V** → "off at night," evaporates by morning → "on by day." This on-day/off-night cycle is the classic fingerprint and is FIXABLE.
+2. Temperature *drift* is also real (555 oscillator + capacitance drift with temp) but that causes WRONG readings, not 0.
+3. Caveat: all-four-failing-SIMULTANEOUSLY during rewiring leans toward a shared-rail/connection issue tonight, while the HISTORICAL night dropouts are likely condensation — possibly two different things stacked.
+
+**OPEN — next steps for tomorrow (warm, daylight):**
+1. **Warm bench test (decisive):** take ONE sensor indoors, let it warm/dry ~20 min, power from ESP32 3.3V + GND with short jumpers (nothing else), probe GND↔DATA.
+   - Reads ~2.5V warm/dry → sensors are FINE, it's environmental (cold/condensation) → **seal the boards**.
+   - Still 0V warm/dry → that module is a dud → replace from the 5-pack / ask seller.
+2. **If environmental: seal the top half** of each board (conformal coating / hot glue / heat-shrink / epoxy) above the soil line, leaving only the blade + connector exposed. This is THE standard community fix for condensation dropouts. Get the chip out of / desiccate the junction box.
+3. **Verify meter was on DC volts** (V⎓), not AC, when the 0V was read (loose end — AC reads a DC output near 0).
+4. Once a sensor reads real values: re-enable in config, confirm on dashboard. Rain detection + 5-min sampling are already built and waiting.
+
+**State left:** fast-sample turned OFF, server healthy, ESP32 online (battery ~12.7V). soil_0 + soil_1 enabled in config (will show misleading 100% while sensors read 0 — leave as-is, James aware). No code changed this session — pure hardware diagnosis.
+
+
 
 
 

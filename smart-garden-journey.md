@@ -1549,6 +1549,24 @@ A run of fixes + the first real soil-sensor feature, after the sensors went live
 
 **State left:** fast-sample turned OFF, server healthy, ESP32 online (battery ~12.7V). soil_0 + soil_1 enabled in config (will show misleading 100% while sensors read 0 — leave as-is, James aware). No code changed this session — pure hardware diagnosis.
 
+---
+
+## 2026-06-04 — Zone sync-groups (overlapping turf zones water the same night)
+
+**Context:** The lawn sprinkler zones physically overlap — a head in one zone sprays grass that's also covered by the neighbor zone. With independent ET schedules, Front Yard B could water tomorrow while Front Yard A wasn't due for 7 days, so the shared grass got inconsistent water. James: *"have them all running on the same schedule so that they all go on the same night."* Manual drip zones (Garden/Grapes — not even hooked up) must stay OFF.
+
+**Changes:**
+- **`config.yaml` `water_groups`** (0-based ids): `front_yard: [0,1]` (Front Yard A+B), `backyard_grass: [2,3,4,5,6]` (Encl Backyard A/B, SE, S, SW). Garden(7)/Grapes(8) are `auto_mode: false` → never grouped.
+- **Watering window 04:00–07:00 → 04:00–08:00** so all 7 turf zones (~24 min each, serial) fit when both groups fire the same morning.
+- **`irrigation.py`:** new `_compute_group_water_set()` (once/cycle: if ANY installed auto member of a group is at/≤ MAD, flag ALL installed auto members); `evaluate_zone(..., group_water=None)` bypasses the water-balance skip for flagged zones (reason "Group sync") while all other skips (rain/freeze/wind/window/same-day) still apply; `run_cycle()` computes the set before the eval loop and passes it down.
+- **`dashboard.py` + `moisture_sim.html`:** route passes `water_groups`; template injects `WATER_GROUPS` + `ZONE_GROUP_SIBLINGS` and the All-Zones table "Next water" now shows the group-synced date (earliest first-fire among auto siblings) so grouped zones display ONE shared date.
+
+**Decisions:** Group fires on the FIRST (driest) member reaching MAD, not the average — deliberately deep+infrequent. After a group waters, every member's balance resets high, so it won't re-fire until the driest member depletes again (several days). This directly answers James's worry that nightly watering is bad for grass: the sync produces one deep soak, not nightly runs.
+
+**Current State:** Deployed + verified live — logs showed `Water group 'backyard_grass' triggered — syncing zones [Zone 3,4,5,6,7]`, all 5 queued together (outside-window wait at 23:30), Garden/Grapes skip "Manual mode", zero errors. Committed e472de2 (code) + 4f6e430 (config), pushed, mirrored to server-prod.
+
+**Next Steps / follow-ups (NOT done):** (1) single-zone banner still shows each zone's own date, not the group's (All-Zones table is the synced view) — could add a "🔗 runs with Zone X" note; (2) 7-night grid per-night runtimes not group-adjusted; (3) cycle-soak still configured-but-unimplemented (engine runs 24 min straight) — highest-impact future fix, do attended; (4) **this journey doc is 131KB — needs archive-split per the 10KB guideline.**
+
 
 
 

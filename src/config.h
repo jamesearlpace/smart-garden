@@ -108,7 +108,10 @@ const char* MQTT_PASS     = "";
 #define MCP_SDA_PIN        21
 #define MCP_SCL_PIN        22
 #define VALVE_PULSE_MS     100   // How long to pulse the solenoid (ms)
-#define SENSOR_READ_INTERVAL_MS  3600000  // Read sensors every 60 minutes (hourly voltage report)
+#define SENSOR_READ_INTERVAL_MS  300000  // Read sensors every 5 minutes. Matches
+// the server's 5-min poll, so fresh soil values ride along in a poll that already
+// happens (no extra wake-ups/transmissions = negligible battery cost vs hourly).
+// Enables rain inference + tamper detection on soil-moisture rises.
 
 // Fast-sample "test mode" — temporarily sample sensors quickly while testing,
 // then AUTO-REVERT to the hourly interval so the battery is never drained by a

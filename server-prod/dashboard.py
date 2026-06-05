@@ -987,7 +987,7 @@ def create_app(config, engine, weather, billing):
     # reported at that instant (raw, uncorrected), then least-squares fit a
     # correction so the dashboard voltage matches reality. Stored in
     # config['battery_calibration']; applied live by engine.battery_raw_to_v().
-    BATTERY_LEGACY_SCALE = 1.02884
+    BATTERY_LEGACY_SCALE = 1.0   # uncalibrated = show the raw ESP32 reading 1:1
 
     def _solve_linear_system(matrix, vector):
         """Gaussian elimination with partial pivoting. Solves A·x = b for a
@@ -1025,7 +1025,7 @@ def create_app(config, engine, weather, billing):
         """Least-squares fit actual_v = f(raw_v). Returns coeffs (increasing
         power order), degree, rmse, n, and a human description. Picks the
         simplest model the data supports to avoid overfitting:
-          0 pts → legacy ×1.02884   1 pt → scale-through-origin
+          0 pts → raw passthrough (×1.0)   1 pt → scale-through-origin
           2-4 pts → linear          5+ pts → quadratic
         (A resistor divider is physically linear; quadratic only kicks in with
         enough points to justify capturing ESP32 ADC curvature.)"""
@@ -1041,7 +1041,7 @@ def create_app(config, engine, weather, billing):
         if n == 0:
             return {"coeffs": [0.0, BATTERY_LEGACY_SCALE], "degree": 1,
                     "rmse": None, "n": 0,
-                    "model": "uncalibrated (legacy ×%.5f)" % BATTERY_LEGACY_SCALE}
+                    "model": "uncalibrated (raw passthrough)"}
         if n == 1:
             rv, av = pts[0]
             a = av / rv if rv else 1.0
@@ -1148,7 +1148,7 @@ def create_app(config, engine, weather, billing):
             "coeffs": coeffs,
             "degree": cal.get("degree", 1),
             "rmse": cal.get("rmse"),
-            "model": cal.get("model", "uncalibrated (legacy)"),
+            "model": cal.get("model", "uncalibrated (raw passthrough)"),
             "updated": cal.get("updated"),
             "live": {"raw_v": raw_v, "corrected_v": corrected_v, "legacy_v": legacy_v},
         }
@@ -1207,7 +1207,7 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/battery-calibration/reset", methods=["POST"])
     def api_battery_calibration_reset():
-        """Clear all reference points → revert to the legacy scale."""
+        """Clear all reference points → revert to raw passthrough (×1.0)."""
         _save_battery_calibration([])
         return jsonify({"ok": True, "snapshot": _battery_cal_snapshot()})
 
@@ -2491,7 +2491,7 @@ function renderBatteryChart(d){
   if(hi - lo < 0.5){ var mid=(lo+hi)/2; lo=mid-0.75; hi=mid+0.75; }
   var pad = Math.max(0.25, (hi-lo)*0.15); lo-=pad; hi+=pad;
   // Sample the fit polynomial across the range.
-  var coeffs = d.coeffs || [0, 1.02884];
+  var coeffs = d.coeffs || [0, 1.0];
   var curve=[], N=40;
   for(var i=0;i<=N;i++){ var x=lo+(hi-lo)*i/N; curve.push({x:x, y:batPredict(coeffs,x)}); }
   var nowPt = hasLive ? [{x:live.raw_v, y:(live.corrected_v!=null ? live.corrected_v : batPredict(coeffs,live.raw_v))}] : [];

@@ -836,7 +836,7 @@ class IrrigationEngine:
     # to real reference points (actual voltage read off the Wanderer charge
     # controller vs. what the ESP32 reported at that instant), stored in
     # config['battery_calibration'] and editable live from /calibrate.
-    BATTERY_LEGACY_SCALE = 1.02884   # used when no calibration points exist yet
+    BATTERY_LEGACY_SCALE = 1.0       # uncalibrated = show the raw reading 1:1
     BATTERY_V_MIN = 5.0              # clamp floor — below this is a dead/garbage read
     BATTERY_V_MAX = 18.0             # clamp ceiling — a 12V SLA never exceeds this
 

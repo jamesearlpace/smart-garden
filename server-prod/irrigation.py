@@ -1212,6 +1212,13 @@ class IrrigationEngine:
         log.info("Saving forecast snapshot for %s (ETΓéÇ=%.2fmm, rain_fcst=%.1fmm)",
                  today, et0, rain_forecast_mm)
 
+        # Sync-group coordination: grouped turf zones water together, so the
+        # honest prediction for a still-wet member is "waters today" when any
+        # member in its group is at/below MAD. Mirrors run_cycle so the audit
+        # doesn't score grouped zones as mispredictions. (Same {name:[ids]} set.)
+        installed_zones = [z for z in self.config["zones"] if z.get("installed", False)]
+        group_water = self._compute_group_water_set(installed_zones)
+
         for zone in self.config["zones"]:
             if not zone.get("installed", False):
                 continue
@@ -1234,10 +1241,17 @@ class IrrigationEngine:
             else:
                 days_until = None
 
+            # Group ride-along: if this zone's sync group is firing today, it
+            # waters today regardless of its own (still-wet) balance.
+            group_ride_along = zid in group_water
+            if group_ride_along:
+                days_until = 0
+
             predicted_date = None
             if days_until is not None:
                 next_dt = date.today() + timedelta(days=max(0, int(days_until)))
                 predicted_date = next_dt.isoformat()
+
 
             # Check if a skip would fire today
             predicted_skip = False

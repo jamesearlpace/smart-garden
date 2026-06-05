@@ -1255,6 +1255,11 @@ def get_forecast_vs_actual(days: int = 30) -> list[dict]:
                    SUM(est_gallons) AS est_gallons
             FROM watering_event
             WHERE start_ts >= date('now', 'localtime', ?)
+              -- Forecast accuracy measures the ENGINE's auto-watering brain only.
+              -- Exclude manual "Run Now" / hand-test runs (trigger_reason 'manual'
+              -- or 'manual [orphaned_cleanup]') so they don't count as the engine
+              -- watering when the forecast correctly predicted it wouldn't.
+              AND trigger_reason NOT LIKE 'manual%'
             GROUP BY zone_id, date(start_ts)
         ) w ON f.zone_id = w.zone_id AND f.forecast_date = w.water_date
         LEFT JOIN (
@@ -1288,24 +1293,29 @@ def get_forecast_vs_actual(days: int = 30) -> list[dict]:
         else:
             d["predicted_would_water"] = False
 
-        # False skip: predicted skip but actually watered
+        # False skip: predicted skip but engine actually watered
         d["false_skip"] = predicted_skip and actually_watered
-        # Missed skip: predicted watering but actually skipped
+        # Missed skip: predicted watering but engine actually skipped (and didn't water)
         d["missed_skip"] = d["predicted_would_water"] and actually_skipped and not actually_watered
 
-        # Outcome label
-        if actually_watered and d["predicted_would_water"] and not predicted_skip:
-            d["outcome"] = "correct_water"
-        elif actually_skipped and predicted_skip:
-            d["outcome"] = "correct_skip"
-        elif d["false_skip"]:
-            d["outcome"] = "false_skip"
-        elif d["missed_skip"]:
-            d["outcome"] = "missed_skip"
-        elif not actually_watered and not actually_skipped:
-            d["outcome"] = "no_event"
+        # Outcome label. A zone can log BOTH a water and a skip on the same day
+        # (different cycles); watering is the zone's real disposition, so it takes
+        # precedence — this avoids the meaningless "other" bucket the old logic
+        # produced whenever both events were present.
+        if actually_watered:
+            if predicted_skip:
+                d["outcome"] = "false_skip"      # predicted skip, but it watered
+            elif d["predicted_would_water"]:
+                d["outcome"] = "correct_water"    # predicted to water today, did
+            else:
+                d["outcome"] = "early_water"      # watered sooner than predicted (model ran wet)
+        elif actually_skipped:
+            if predicted_skip or not d["predicted_would_water"]:
+                d["outcome"] = "correct_skip"     # predicted skip OR not-today, and it didn't water
+            else:
+                d["outcome"] = "missed_skip"      # predicted water today, engine skipped
         else:
-            d["outcome"] = "other"
+            d["outcome"] = "no_event"             # predicted future water, nothing today — fine
 
         result.append(d)
 
@@ -1322,6 +1332,7 @@ def get_forecast_accuracy_summary(days: int = 30) -> dict:
     correct = sum(1 for r in rows if r["outcome"] in ("correct_water", "correct_skip", "no_event"))
     false_skips = sum(1 for r in rows if r["outcome"] == "false_skip")
     missed_skips = sum(1 for r in rows if r["outcome"] == "missed_skip")
+    early_waters = sum(1 for r in rows if r["outcome"] == "early_water")
     waters = sum(1 for r in rows if r["actually_watered"])
     skips = sum(1 for r in rows if r["actually_skipped"])
 
@@ -1331,6 +1342,7 @@ def get_forecast_accuracy_summary(days: int = 30) -> dict:
         "accuracy_pct": round(correct / total * 100, 1) if total > 0 else None,
         "false_skips": false_skips,
         "missed_skips": missed_skips,
+        "early_waters": early_waters,
         "total_waterings": waters,
         "total_skips": skips,
         "days": days,

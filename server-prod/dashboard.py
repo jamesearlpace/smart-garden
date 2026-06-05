@@ -981,6 +981,192 @@ def create_app(config, engine, weather, billing):
             "history": db.get_calibration_history(idx, limit=60),
         })
 
+    # ── Battery voltage calibration ──────────────────────────────────────
+    # James reads the true battery voltage off the Wanderer charge controller
+    # at the junction box and enters it here. We pair it with what the ESP32
+    # reported at that instant (raw, uncorrected), then least-squares fit a
+    # correction so the dashboard voltage matches reality. Stored in
+    # config['battery_calibration']; applied live by engine.battery_raw_to_v().
+    BATTERY_LEGACY_SCALE = 1.02884
+
+    def _solve_linear_system(matrix, vector):
+        """Gaussian elimination with partial pivoting. Solves A·x = b for a
+        small dense system. Returns the solution list, or None if singular."""
+        n = len(vector)
+        # Work on an augmented copy.
+        aug = [list(matrix[i]) + [vector[i]] for i in range(n)]
+        for col in range(n):
+            piv = max(range(col, n), key=lambda r: abs(aug[r][col]))
+            if abs(aug[piv][col]) < 1e-12:
+                return None
+            aug[col], aug[piv] = aug[piv], aug[col]
+            pivot = aug[col][col]
+            for r in range(n):
+                if r == col:
+                    continue
+                factor = aug[r][col] / pivot
+                for c in range(col, n + 1):
+                    aug[r][c] -= factor * aug[col][c]
+        return [aug[i][n] / aug[i][i] for i in range(n)]
+
+    def _polyfit_increasing(xs, ys, degree):
+        """Pure-Python least-squares polynomial fit (no numpy). Returns
+        coefficients in increasing power order: [c0, c1, ... c_degree]."""
+        m = degree + 1
+        # Normal equations: (XᵀX) c = Xᵀy, where X columns are x^0..x^degree.
+        # XᵀX[i][j] = Σ x^(i+j) ; Xᵀy[i] = Σ y·x^i.
+        powers = [sum(x ** p for x in xs) for p in range(2 * degree + 1)]
+        a = [[powers[i + j] for j in range(m)] for i in range(m)]
+        b = [sum(y * (x ** i) for x, y in zip(xs, ys)) for i in range(m)]
+        sol = _solve_linear_system(a, b)
+        return sol
+
+    def _fit_battery_model(points):
+        """Least-squares fit actual_v = f(raw_v). Returns coeffs (increasing
+        power order), degree, rmse, n, and a human description. Picks the
+        simplest model the data supports to avoid overfitting:
+          0 pts → legacy ×1.02884   1 pt → scale-through-origin
+          2-4 pts → linear          5+ pts → quadratic
+        (A resistor divider is physically linear; quadratic only kicks in with
+        enough points to justify capturing ESP32 ADC curvature.)"""
+        pts = []
+        for p in points:
+            try:
+                rv = float(p["raw_v"]); av = float(p["actual_v"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if rv > 0 and av > 0:
+                pts.append((rv, av))
+        n = len(pts)
+        if n == 0:
+            return {"coeffs": [0.0, BATTERY_LEGACY_SCALE], "degree": 1,
+                    "rmse": None, "n": 0,
+                    "model": "uncalibrated (legacy ×%.5f)" % BATTERY_LEGACY_SCALE}
+        if n == 1:
+            rv, av = pts[0]
+            a = av / rv if rv else 1.0
+            return {"coeffs": [0.0, round(a, 6)], "degree": 1, "rmse": 0.0,
+                    "n": 1, "model": "1-point scale (×%.5f)" % a}
+        deg = 2 if n >= 5 else 1
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        coeffs = _polyfit_increasing(xs, ys, deg)
+        if coeffs is None:
+            # Degenerate (e.g. all identical raw values) → fall back to linear,
+            # then to a simple average scale if even that is singular.
+            coeffs = _polyfit_increasing(xs, ys, 1)
+            deg = 1
+        if coeffs is None:
+            a = sum(ys) / sum(xs)
+            coeffs = [0.0, a]
+            deg = 1
+
+        def predict(x):
+            return sum(c * (x ** i) for i, c in enumerate(coeffs))
+
+        rmse = (sum((predict(x) - y) ** 2 for x, y in pts) / n) ** 0.5
+        return {"coeffs": [round(c, 8) for c in coeffs], "degree": deg,
+                "rmse": round(rmse, 4), "n": n,
+                "model": ("quadratic" if deg == 2 else "linear") + " fit (n=%d)" % n}
+
+    def _save_battery_calibration(points):
+        fit = _fit_battery_model(points)
+        config["battery_calibration"] = {
+            "points": points,
+            "coeffs": fit["coeffs"],
+            "degree": fit["degree"],
+            "rmse": fit["rmse"],
+            "model": fit["model"],
+            "updated": datetime.now().isoformat(timespec="seconds"),
+        }
+        write_config_atomic(config)
+        return config["battery_calibration"], fit
+
+    def _battery_live_reading():
+        """Fresh (raw_v, corrected_v) from the ESP32, or (None, None)."""
+        status = engine.get_esp32_status(force_fresh=True) or {}
+        raw_v = (status.get("system") or {}).get("batteryV")
+        try:
+            raw_v = float(raw_v)
+        except (TypeError, ValueError):
+            return None, None
+        if raw_v <= 0:
+            return None, None
+        return round(raw_v, 4), engine.battery_raw_to_v(raw_v)
+
+    def _battery_cal_snapshot():
+        cal = config.get("battery_calibration") or {}
+        points = cal.get("points") or []
+        coeffs = cal.get("coeffs") or [0.0, BATTERY_LEGACY_SCALE]
+
+        def predict(x):
+            return round(sum(c * (x ** i) for i, c in enumerate(coeffs)), 3)
+
+        enriched = []
+        for p in points:
+            try:
+                rv = float(p["raw_v"]); av = float(p["actual_v"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            pred = predict(rv)
+            enriched.append({"ts": p.get("ts"), "raw_v": rv, "actual_v": av,
+                             "predicted_v": pred, "error_v": round(pred - av, 3)})
+        raw_v, corrected_v = _battery_live_reading()
+        legacy_v = round(raw_v * BATTERY_LEGACY_SCALE, 2) if raw_v else None
+        return {
+            "points": enriched,
+            "coeffs": coeffs,
+            "degree": cal.get("degree", 1),
+            "rmse": cal.get("rmse"),
+            "model": cal.get("model", "uncalibrated (legacy)"),
+            "updated": cal.get("updated"),
+            "live": {"raw_v": raw_v, "corrected_v": corrected_v, "legacy_v": legacy_v},
+        }
+
+    @app.route("/api/battery-calibration")
+    def api_battery_calibration():
+        return jsonify(_battery_cal_snapshot())
+
+    @app.route("/api/battery-calibration/add", methods=["POST"])
+    def api_battery_calibration_add():
+        """Add a reference point. Body: {actual_v}. Captures the ESP32's raw
+        battery reading at this instant and pairs it with the real voltage."""
+        data = request.get_json(silent=True) or {}
+        try:
+            actual_v = float(data.get("actual_v"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "actual_v (a number) required"}), 400
+        if not (5.0 <= actual_v <= 18.0):
+            return jsonify({"ok": False, "error": "actual_v %.2f is out of range for a 12V SLA (5–18V)" % actual_v}), 400
+        raw_v, _ = _battery_live_reading()
+        if raw_v is None:
+            return jsonify({"ok": False, "error": "ESP32 isn't reporting a battery reading right now — try again in a moment"}), 400
+        cal = config.get("battery_calibration") or {}
+        points = list(cal.get("points") or [])
+        points.append({
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "raw_v": round(raw_v, 4),
+            "actual_v": round(actual_v, 3),
+        })
+        saved, fit = _save_battery_calibration(points)
+        return jsonify({"ok": True, "captured": {"raw_v": round(raw_v, 4), "actual_v": actual_v},
+                        "fit": fit, "snapshot": _battery_cal_snapshot()})
+
+    @app.route("/api/battery-calibration/delete", methods=["POST"])
+    def api_battery_calibration_delete():
+        """Remove one reference point by its ts. Body: {ts}."""
+        data = request.get_json(silent=True) or {}
+        ts = data.get("ts")
+        cal = config.get("battery_calibration") or {}
+        points = [p for p in (cal.get("points") or []) if p.get("ts") != ts]
+        _save_battery_calibration(points)
+        return jsonify({"ok": True, "snapshot": _battery_cal_snapshot()})
+
+    @app.route("/api/battery-calibration/reset", methods=["POST"])
+    def api_battery_calibration_reset():
+        """Clear all reference points → revert to the legacy scale."""
+        _save_battery_calibration([])
+        return jsonify({"ok": True, "snapshot": _battery_cal_snapshot()})
+
     @app.route("/api/run", methods=["POST"])
     def api_run_zone():
         """Run a zone for X minutes (manual override)."""
@@ -1942,10 +2128,18 @@ a{color:#58a6ff;text-decoration:none;}
 .help b{color:#e6edf3;}
 </style></head>
 <body>
-<h1>🌱 Soil Sensor Calibration</h1>
-<div class="sub">Capture each sensor's dry & wet endpoints — saved to the server, no reflash.
+<h1>🔧 Sensor Calibration</h1>
+<div class="sub">Tune the server-side calibration for the battery and soil sensors — saved to the server, no reflash.
 <a href="/">🏠 Home</a> · <a href="/moisture-sim">💧 Schedule</a> · <a href="/forecast">🌧️ Forecast</a> · <a href="/map">🗺️ Map</a></div>
 
+<h2 style="font-size:16px;margin:18px 0 6px">🔋 Battery Voltage</h2>
+<div class="help">
+<b>Make the dashboard voltage match the real battery.</b> Open the junction box, read the true voltage off the <b>Wanderer charge controller</b>, type it in below, and tap <b>Add reading</b>. We capture what the ESP32 reports at that instant and fit a correction so the dashboard matches reality.<br>
+<span style="color:#7d8590">The divider you built (5 resistors instead of 4) reads slightly off and not perfectly linear. One reading already helps; add a few at different charge levels (morning low, midday charging) and the fit gets sharper. 2+ points → linear fit, 5+ → quadratic.</span>
+</div>
+<div id="battery-cal" class="card">Loading…</div>
+
+<h2 style="font-size:16px;margin:22px 0 6px">🌱 Soil Sensors</h2>
 <div class="help">
 <b>How to calibrate (do it in the ground, the way it really sits):</b><br>
 1. Click <b>Start Live Mode</b> so raw readings refresh every few seconds.<br>
@@ -2091,10 +2285,107 @@ async function saveManual(idx){
   }catch(e){ toast('Save failed', true); }
 }
 
+/* ── Battery voltage calibration ── */
+function vfmt(v){ return (v===null||v===undefined) ? '—' : (Number(v).toFixed(2) + 'V'); }
+
+async function loadBattery(){
+  try{
+    var r = await fetch('/api/battery-calibration');
+    var d = await r.json();
+    renderBattery(d);
+  }catch(e){ /* keep last view */ }
+}
+
+function renderBattery(d){
+  var el = document.getElementById('battery-cal');
+  if(!el) return;
+  var live = d.live || {};
+  var hasLive = live.raw_v !== null && live.raw_v !== undefined;
+  var off = Math.abs((live.corrected_v||0) - 0);
+  // Current reading row
+  var liveHtml;
+  if(hasLive){
+    liveHtml = '<div class="row" style="align-items:flex-end">'
+      + '<div><div class="muted">ESP32 raw reading</div><div class="raw live">' + vfmt(live.raw_v) + '</div></div>'
+      + '<div style="text-align:center;color:#7d8590;font-size:20px">→</div>'
+      + '<div style="text-align:right"><div class="muted">dashboard shows</div><div class="raw" style="color:#7ee787">' + vfmt(live.corrected_v) + '</div></div>'
+      + '</div>';
+  } else {
+    liveHtml = '<div class="advice adv-overdue"><b>🔌 No battery reading</b> — the ESP32 isn\\'t reporting a voltage right now. Add a point once it\\'s back online.</div>';
+  }
+  // Model summary
+  var rmse = (d.rmse===null||d.rmse===undefined) ? '' : ' · ±' + Number(d.rmse).toFixed(3) + 'V fit error';
+  var modelHtml = '<div class="drift">📐 model: <b>' + (d.model||'uncalibrated') + '</b>' + rmse
+      + (d.updated ? ' · updated ' + d.updated.replace('T',' ') : '') + '</div>';
+  // Add-reading input
+  var inputHtml = '<div class="manual" style="margin-top:10px">'
+    + '<span class="muted">Actual voltage from the Wanderer:</span>'
+    + '<input id="bat-actual" type="number" step="0.01" placeholder="e.g. 13.40" style="width:100px">'
+    + '<button class="btn-go" onclick="addBatteryPoint()">➕ Add reading</button>'
+    + '</div>';
+  // Points table
+  var rows = (d.points||[]).map(function(p){
+    var errCls = Math.abs(p.error_v) >= 0.3 ? 'color:#ff7b72' : Math.abs(p.error_v) >= 0.12 ? 'color:#f0b429' : 'color:#7ee787';
+    var sign = p.error_v > 0 ? '+' : '';
+    return '<tr>'
+      + '<td style="color:#7d8590;font-size:11px">' + (p.ts||'').replace('T',' ') + '</td>'
+      + '<td><b>' + vfmt(p.actual_v) + '</b></td>'
+      + '<td>' + vfmt(p.raw_v) + '</td>'
+      + '<td>' + vfmt(p.predicted_v) + '</td>'
+      + '<td style="' + errCls + '">' + sign + Number(p.error_v).toFixed(2) + '</td>'
+      + '<td><button onclick="deleteBatteryPoint(\\'' + (p.ts||'') + '\\')" style="padding:3px 8px;font-size:12px">✕</button></td>'
+      + '</tr>';
+  }).join('');
+  var tableHtml = (d.points && d.points.length)
+    ? '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
+      + '<thead><tr style="color:#7d8590;text-align:left;font-size:11px;text-transform:uppercase">'
+      + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th><th></th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '<div class="actions"><button onclick="resetBattery()">🗑 Clear all points (revert to default)</button></div>'
+    : '<div class="muted" style="margin-top:10px">No reference points yet — add your first reading above.</div>';
+
+  el.innerHTML = liveHtml + modelHtml + inputHtml + tableHtml;
+}
+
+async function addBatteryPoint(){
+  var inp = document.getElementById('bat-actual');
+  var v = parseFloat(inp.value);
+  if(isNaN(v)){ toast('Enter the voltage you read', true); return; }
+  try{
+    var r = await fetch('/api/battery-calibration/add', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({actual_v:v})});
+    var d = await r.json();
+    if(d.ok){
+      var c = d.captured || {};
+      toast('Added: actual ' + Number(c.actual_v).toFixed(2) + 'V @ raw ' + Number(c.raw_v).toFixed(2) + 'V');
+      inp.value='';
+      renderBattery(d.snapshot);
+    } else { toast(d.error || 'Add failed', true); }
+  }catch(e){ toast('Add failed', true); }
+}
+
+async function deleteBatteryPoint(ts){
+  try{
+    var r = await fetch('/api/battery-calibration/delete', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({ts:ts})});
+    var d = await r.json();
+    if(d.ok){ toast('Removed point'); renderBattery(d.snapshot); }
+    else { toast('Remove failed', true); }
+  }catch(e){ toast('Remove failed', true); }
+}
+
+async function resetBattery(){
+  if(!confirm('Clear all battery calibration points and revert to the default correction?')) return;
+  try{
+    var r = await fetch('/api/battery-calibration/reset', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: '{}'});
+    var d = await r.json();
+    if(d.ok){ toast('Reset to default'); renderBattery(d.snapshot); }
+    else { toast('Reset failed', true); }
+  }catch(e){ toast('Reset failed', true); }
+}
+
 function restartPoll(){ if(pollTimer) clearInterval(pollTimer); pollTimer = setInterval(load, POLL_MS); }
 load();
-restartPoll();
-</script>
+loadBattery();
+restartPoll();</script>
 </body></html>"""
         return Response(html, mimetype="text/html")
 

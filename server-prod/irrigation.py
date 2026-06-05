@@ -828,6 +828,45 @@ class IrrigationEngine:
     SOIL_RAW_MIN = 1          # raw <= this → invalid (cold/dead/short to GND)
     SOIL_RAW_MAX = 4094       # raw >= this → invalid (open circuit / disconnected)
 
+    # ── Battery voltage calibration (server-side, no firmware reflash) ──
+    # The firmware reports its own computed batteryV from the ADC + divider, but
+    # the resistor divider James built isn't exact (he used 5 resistors where the
+    # design wanted 4), so the raw value reads a bit off. Historically we just
+    # multiplied by a hardcoded 1.02884. Now the correction is a polynomial fit
+    # to real reference points (actual voltage read off the Wanderer charge
+    # controller vs. what the ESP32 reported at that instant), stored in
+    # config['battery_calibration'] and editable live from /calibrate.
+    BATTERY_LEGACY_SCALE = 1.02884   # used when no calibration points exist yet
+    BATTERY_V_MIN = 5.0              # clamp floor — below this is a dead/garbage read
+    BATTERY_V_MAX = 18.0             # clamp ceiling — a 12V SLA never exceeds this
+
+    def battery_raw_to_v(self, raw_v) -> float | None:
+        """Convert the firmware's raw batteryV into a calibrated voltage.
+
+        Applies the polynomial correction fit from config['battery_calibration']
+        (coeffs in increasing power order: c0 + c1*x + c2*x²...). Falls back to
+        the legacy ×1.02884 scale when no calibration points exist. Returns None
+        for a missing/dead reading so the UI shows "no data" rather than 0 V.
+        """
+        try:
+            raw_v = float(raw_v)
+        except (TypeError, ValueError):
+            return None
+        if raw_v <= 0:
+            return None
+        cal = self.config.get("battery_calibration") or {}
+        coeffs = cal.get("coeffs")
+        if not coeffs:
+            corrected = raw_v * self.BATTERY_LEGACY_SCALE
+        else:
+            # Horner-free evaluation in increasing power order.
+            corrected = 0.0
+            for power, c in enumerate(coeffs):
+                corrected += c * (raw_v ** power)
+        # Final guard: a wild fit/extrapolation must never wreck the chart axis.
+        corrected = max(self.BATTERY_V_MIN, min(self.BATTERY_V_MAX, corrected))
+        return round(corrected, 2)
+
     def get_soil_calibration(self, idx: int) -> dict:
         """Return {name, dry, wet} for sensor idx, falling back to defaults."""
         cal = (self.config.get("soil_calibration") or {})
@@ -979,7 +1018,7 @@ class IrrigationEngine:
                     heap_pct=system.get("heapPct", 0),
                     chip_temp_f=system.get("chipTempF", 0),
                     boot_count=system.get("bootCount", 0),
-                    battery_v=round(system.get("batteryV",0)*1.02884,2) if system.get("batteryV") else None,
+                    battery_v=self.battery_raw_to_v(system.get("batteryV")),
                     wifi_reconnects=system.get("wifiReconnects"),
                     crash_count=health.get("crashCount"),
                     tx_power_raw=system.get("txPowerRaw"),

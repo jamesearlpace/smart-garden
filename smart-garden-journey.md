@@ -1771,6 +1771,17 @@ All times PDT. Each item deployed to the Acer (`scp` + `systemctl restart`) and 
 
 **Takeaway for any reading-freshness work:** soil "Set Dry/Wet" capture has the same staleness (relies on the user hitting Start Live Mode first). The real durable fix is the pending 5-min firmware flash; until then, force fast-sample before any capture that needs a current value.
 
+## 2026-06-06 — Battery ADC railed (GPIO 36 → 21.3V) + multi-valve override
+
+**Battery reading 21.3V investigation:** James saw 21.3V day and night, never dropping — suspected software. Diagnosed: `/api/scan` shows **GPIO 36 raw ADC = 4095** (dead max). Firmware math `4095 × (3.3/4095) × 6.464 = 21.3312V` exactly. So the firmware is faithful; the **battery voltage divider on GPIO 36 is railed** — almost certainly the lower (ground-side) resistor open or its ground lost, so the pin floats to ~full battery and the ADC pins at max. **Physical fix at the junction box** (reseat divider, check lower-resistor ground, possibly condensation since it's cold/night). Also: the calibration James entered (two points BOTH at 13.4V actual) makes a flat fit `coeffs [13.4, 0]` → dashboard shows a fake frozen 13.4V masking the railed reading. **Two points at the same actual voltage can't define a slope.** Offered to clear it; pending James's OK. **TODO when fixing battery:** add a railed-guard (≥18V impossible for 12V SLA → show "battery sensor fault, check GPIO 36 divider" instead of garbage; feed low-battery alert).
+
+**Multi-valve override SHIPPED (commit 460ed7c):** James wanted to run several valves at once, overriding the one-valve-at-a-time invariant (issue #1).
+- **Key realization that makes it safe:** the solenoids are **latching** (draw current only during the brief ~100ms open pulse, not while held), so multiple-open is power-safe — the only real cost is reduced water pressure/flow per zone. And each valve opened via `start_zone_watering` stays tracked in `_active`, so `safety_check` (which only force-closes *untracked* open valves) leaves them alone and the safety timeout still closes them.
+- **Implementation:** `open_valve(..., bypass_lockout=False)` — when True, skips the preemption block (no close of other zones, no `close_all` belt-and-suspenders). Threaded through `start_zone_watering(..., allow_multi=False)`. `/api/valve` open accepts `{multi:true}`.
+- **UI:** opt-in "🔀 Multi-valve" checkbox in the Zones control bar (OFF by default). When ON, a purple warning banner shows and each zone card gets a "🔛 Open (stack)" button (`zoneOpenMulti` → `/api/valve` open with multi:true). `MULTI_MODE` JS flag re-renders the zone grid via `render(window._lastDash)`.
+- **Verified live:** opened zone 0, then zone 4 with multi → firmware reported **both [0,4] physically open** (normally zone 4 would preempt zone 0). Emergency Stop All closed everything ([]). Left clean — all valves closed.
+- **Note:** the auto scheduler never sets allow_multi (only manual `/api/valve multi:true` does), so automatic watering still runs one zone at a time. The `len(_active) > 1` INVARIANT-VIOLATED warning in run_cycle will now log during manual multi-use — harmless/expected.
+
 
 
 

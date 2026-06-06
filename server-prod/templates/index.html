@@ -1138,9 +1138,15 @@ a{color:var(--blue);text-decoration:none}
         <span style="font-size:.78rem;color:var(--text3)">ESP32: <strong id="ctrl-esp-status">—</strong></span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
+        <label style="display:flex;align-items:center;gap:5px;font-size:.78rem;color:var(--text2);cursor:pointer;user-select:none" title="Override the one-valve-at-a-time rule so you can run several zones together. Reduces water pressure when multiple are open.">
+          <input type="checkbox" id="multi-mode-chk" onchange="toggleMultiMode()" style="cursor:pointer"> 🔀 Multi-valve
+        </label>
         <span class="aside" id="z-summary-text"></span>
         <button class="ctrl-refresh" onclick="loadControls()">↻ Refresh</button>
       </div>
+    </div>
+    <div id="multi-mode-note" style="display:none;margin-bottom:12px;padding:9px 14px;border-radius:8px;background:rgba(139,92,246,.1);border:1px solid #8b5cf6;color:#6d28d9;font-size:.8rem">
+      🔀 <strong>Multi-valve override ON.</strong> Use <strong>🔛 Open (stack)</strong> on a zone to open it without closing the others. Running several zones at once lowers water pressure per zone — use for light tasks or filling, not deep watering. Emergency Stop All still closes everything.
     </div>
 
     <!-- Zone cards grid (zones 1-9 only, no planned) -->
@@ -3076,6 +3082,11 @@ function render(d) {
       (z.watering
         ? '<button class="btn btn-stop" onclick="zoneStop('+z.id+',this)">■ Stop</button>'
         : '<button class="btn btn-run" onclick="zoneRun('+z.id+',5,this)">▶ Run 5 min</button>') +
+      // Multi-valve override (only when the mode toggle is on): open this zone
+      // ALONGSIDE any others that are running, instead of preempting them.
+      (MULTI_MODE && !z.watering
+        ? ' <button class="btn" onclick="zoneOpenMulti('+z.id+',this)" title="Open this valve without closing the others (reduces water pressure when several run at once)" style="background:rgba(139,92,246,.15);color:#7c3aed;border:1px solid #8b5cf6;font-weight:600">🔛 Open (stack)</button>'
+        : '') +
       (function() {
         var isAuto = z.auto_mode !== false;
         var bg = isAuto ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)';
@@ -3919,6 +3930,29 @@ function ctrlMapRun(id,min){
   MAP_BUSY[id] = true;
   setTimeout(function(){ MAP_BUSY[id] = false; }, 800);
   fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,minutes:min})}).then(function(){refresh();});
+}
+// Multi-valve override: when ON, zone cards expose an "Open (stack)" button
+// that opens a valve without preempting the others. Off by default (the
+// system normally enforces one valve at a time for water pressure).
+var MULTI_MODE = false;
+function toggleMultiMode(){
+  MULTI_MODE = !MULTI_MODE;
+  var note = el('multi-mode-note');
+  if (note) note.style.display = MULTI_MODE ? '' : 'none';
+  var chk = el('multi-mode-chk');
+  if (chk) chk.checked = MULTI_MODE;
+  if (window._lastDash) render(window._lastDash);  // re-render zone cards
+}
+function zoneOpenMulti(id,btn){
+  btn.textContent = '⏳ Opening...';
+  btn.disabled = true;
+  fetch('/api/valve',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},body:JSON.stringify({id:id,action:'open',multi:true})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok) { btn.textContent = '✅ Open (stacked)'; setTimeout(refresh, 1500); }
+      else { btn.textContent = '❌ ' + (d.error || 'Failed'); setTimeout(function(){ btn.textContent = '🔛 Open (stack)'; btn.disabled = false; }, 3000); }
+    })
+    .catch(function(e){ btn.textContent = '❌ Error'; setTimeout(function(){ btn.textContent = '🔛 Open (stack)'; btn.disabled = false; }, 3000); });
 }
 function zoneRun(id,min,btn){
   btn.textContent = '⏳ Starting...';

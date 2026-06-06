@@ -651,6 +651,10 @@ def create_app(config, engine, weather, billing):
             # Without this, get_daily_irrigation_mm() never credits manual
             # toggle runs and the scheduler thinks the zone still needs
             # water. Mirrors what /api/run does. See issue #2.
+            #
+            # multi=True is the manual multi-valve override: open this zone
+            # ALONGSIDE any already-running zones instead of preempting them.
+            multi = bool((payload or {}).get("multi") or request.form.get("multi"))
             soil = db.get_latest_soil(zone_id)
             soil_pct = soil["soil_pct"] if soil else 0
             ok = engine_command(
@@ -659,6 +663,7 @@ def create_app(config, engine, weather, billing):
                 allow_weather_fetch=False,
                 command_timeout=ESP32_MANUAL_TIMEOUT,
                 retry=False,
+                allow_multi=multi,
             )
         elif action == "close":
             # Use stop_zone_watering if the zone is actively tracked,

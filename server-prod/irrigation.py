@@ -261,14 +261,27 @@ class IrrigationEngine:
         return self._badge_online
 
     def open_valve(self, zone_id: int, timeout: int | float = ESP32_TIMEOUT,
-                   retry: bool = True) -> bool:
+                   retry: bool = True, bypass_lockout: bool = False) -> bool:
         # HARDWARE LOCKOUT: only one valve open at a time. Before opening this
         # zone, preempt any other zone that's currently tracked as running.
         # All open paths go through here (scheduled run_cycle, /api/run manual,
         # /api/valve raw open), so this is the chokepoint that makes parallel
         # operation physically impossible. See
         # https://github.com/jamesearlpace/smart-garden-server/issues/1
-        preempted = [z for z in list(self._active.keys()) if z != zone_id]
+        #
+        # bypass_lockout=True is the explicit multi-valve OVERRIDE: skip the
+        # preemption so this valve opens ALONGSIDE any already-open zones. Safe
+        # for power because the solenoids are latching (they only draw current
+        # during the brief open pulse, not while held), so the only real cost is
+        # reduced water pressure/flow when several zones run at once. The valves
+        # stay tracked in _active, so the safety timeout still closes them.
+        if bypass_lockout:
+            log.warning("Multi-valve override: opening %s WITHOUT preempting %s",
+                        self._zone_label(zone_id),
+                        ", ".join(self._zone_label(z) for z in self._active
+                                  if z != zone_id) or "(none)")
+        preempted = [] if bypass_lockout else [
+            z for z in list(self._active.keys()) if z != zone_id]
         if preempted:
             log.warning("Preemption: closing %s before opening %s",
                         ", ".join(self._zone_label(z) for z in preempted),
@@ -676,8 +689,13 @@ class IrrigationEngine:
                             et_demand: float, reason: str = "soil_dry",
                             allow_weather_fetch: bool = True,
                             command_timeout: int | float = ESP32_TIMEOUT,
-                            retry: bool = True) -> bool:
-        """Open valve and track the watering event."""
+                            retry: bool = True,
+                            allow_multi: bool = False) -> bool:
+        """Open valve and track the watering event.
+
+        allow_multi=True is the manual multi-valve override: the valve opens
+        alongside any already-running zones instead of preempting them. Only
+        honored for manual reasons (the auto scheduler never sets it)."""
         if not self.is_zone_installed(zone_id):
             log.warning(
                 "Refusing to start watering for disabled or unknown %s (id=%d)",
@@ -732,7 +750,8 @@ class IrrigationEngine:
                      self._zone_label(zone_id), scale_pct, adjusted_min, zone["max_runtime_min"],
                      ws["temp_delta"], ws["humidity_delta"], ws["rain_delta"])
 
-            if self.open_valve(zone_id, timeout=command_timeout, retry=retry):
+            if self.open_valve(zone_id, timeout=command_timeout, retry=retry,
+                               bypass_lockout=allow_multi):
                 event_id = db.start_watering(zone_id, soil_before, et_demand, reason)
                 with self._start_lock:
                     entry = self._active.get(zone_id)

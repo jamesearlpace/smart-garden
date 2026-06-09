@@ -342,6 +342,12 @@ h2 { margin: 0; font-size: 1.05rem; }
       <button data-days="153">153d</button>
       <button data-days="9999">Full Season</button>
     </div>
+    <div class="range-btns" id="bucket-btns" title="Width of rain/sprinkler bars">
+      <button data-bucket="hour">Hour</button>
+      <button data-bucket="day" class="active">Day</button>
+      <button data-bucket="3day">3 Day</button>
+      <button data-bucket="week">Week</button>
+    </div>
     <select id="year-select">
       <option value="2026" selected>2026 (Live)</option>
       <option value="2025">2025</option>
@@ -377,10 +383,12 @@ h2 { margin: 0; font-size: 1.05rem; }
     <span class="legend-item"><span style="color:#f87171;font-size:12px">✕</span> <b>Emergency</b></span>
   </div>
 
-  <!-- Two stacked charts: precip bars on top, moisture line below -->
+  <!-- Precip bars are now merged INTO the moisture chart (single shared x-axis
+       guarantees the rain/sprinkler bars line up with the dates below).
+       The standalone precip canvas is kept hidden for backward compat. -->
   <div id="chart-section">
-    <div style="height:80px; position:relative"><canvas id="precip-chart"></canvas></div>
-    <div style="height:280px; position:relative; margin-top:-6px"><canvas id="moisture-chart"></canvas></div>
+    <div style="height:0; overflow:hidden; position:relative"><canvas id="precip-chart"></canvas></div>
+    <div style="height:340px; position:relative"><canvas id="moisture-chart"></canvas></div>
 
     <div class="stats" id="stats-row"></div>
     <div class="summary-row" id="summary-row"></div>
@@ -533,7 +541,7 @@ function parseHash() {
   return h;
 }
 function saveHash() {
-  location.hash = 'zone=' + (allZonesMode ? 'all' : currentZoneId) + '&days=' + currentDays + '&year=' + selectedYear;
+  location.hash = 'zone=' + (allZonesMode ? 'all' : currentZoneId) + '&days=' + currentDays + '&year=' + selectedYear + '&bucket=' + currentBucket;
 }
 var hashParams = parseHash();
 
@@ -541,6 +549,7 @@ var allZonesMode = (hashParams.zone === 'all');
 var currentZoneId = (hashParams.zone && hashParams.zone !== 'all') ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
 var currentDays = hashParams.days ? parseInt(hashParams.days) : 7;
 var selectedYear = hashParams.year || '2026';
+var currentBucket = (['hour','day','3day','week'].indexOf(hashParams.bucket) !== -1) ? hashParams.bucket : 'day';
 var weatherCache = {};
 var liveDataCache = {};
 var vacationOn = false; // mirrors config.vacation_mode; gates schedule predictions
@@ -555,6 +564,10 @@ document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('#range-btns button').forEach(function(btn) {
     btn.classList.remove('active');
     if (parseInt(btn.dataset.days) === currentDays) btn.classList.add('active');
+  });
+  document.querySelectorAll('#bucket-btns button').forEach(function(btn) {
+    btn.classList.remove('active');
+    if (btn.dataset.bucket === currentBucket) btn.classList.add('active');
   });
 });
 
@@ -1524,10 +1537,21 @@ var nowLinePlugin = {
     if (nowPx < xA.left || nowPx > xA.right) return;
     var ctx = chart.ctx;
     ctx.save();
-    ctx.strokeStyle = '#94a3b844'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    // Bold, high-contrast vertical line
+    ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2.5; ctx.setLineDash([6, 4]);
     ctx.beginPath(); ctx.moveTo(nowPx, yA.top); ctx.lineTo(nowPx, yA.bottom); ctx.stroke();
-    ctx.fillStyle = '#94a3b8'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('Now', nowPx, yA.top - 4);
+    // Filled "NOW" pill at the top so it stands out
+    ctx.setLineDash([]);
+    var label = 'NOW';
+    ctx.font = 'bold 10px sans-serif';
+    var padX = 6, tw = ctx.measureText(label).width, pw = tw + padX * 2, ph = 16;
+    var px = Math.min(Math.max(nowPx - pw / 2, xA.left), xA.right - pw);
+    var py = yA.top - ph - 2;
+    ctx.fillStyle = '#ef4444';
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(px, py, pw, ph, 4); ctx.fill(); }
+    else { ctx.fillRect(px, py, pw, ph); }
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, px + pw / 2, py + ph / 2 + 0.5);
     ctx.restore();
   }
 };
@@ -1555,6 +1579,60 @@ var forecastZonePlugin = {
 // ═══════════════════════════════════
 // CHART BUILDER
 // ═══════════════════════════════════
+
+// Bucket helpers — control the width/aggregation of the rain & sprinkler bars
+// on the single-zone moisture chart. The user picks Hour / Day / 3 Day / Week
+// in the toolbar (currentBucket global). Each bar's depth is the SUM of all
+// source events that fall inside its bucket window.
+function bucketSizeMs(bucket) {
+  return ({ hour: 3600000, day: 86400000, '3day': 259200000, week: 604800000 })[bucket] || 86400000;
+}
+function bucketStart(date, bucket) {
+  var d = new Date(date);
+  if (bucket === 'hour') {
+    d.setMinutes(0, 0, 0);
+  } else if (bucket === 'week') {
+    // Align week to local Sunday midnight
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay());
+  } else if (bucket === '3day') {
+    d.setHours(0, 0, 0, 0);
+    // Align to multiples of 3 epoch-days (local-tz safe enough for display)
+    var epochDays = Math.floor(d.getTime() / 86400000);
+    var rem = epochDays % 3;
+    if (rem) d.setDate(d.getDate() - rem);
+  } else { // day (default)
+    d.setHours(0, 0, 0, 0);
+  }
+  return d;
+}
+// Sum source points into bucketStartMs → totalY map.
+function aggregateBuckets(points, bucket) {
+  var buckets = {};
+  if (!points) return buckets;
+  points.forEach(function(p) {
+    if (!p || p.y === null || p.y === undefined || p.y <= 0) return;
+    var d = (p.x instanceof Date) ? p.x : new Date(p.x);
+    var key = bucketStart(d, bucket).getTime();
+    buckets[key] = (buckets[key] || 0) + p.y;
+  });
+  return buckets;
+}
+// Expand a bucket map to a uniform series across [tMin, tMax]. Empty buckets
+// are filled with y=0 so Chart.js auto-sizes bar width to the bucket span
+// (instead of widening bars to span gaps). Each bar's x is bucket center.
+function expandBucketSeries(buckets, bucket, tMin, tMax) {
+  var bMs = bucketSizeMs(bucket);
+  var startKey = bucketStart(new Date(tMin), bucket).getTime();
+  var endKey = bucketStart(new Date(tMax), bucket).getTime();
+  var series = [];
+  for (var t = startKey; t <= endKey; t += bMs) {
+    var y = buckets[t] || 0;
+    series.push({ x: new Date(t + bMs / 2), y: parseFloat(y.toFixed(3)) });
+  }
+  return series;
+}
+
 function buildChart(zoneId, days, data, actualWaterings, liveData) {
   if (typeof Chart === 'undefined') {
     // Chart.js loads via <script defer> from a CDN; its execution can lose a race
@@ -1612,28 +1690,35 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
   var tempData = data.map(function(p) { return { x: p.t, y: p.tempF }; });
 
   var rd = zone.rootDepthIn;
-  var rainBarData = data.filter(function(p) { return p.rain !== null; }).map(function(p) {
-    return { x: p.t, y: p.rain };
-  });
-  var sprinklerBarData = data.filter(function(p) { return p.sprinkler !== null; }).map(function(p) {
-    return { x: p.t, y: p.sprinkler };
-  });
+  // Rain & sprinkler bars — aggregated into the user-selected bucket
+  // (hour/day/3day/week) so each bar fills the full bucket span. Empty
+  // buckets get y=0 entries so Chart.js auto-sizes bar width from the
+  // uniform gap instead of widening a bar to span a sparse stretch.
+  var rainPoints = data.filter(function(p) { return p.rain && p.rain > 0; })
+    .map(function(p) { return { x: p.t, y: p.rain }; });
+  var rainBuckets = aggregateBuckets(rainPoints, currentBucket);
+  var rainBarData = expandBucketSeries(rainBuckets, currentBucket, tMin, tMax);
 
-  // Actual watering events from DB (2026 only) — exclude test blips < 60s
-  var actualBarData = [];
+  var sprinklerPoints = data.filter(function(p) { return p.sprinkler !== null && p.sprinkler > 0; })
+    .map(function(p) { return { x: p.t, y: p.sprinkler }; });
+  var sprinklerBuckets = aggregateBuckets(sprinklerPoints, currentBucket);
+  var sprinklerBarData = expandBucketSeries(sprinklerBuckets, currentBucket, tMin, tMax);
+
+  // Actual watering events from DB (2026 only) — exclude test blips < 60s.
+  var actualPoints = [];
   if (actualWaterings && actualWaterings.length > 0) {
     actualWaterings.forEach(function(w) {
       if (w.duration_sec >= 60 && w.start_ts) {
-        // Server stores local time as 'YYYY-MM-DDTHH:MM:SS' without timezone
-        // Parse manually to avoid UTC interpretation
         var tp = w.start_ts.split(/[-T:]/);
         var t = new Date(parseInt(tp[0]), parseInt(tp[1])-1, parseInt(tp[2]), parseInt(tp[3]||0), parseInt(tp[4]||0), parseInt(tp[5]||0));
-        var precipRate = zone.precipRate;
-        var inches = precipRate * (w.duration_sec / 3600);
-        actualBarData.push({ x: t, y: inches, duration: w.duration_sec, reason: w.trigger_reason || '?' });
+        actualPoints.push({ x: t, y: zone.precipRate * (w.duration_sec / 3600), duration: w.duration_sec });
       }
     });
   }
+  var actualBuckets = aggregateBuckets(actualPoints, currentBucket);
+  var actualBarData = expandBucketSeries(actualBuckets, currentBucket, tMin, tMax).map(function(p) {
+    return { x: p.x, y: p.y, reason: currentBucket + ' total' };
+  });
 
   var maxBar = 0.1;
   rainBarData.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
@@ -1649,7 +1734,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
   var precipDatasets = [
     { label: '🌧️ Rain', data: rainBarData,
       backgroundColor: 'rgba(59,130,246,0.60)', borderColor: 'rgba(59,130,246,0.9)',
-      borderWidth: 1, barThickness: 5, maxBarThickness: 8 }
+      borderWidth: 1, barThickness: 9, maxBarThickness: 16 }
   ];
   // Only show simulated sprinkler bars for brain sim (historical years)
   if (!isReal && sprinklerBarData.length > 0) {
@@ -1665,29 +1750,16 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       label: isReal ? '💧 Sprinkler' : '▮ Actual Run', data: actualBarData,
       backgroundColor: isReal ? 'rgba(16,185,129,0.70)' : 'rgba(56,189,248,0.70)',
       borderColor: isReal ? 'rgba(16,185,129,0.95)' : 'rgba(56,189,248,0.95)',
-      borderWidth: 1, barThickness: 7, maxBarThickness: 10
+      borderWidth: 1, barThickness: 9, maxBarThickness: 16
     });
   }
-  // Forecast predicted sprinkler bars — ONE bar per watering day at 4 AM (bug #30 fix)
+  // Forecast predicted sprinkler bars — aggregated into the current bucket
   if (isReal) {
-    var fcstSprinklerByDay = {};
-    data.forEach(function(p) {
-      if (p.isForecast && p.sprinkler !== null && p.sprinkler > 0) {
-        // Use local date string for grouping (not UTC)
-        var dayKey = p.t.getFullYear() + '-' + String(p.t.getMonth()+1).padStart(2,'0') + '-' + String(p.t.getDate()).padStart(2,'0');
-        if (!fcstSprinklerByDay[dayKey]) {
-          // Position bar at 4 AM local time on this day
-          var barDate = new Date(p.t.getFullYear(), p.t.getMonth(), p.t.getDate(), 4, 0, 0);
-          fcstSprinklerByDay[dayKey] = { totalIn: 0, date: barDate };
-        }
-        fcstSprinklerByDay[dayKey].totalIn += p.sprinkler;
-      }
-    });
-    var forecastSprinklerBars = [];
-    Object.keys(fcstSprinklerByDay).forEach(function(day) {
-      var d = fcstSprinklerByDay[day];
-      forecastSprinklerBars.push({ x: d.date, y: parseFloat(d.totalIn.toFixed(3)) });
-    });
+    var fcstPoints = data.filter(function(p) {
+      return p.isForecast && p.sprinkler !== null && p.sprinkler > 0;
+    }).map(function(p) { return { x: p.t, y: p.sprinkler }; });
+    var fcstBuckets = aggregateBuckets(fcstPoints, currentBucket);
+    var forecastSprinklerBars = expandBucketSeries(fcstBuckets, currentBucket, tMin, tMax);
     if (forecastSprinklerBars.length > 0) {
       forecastSprinklerBars.forEach(function(p) { if (p.y > maxBar) maxBar = p.y; });
       precipDatasets.push({
@@ -1752,7 +1824,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
         }
       },
       scales: {
-        x: { type: 'time', min: tMin, max: tMax, display: false },
+        x: { type: 'time', min: tMin, max: tMax, offset: false, display: false },
         y: {
           reverse: true, min: 0, max: y2Max, position: 'right',
           ticks: { callback: function(v) { return v.toFixed(1) + '"'; }, font: { size: 9 }, color: '#64748b88', maxTicksLimit: 3, padding: 2 },
@@ -1810,9 +1882,10 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
 
   // Actual watering markers on moisture chart (brain-sim mode only — in real mode the bars are enough)
   if (!isReal && actualBarData.length > 0) {
-    // Find the closest moisture data point for each actual watering event
+    // Find the closest moisture data point for each non-empty bucket
     var actualMoistureMarkers = [];
     actualBarData.forEach(function(ab) {
+      if (!ab || !ab.y || ab.y <= 0) return; // skip zero-pad buckets
       var closest = null, closestDist = Infinity;
       for (var ai = 0; ai < data.length; ai++) {
         var dist = Math.abs(data[ai].t.getTime() - ab.x.getTime());
@@ -1821,7 +1894,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       if (closest) {
         actualMoistureMarkers.push({
           x: ab.x, y: closest.moisture,
-          reason: 'Actual run: ' + Math.round(ab.duration / 60) + ' min (' + ab.reason + ')'
+          reason: 'Actual run: ' + ab.y.toFixed(2) + '" applied (' + ab.reason + ')'
         });
       }
     });
@@ -1834,6 +1907,45 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       });
     }
   }
+
+  // ── Precip bars merged INTO the moisture chart (single shared x-axis = bars
+  //    are mathematically guaranteed to line up with their dates on the line
+  //    below — no more two-stacked-charts drift). They ride a dedicated right
+  //    axis (yPrecip), reversed so they hang from the top like rainfall.
+  // Each bar fills the full width of its bucket (Hour / Day / 3 Day / Week,
+  // chosen by the user). Empty buckets are y=0 so Chart.js sizes bars from
+  // the uniform bucket gap rather than the gap to the next non-zero point.
+  var barCommon = { barPercentage: 0.95, categoryPercentage: 1.0 };
+  var mergedPrecipBars = [];
+  mergedPrecipBars.push(Object.assign({
+    type: 'bar', label: '🌧️ Rain', data: rainBarData, yAxisID: 'yPrecip',
+    backgroundColor: 'rgba(59,130,246,0.55)', borderColor: 'rgba(59,130,246,0.9)',
+    borderWidth: 0, order: 20
+  }, barCommon));
+  if (!isReal && sprinklerBarData.length > 0) {
+    mergedPrecipBars.push(Object.assign({
+      type: 'bar', label: '💧 Sim Sprinkler', data: sprinklerBarData, yAxisID: 'yPrecip',
+      backgroundColor: 'rgba(16,185,129,0.55)', borderColor: 'rgba(16,185,129,0.9)',
+      borderWidth: 0, order: 20
+    }, barCommon));
+  }
+  if (actualBarData.length > 0) {
+    mergedPrecipBars.push(Object.assign({
+      type: 'bar', label: isReal ? '💧 Sprinkler' : '▮ Actual Run', data: actualBarData, yAxisID: 'yPrecip',
+      backgroundColor: isReal ? 'rgba(16,185,129,0.65)' : 'rgba(56,189,248,0.65)',
+      borderColor: isReal ? 'rgba(16,185,129,0.95)' : 'rgba(56,189,248,0.95)',
+      borderWidth: 0, order: 20
+    }, barCommon));
+  }
+  if (isReal && typeof forecastSprinklerBars !== 'undefined' && forecastSprinklerBars.length > 0) {
+    mergedPrecipBars.push(Object.assign({
+      type: 'bar', label: '📅 Predicted Sprinkler', data: forecastSprinklerBars, yAxisID: 'yPrecip',
+      backgroundColor: 'rgba(16,185,129,0.3)', borderColor: 'rgba(16,185,129,0.5)',
+      borderWidth: 0, order: 20
+    }, barCommon));
+  }
+  // Keep bars in the top ~25% of the plot so they don't swamp the moisture line.
+  var yPrecipMax = Math.max(0.2, maxBarFinal * 4);
 
   moistureChart = new Chart(ctxM, {
     type: 'line',
@@ -1862,10 +1974,11 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
           borderColor: '#fb923c55', backgroundColor: 'transparent',
           borderWidth: 1, pointRadius: 0, tension: 0.3,
           borderDash: [2, 2], fill: false, order: 5, yAxisID: 'yTemp' }
-      ].concat(markerDatasets)
+      ].concat(markerDatasets).concat(mergedPrecipBars)
     },
     options: {
       responsive: true, maintainAspectRatio: false,
+      layout: { padding: { top: 20 } },
       _forecastStart: forecastStart,
       animation: { duration: 400, easing: 'easeOutQuart' },
       interaction: { mode: 'index', intersect: false },
@@ -1939,7 +2052,7 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       },
       scales: {
         x: {
-          type: 'time', min: tMin, max: tMax,
+          type: 'time', min: tMin, max: tMax, offset: false,
           time: { tooltipFormat: 'EEE MMM d, h:mm a', displayFormats: { hour: 'EEE ha', day: 'EEE MMM d' } },
           ticks: { maxTicksLimit: days <= 7 ? 14 : 20, font: { size: 10 }, color: '#64748b' },
           grid: { color: '#1e293b33' }
@@ -1959,6 +2072,12 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
           ticks: { callback: function(v) { return v + '\u00b0'; }, font: { size: 9 }, color: '#fb923c66', stepSize: 10 },
           grid: { drawOnChartArea: false },
           afterFit: function(axis) { axis.width = 35; }
+        },
+        yPrecip: {
+          position: 'right', reverse: true, min: 0, max: yPrecipMax,
+          ticks: { callback: function(v) { return v.toFixed(1) + '"'; }, font: { size: 9 }, color: '#3b82f699', maxTicksLimit: 3 },
+          grid: { drawOnChartArea: false },
+          afterFit: function(axis) { axis.width = 34; }
         }
       }
     }
@@ -2166,6 +2285,15 @@ document.querySelectorAll('#range-btns button').forEach(function(btn) {
     document.querySelectorAll('#range-btns button').forEach(function(b) { b.classList.remove('active'); });
     btn.classList.add('active');
     currentDays = parseInt(btn.dataset.days);
+    saveHash();
+    refresh();
+  });
+});
+document.querySelectorAll('#bucket-btns button').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('#bucket-btns button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    currentBucket = btn.dataset.bucket;
     saveHash();
     refresh();
   });
@@ -2539,11 +2667,13 @@ function refresh() {
   // Show/hide single-zone vs all-zones UI
   var singleZoneEls = ['chart-section', 'legend-main', 'legend-sim', 'next-water-banner', 'tune-panel', 'mode-toggle'];
   var rangeBtns = document.getElementById('range-btns');
+  var bucketBtns = document.getElementById('bucket-btns');
   var yearSelect = document.getElementById('year-select');
   var resetZoom = document.getElementById('btn-reset-zoom');
   if (allZonesMode) {
     singleZoneEls.forEach(function(id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; });
     if (rangeBtns) rangeBtns.style.display = 'none';
+    if (bucketBtns) bucketBtns.style.display = 'none';
     if (yearSelect) yearSelect.style.display = 'none';
     if (resetZoom) resetZoom.style.display = 'none';
     var hdrBadge = document.getElementById('current-badge');
@@ -2559,6 +2689,7 @@ function refresh() {
     document.getElementById('tune-panel').style.display = '';
     document.getElementById('mode-toggle').style.display = '';
     if (rangeBtns) rangeBtns.style.display = '';
+    if (bucketBtns) bucketBtns.style.display = '';
     if (yearSelect) yearSelect.style.display = '';
     if (resetZoom) resetZoom.style.display = '';
     // next-water-banner shown by inline logic below; legend-sim toggled by year check

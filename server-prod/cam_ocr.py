@@ -141,6 +141,39 @@ class MeterReader:
         return entry
 
     # ------------------------------------------------------------------
+    def process_text(self, raw_text):
+        """Validate + store a reading from OCR text done elsewhere (e.g. the
+        tower OCR service). Reuses the same extract/validate/median logic as
+        process(); the heavy OCR just happens off-box."""
+        reading = self._extract(raw_text)
+        confidence = "none"
+        delta = None
+        if reading is not None:
+            digits = len(str(int(reading)))
+            if digits == 9:
+                confidence = "high"
+            elif digits >= 7:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            if self.last_good is not None:
+                delta = reading - self.last_good
+                if delta >= 0 and delta < 1000 and digits >= 7:
+                    confidence = "high"
+            if digits >= 7:
+                self.last_good = reading
+                self.recent_valid.append(reading)
+        entry = self._entry(
+            reading=reading, delta=delta, confidence=confidence,
+            orientation=self.orientation, raw_n=(raw_text or "")[:80], raw_f="",
+        )
+        with self.lock:
+            self.readings.append(entry)
+            if len(self.readings) > 2000:
+                self.readings = self.readings[-2000:]
+        return entry
+
+    # ------------------------------------------------------------------
     def get_readings(self, limit=100):
         with self.lock:
             return list(reversed(self.readings[-limit:]))

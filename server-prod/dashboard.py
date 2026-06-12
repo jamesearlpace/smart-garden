@@ -699,6 +699,53 @@ def create_app(config, engine, weather, billing):
             return jsonify({"ok": ok, "valves": fresh_valves() if ok else cached_valves()})
         return redirect(url_for("index"))
 
+    @app.route("/api/deer-repellent/sound", methods=["POST"])
+    def api_deer_sound():
+        """Play a scare sound (e.g. dog barking) on the yard Amazon Echo.
+
+        Shells out to alexa_remote_control.sh (path via ALEXA_RC env), which plays
+        an Amazon soundbank clip on the configured Echo (ALEXA_DEVICE). The sound key
+        must be in the allowlist below so nothing user-supplied reaches the shell.
+        Until the one-time Alexa login is done on the server, returns a clear 503.
+        """
+        import subprocess
+
+        SOUNDS = {
+            "dog_bark": "amzn_sfx_dog_med_bark_1x_02",
+            "dog_bark_2x": "amzn_sfx_dog_med_bark_2x_02",
+            "wolf_howl": "amzn_sfx_wolf_howl_1x_01",
+        }
+        data = request.get_json(silent=True) or {}
+        key = str(data.get("sound", "dog_bark"))
+        sound_id = SOUNDS.get(key)
+        if not sound_id:
+            return jsonify({"ok": False, "message": f"Unknown sound '{key}'"}), 400
+
+        rc = os.environ.get(
+            "ALEXA_RC", "/home/jamesearlpace/alexa-sounds/alexa_remote_control.sh")
+        device = os.environ.get("ALEXA_DEVICE", "").strip()
+        if not os.path.exists(rc):
+            return jsonify({
+                "ok": False,
+                "message": "Echo not linked yet — run the one-time Alexa login on the server.",
+            }), 503
+
+        cmd = ["bash", rc]
+        if device:
+            cmd += ["-d", device]
+        cmd += ["-e", "sound:" + sound_id]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            if res.returncode == 0:
+                return jsonify({"ok": True,
+                                "message": f"Played {key.replace('_', ' ')} on Echo"})
+            msg = (res.stderr or res.stdout or "alexa_remote_control failed").strip()
+            return jsonify({"ok": False, "message": msg[:200]}), 502
+        except subprocess.TimeoutExpired:
+            return jsonify({"ok": False, "message": "Echo command timed out"}), 504
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"ok": False, "message": str(e)[:200]}), 502
+
     @app.route("/api/reboot", methods=["POST"])
     def api_reboot():
         """Trigger a remote reboot of the ESP32 via the firmware's
@@ -1366,18 +1413,44 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/balance-history")
     def api_balance_history_chart():
-        """Soil water balance time-series for zone 0 (primary installed zone)."""
+        """Soil water balance time-series. `zone` may be a zone id, or "all"
+        to aggregate across installed turf zones (whole-lawn view): rain is
+        common across zones, while balance/ET/irrigation are averaged so every
+        series stays a comparable water DEPTH."""
         hours = query_int("hours", 24, min_value=1, max_value=87600)
-        zone_id = query_int("zone", 0, min_value=0, max_value=len(config["zones"]) - 1)
         days = max(1, hours // 24)
+        zone_arg = (request.args.get("zone") or "0").strip().lower()
         conn = db.get_conn()
-        rows = conn.execute(
-            "SELECT date as ts, balance_mm, taw_mm, mad_mm, et0_mm, "
-            "rain_mm, irrigation_mm, etc_mm "
-            "FROM soil_balance WHERE zone_id = ? "
-            "AND date >= date('now','localtime',?) ORDER BY date",
-            (zone_id, f"-{days} days"),
-        ).fetchall()
+        if zone_arg == "all":
+            turf_ids = [z["id"] for z in config["zones"]
+                        if z.get("installed", False) and z.get("type") == "sprinkler"]
+            if not turf_ids:
+                conn.close()
+                return jsonify([])
+            placeholders = ",".join("?" for _ in turf_ids)
+            # rain is identical across zones on a given day -> AVG == that value.
+            # balance/ET/irrigation averaged = typical depth the lawn experienced.
+            rows = conn.execute(
+                "SELECT date as ts, AVG(balance_mm) as balance_mm, "
+                "AVG(taw_mm) as taw_mm, AVG(mad_mm) as mad_mm, AVG(et0_mm) as et0_mm, "
+                "AVG(rain_mm) as rain_mm, AVG(irrigation_mm) as irrigation_mm, "
+                "AVG(etc_mm) as etc_mm FROM soil_balance "
+                f"WHERE zone_id IN ({placeholders}) "
+                "AND date >= date('now','localtime',?) GROUP BY date ORDER BY date",
+                (*turf_ids, f"-{days} days"),
+            ).fetchall()
+        else:
+            try:
+                zone_id = max(0, min(int(zone_arg), len(config["zones"]) - 1))
+            except ValueError:
+                zone_id = 0
+            rows = conn.execute(
+                "SELECT date as ts, balance_mm, taw_mm, mad_mm, et0_mm, "
+                "rain_mm, irrigation_mm, etc_mm "
+                "FROM soil_balance WHERE zone_id = ? "
+                "AND date >= date('now','localtime',?) ORDER BY date",
+                (zone_id, f"-{days} days"),
+            ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
 
@@ -1878,6 +1951,52 @@ def create_app(config, engine, weather, billing):
     cam_state = {"image": None, "timestamp": None, "flash": False, "ocr_count": 0}
     meter_reader = MeterReader()
 
+    # ── OCR lag buffer + tower worker ──────────────────────────────────
+    # The cam pushes a frame every 5s. OCR runs off-box on the gaming tower
+    # (jackmint). To survive OCR being slower than capture, frames land in a
+    # bounded in-memory FIFO; a worker drains it oldest-first. If OCR ever
+    # falls behind by >100 frames (~8 min), the oldest are dropped (we only
+    # care about the latest meter reading, never a backlog). No disk, no DB.
+    from collections import deque as _deque
+    import threading as _threading
+    OCR_TOWER_URL = os.environ.get("OCR_TOWER_URL", "http://192.168.0.120:5200/ocr")
+    OCR_ENABLED = os.environ.get("OCR_ENABLED", "1") == "1"
+    cam_queue = _deque(maxlen=100)            # the lag buffer
+    cam_queue_lock = _threading.Lock()
+    cam_ocr_stats = {"processed": 0, "errors": 0, "last_ms": None, "dropped": 0}
+
+    def _ocr_worker():
+        """Drain the frame buffer oldest-first, OCR each on the tower, store it."""
+        while True:
+            frame = None
+            with cam_queue_lock:
+                if cam_queue:
+                    frame = cam_queue.popleft()
+            if frame is None:
+                time.sleep(0.25)
+                continue
+            try:
+                r = http_requests.post(
+                    OCR_TOWER_URL, data=frame,
+                    headers={"Content-Type": "image/jpeg"}, timeout=20,
+                )
+                if r.status_code == 200:
+                    text = r.json().get("text", "")
+                    cam_ocr_stats["last_ms"] = r.json().get("ms")
+                    meter_reader.process_text(text)
+                    cam_ocr_stats["processed"] += 1
+                else:
+                    cam_ocr_stats["errors"] += 1
+                    log.warning("tower OCR %s: %s", r.status_code, r.text[:120])
+            except Exception as e:
+                cam_ocr_stats["errors"] += 1
+                log.debug("tower OCR call failed: %s", e)
+                time.sleep(1.0)  # back off when the tower is unreachable
+
+    if OCR_ENABLED:
+        _threading.Thread(target=_ocr_worker, daemon=True, name="ocr-worker").start()
+        log.info("OCR worker started -> %s", OCR_TOWER_URL)
+
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
         """Receive a JPEG push from the ESP32-CAM.
@@ -1909,10 +2028,13 @@ def create_app(config, engine, weather, billing):
         cam_state["image"] = data
         cam_state["timestamp"] = datetime.now().isoformat()
         cam_state["ocr_count"] += 1
-        # OCR paused — uncomment to re-enable
-        # if meter_reader.enabled and cam_state["ocr_count"] % 3 == 0:
-        #     from threading import Thread
-        #     Thread(target=meter_reader.process, args=(data,), daemon=True).start()
+        # Enqueue for off-box OCR (lag buffer). Non-blocking: the deque is
+        # bounded (maxlen=100) so a full queue silently drops the oldest frame.
+        if OCR_ENABLED:
+            with cam_queue_lock:
+                if len(cam_queue) == cam_queue.maxlen:
+                    cam_ocr_stats["dropped"] += 1
+                cam_queue.append(data)
         return "OK", 200
 
     @app.route("/api/cam/latest")
@@ -1930,6 +2052,16 @@ def create_app(config, engine, weather, billing):
             "has_image": cam_state["image"] is not None,
             "timestamp": cam_state["timestamp"],
             "size": len(cam_state["image"]) if cam_state["image"] else 0,
+            "ocr": {
+                "enabled": OCR_ENABLED,
+                "tower": OCR_TOWER_URL,
+                "queue_depth": len(cam_queue),
+                "queue_max": cam_queue.maxlen,
+                "processed": cam_ocr_stats["processed"],
+                "errors": cam_ocr_stats["errors"],
+                "dropped": cam_ocr_stats["dropped"],
+                "last_ms": cam_ocr_stats["last_ms"],
+            },
         })
 
     @app.route("/api/cam/readings")

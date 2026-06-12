@@ -1,10 +1,15 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-05
+**Last Updated:** 2026-06-07
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
-> **RESUME HERE — current state as of 2026-06-05 (read the dated entries at the bottom for details):**
+> **RESUME HERE — current state as of 2026-06-07 (read the dated entries at the bottom for details):**
+> - **Rain source FIXED (2026-06-07)** — past-rain now comes from the Open-Meteo **Archive API** (observation-corrected ERA5), not the forecast endpoint. Root cause: the forecast endpoint keeps its old model guess for past hours, so it reported **0mm for the Jun 6 cats-and-dogs day that actually dropped 9.8mm/0.39"** — the garden never saw the rain, never skipped/credited. `get_rain_last_24h()` now prefers archive (fallback to forecast). Added `get_rain_for_date()` + `get_daily_rain_history()`. Nightly `reconcile_balances(days_back=3)` re-credits recent days so a forecast miss can't carry forward; `update_daily_balances` credits today's archive actual. One-time `backfill_actual_rain.py 7` corrected 31 balance rows (Jun 4–6 rain ≈0.7" that was never credited). Deployed + verified on Acer.
+> - **Water Budget chart rebuilt (2026-06-07)** — now **whole-lawn (avg of turf zones 0–6) in INCHES** (`zone=all` on `/api/balance-history`). Blue Rain + green Irrigation both point up (stacked = total water in, directly comparable), red ET points down, orange = soil balance. A heavy-rain day now towers over a sprinkler cycle (Jun 6: 0.39" rain vs 0.01" irrigation) instead of the old stubby-blue/long-green mm view.
+> - **Rain shows sooner (2026-06-07)** — archive cache 6h→2h (accurate rain settles within ~2h not 6h); added **mid-day (1 PM) + evening (6 PM) balance reruns** so rain banks into the visible soil-balance/moisture line hours before the 11 PM close. ET is **time-pro-rated** via `IrrigationEngine._et_fraction()` (cosine ramp over 06:00–20:00, mirrors the chart's `getEtFraction`) so mid-day reads aren't pessimistically dry; at/after 20:00 fraction=1.0 so the 11 PM authoritative close is byte-identical to before. Stored `etc_mm` stays the FULL day's demand (chart + reconciliation depend on it); only `balance_mm` reflects partial ET. **Does NOT touch any watering decision** (the 4–8 AM skip logic reads live ET/rain directly).
+> - **Test suite (2026-06-07)** — `test_engine.py`, now **21 offline tests** (no network, temp DB): rain-source archive-vs-forecast, reconciliation, weather-scale, TAW/MAD, ET proration. Pre-deploy gate via `run_tests.sh`. Passing locally + on Acer.
+> - **Audit (2026-06-07)** — `professional-audit-2026-06-07.md` in the smart-garden repo: framework-first review, graded B+/prosumer. Cycle-soak intentionally NOT implemented (James's call). Remaining: catch-can precip calibration (physical) + firmware valve-timeout/token (USB flash).
 > - **Sync-groups SHIPPED + verified** (first live run watered all 7 turf zones together 4–5:45 AM, no errors). front_yard=[0,1], backyard_grass=[2,3,4,5,6]. Window widened 04:00→08:00.
 > - **Soil balance credited immediately** after watering (not 11 PM) — predictor/banner/forecast reflect a completed watering in real time.
 > - **Forecast-vs-Actual audit cleaned up** — group-aware snapshot, manual runs excluded, water/skip collision fixed (48.9%→99% on live data).
@@ -16,7 +21,7 @@
 > - **Dashboard charts cleaned up** — removed duplicate injected Analytics/Usage/Weather sections + dup battery from History, deleted orphaned p-analytics panel, fixed all 6 Chart.js console errors.
 > - **Physical TODO (James, at the device):** seal sensor electronics (polyurethane + heat-shrink, blade exposed); reseat/replace Fruit Trees sensor (raw 4095 = open circuit); then use `/calibrate` to capture real dry/wet.
 > - **Pending firmware flash (USB only, NEVER OTA):** crashLoop fix + 5-min sampling interval (committed, not flashed). Optional: strip pct math from firmware (server overrides it).
-> - **Still open / future:** `precip_rate_iph` uncalibrated (catch-can test); cycle-soak configured-but-unimplemented (engine runs 24min straight — highest-impact attended fix); rain-detection observe-only; journey doc 149KB needs archive-split.
+> - **Still open / future:** `precip_rate_iph` uncalibrated (catch-can test, physical); firmware valve-timeout 3600→1800s + reboot-token rotation (USB flash); cycle-soak **intentionally WON'T-DO** (James's call 2026-06-07 — see audit finding A5); journey doc needs archive-split.
 
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
@@ -61,6 +66,22 @@ Water Meter (¾", NW corner) → existing pipe → NEW TEE
 4. Schedule inspection: permit.technician@duvallwa.gov or 425-788-1160 (24h advance, leave trench open)
 5. After approval: hire certified BAT for initial field test (find at https://wcs.greenriver.edu/bat/hire-a-bat/)
 6. Annual backflow test due by Sept 1 each year
+
+---
+
+## 2026-06-11 — Water meter OCR: lag buffer + offload to gaming tower (jackmint)
+
+**Context:** The original water-meter ESP32-CAM (board #1) died (see esp32-cam-journey). Flashed the replacement (board #2, static IP 192.168.0.160), then re-enabled OCR — but running it on the gaming tower (jackmint), 100% on-prem, with a buffer so no frame is lost if OCR lags.
+**Architecture:**
+- Cam pushes SVGA JPEG every 5s → Acer `/api/cam/upload`.
+- Acer `cam_upload` drops the frame into a bounded **in-memory FIFO `deque(maxlen=100)`** — the lag buffer. Non-blocking; a full queue drops the oldest (we only want the latest reading, never a backlog). No disk, no history.
+- A background `_ocr_worker` thread drains oldest-first and POSTs each frame to the **tower OCR service** (`http://192.168.0.120:5200/ocr`).
+- `MeterReader.process_text(raw_text)` (new, in `cam_ocr.py`) reuses the existing extract/validate/median logic — heavy OCR is off-box, the smarts stay on the Acer.
+- `/api/cam/status` now exposes `ocr{queue_depth, processed, errors, dropped, last_ms}`.
+**Tower OCR (jackmint, 192.168.0.120):** `meter-ocr` systemd service (enabled), `~/meter-ocr/.venv` + `meter_ocr_service.py` (in `water-meter-cam/tower-ocr/`). Engine = **RapidOCR** (PP-OCRv4 models via ONNXRuntime, CPU). Chose it over PaddlePaddle-GPU because the GTX 970 (Maxwell) + Python 3.12 makes GPU builds painful, and CPU OCR (~600–730ms/frame) is far faster than the 5s cadence anyway. moondream (Ollama VLM) was rejected — unreliable for digit reading.
+**Verified end-to-end:** tower log shows frames arriving ~5s apart, each OCR'd in ~700ms (never falls behind). Text currently empty because the cam is on the desk, not mounted over the meter — expected.
+**Deploy gotcha:** the Acer's `dashboard.py` was **73 lines ahead** of the local repo — pulled the server copy down and edited against it to avoid clobbering. Service is `smart-garden-server`, dir `~/smart-garden-server/`.
+**Next:** mount cam over the meter (upside-down; OCR flips 180°), confirm 9-digit Sensus reads land on the dashboard. To swap OCR engine later, change `OCR_TOWER_URL` env or upgrade the tower service.
 
 ---
 

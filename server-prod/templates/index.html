@@ -452,6 +452,7 @@ a{color:var(--blue);text-decoration:none}
     <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Schedule</a>
     <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🎛️</span> Calibrate</a>
     <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
+    <div class="nav-item" data-panel="deer"><span class="icon">🦌</span> Deer Repellent</div>
   </div>
   <div class="sidebar-footer">
     <span class="status-dot" id="sb-dot"></span>
@@ -1799,12 +1800,12 @@ a{color:var(--blue);text-decoration:none}
       <div style="height:160px"><canvas id="sh-chart-balance"></canvas></div>
     </div>
     <div class="card" style="padding:16px;margin-bottom:12px">
-      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px">💧 Water Budget (Zone 1) <span style="color:var(--text3);font-weight:400;font-size:.72rem">— daily gains vs. losses (mm)</span></div>
+      <div style="font-weight:600;font-size:.8rem;margin-bottom:4px">💧 Water Budget (Whole Lawn) <span style="color:var(--text3);font-weight:400;font-size:.72rem">— inches of water per day, all turf zones</span></div>
       <div style="display:flex;gap:16px;font-size:.68rem;color:var(--text3);margin-bottom:6px;flex-wrap:wrap">
-        <span>🔴 <b>ET₀ loss</b> (evaporation)</span>
         <span>🔵 <b>Rain</b> (free water)</span>
         <span>🟢 <b>Irrigation</b> (sprinklers)</span>
-        <span>━━ <b>Balance</b> (running total)</span>
+        <span>🔴 <b>ET₀ loss</b> (evaporation, points down)</span>
+        <span>━━ <b>Soil balance</b> (running total)</span>
       </div>
       <div style="height:200px"><canvas id="sh-chart-water-budget"></canvas></div>
     </div>
@@ -2017,6 +2018,7 @@ a{color:var(--blue);text-decoration:none}
   <div class="panel" id="p-cam">
     <div class="section-header"><h2>📷 Water Meter Cam</h2>
       <span class="aside">
+        <button id="cam-live-btn" onclick="camToggleLive()" class="btn" style="font-size:.78rem;padding:4px 12px">⚡ Live View</button>
         <button onclick="camToggleFlash()" class="btn" style="font-size:.78rem;padding:4px 12px">💡 Flash</button>
       </span>
     </div>
@@ -2054,6 +2056,25 @@ a{color:var(--blue);text-decoration:none}
     </div>
   </div>
 
+  <!-- ═══ Deer Repellent panel ═══ -->
+  <div class="panel" id="p-deer">
+    <div class="section-header"><h2>🦌 Deer Repellent</h2></div>
+    <div class="card" style="padding:18px">
+      <p style="margin:0 0 14px;color:var(--text2);font-size:.9rem">
+        Play a scare sound through the yard Amazon Echo. Deer ignore a repeated sound
+        quickly, so these are meant to be used <em>occasionally</em> or fired automatically
+        by the deer detector — varied and unpredictable works best.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        <button class="btn" onclick="playDeerSound('dog_bark', this)"
+                style="font-size:1rem;padding:12px 20px">🐕 Dog Barking</button>
+        <button class="btn" onclick="playDeerSound('dog_bark_2x', this)"
+                style="font-size:1rem;padding:12px 20px">🐕🐕 Dog Barking (2x)</button>
+      </div>
+      <div id="deer-status" style="margin-top:14px;font-size:.85rem;color:var(--text2)">Ready.</div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -2064,6 +2085,7 @@ a{color:var(--blue);text-decoration:none}
 var PANEL_TITLES = {
   home: 'Home', zones: 'Zones & Map',
   history: 'History', settings: 'Settings', cam: 'Water Meter Cam',
+  deer: 'Deer Repellent',
   /* legacy panels kept for composite views */
   controls: 'Valve Controls', wiring: 'Wiring Diagram',
   dashboard: 'Dashboard', activity: 'Activity Log',
@@ -2111,6 +2133,25 @@ function moveContent(srcId, targetId) {
 document.querySelectorAll('.nav-item, .mob-nav-item').forEach(function(item) {
   item.addEventListener('click', function() { showPanel(item.dataset.panel); });
 });
+
+/* Play a scare sound (dog bark) on the yard Echo via the server. */
+async function playDeerSound(sound, btn) {
+  var status = document.getElementById('deer-status');
+  btn.disabled = true;
+  status.textContent = '🔊 Sending to Echo…';
+  try {
+    var r = await fetch('/api/deer-repellent/sound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify({ sound: sound })
+    });
+    var d = await r.json();
+    status.textContent = (d.ok ? '✅ ' : '⚠️ ') + (d.message || (d.ok ? 'Played on Echo' : 'Failed'));
+  } catch (e) {
+    status.textContent = '❌ ' + e;
+  }
+  btn.disabled = false;
+}
 
 function updateClock() {
   var d = new Date();
@@ -4143,8 +4184,8 @@ function loadSensorHistory(hours) {
   loadCostChart('sh-chart-cost', '/api/daily-summary-history?hours=' + hours, hours);
   // Soil Water Balance
   loadBalanceChart('sh-chart-balance', '/api/balance-history?hours=' + hours + '&zone=0', hours);
-  // Water Budget — ET₀ loss vs rain vs irrigation breakdown
-  loadWaterBudgetChart('sh-chart-water-budget', '/api/balance-history?hours=' + hours + '&zone=0', hours);
+  // Water Budget — ET₀ loss vs rain vs irrigation breakdown (whole lawn, inches)
+  loadWaterBudgetChart('sh-chart-water-budget', '/api/balance-history?hours=' + hours + '&zone=all', hours);
   // Sensor Fault Status (not a time-series, just current state)
   loadFaultStatus();
   // System Telemetry
@@ -4584,7 +4625,10 @@ function loadBalanceChart(canvasId, url, hours) {
   });
 }
 
-// Water Budget — stacked bar (gains vs losses) with balance line overlay
+// Water Budget — daily water DEPTH the lawn received, in inches.
+// Rain (blue) and Irrigation (green) both point UP so you can directly compare
+// them: a cats-and-dogs rain day towers over a sprinkler cycle. ET loss (red)
+// points down (water leaving). Orange line = running soil balance.
 function loadWaterBudgetChart(canvasId, url, hours) {
   fetch(url).then(function(r){return r.json();}).then(function(data) {
     var canvas = document.getElementById(canvasId);
@@ -4597,21 +4641,23 @@ function loadWaterBudgetChart(canvasId, url, hours) {
       });
       return;
     }
+    var MM = 25.4;                       // mm per inch
+    var IN = function(mm){ return (mm||0)/MM; };
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'bar',
       data: {
         datasets: [
-          {label:'ET loss (mm)',
-           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:-(r.etc_mm||0)};}),
-           backgroundColor:'#ef444488',stack:'budget',maxBarThickness:25,order:2},
-          {label:'Rain (mm)',
-           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.rain_mm||0};}),
-           backgroundColor:'#3b82f688',stack:'budget',maxBarThickness:25,order:2},
-          {label:'Irrigation (mm)',
-           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.irrigation_mm||0};}),
-           backgroundColor:'#22c55e88',stack:'budget',maxBarThickness:25,order:2},
-          {label:'Balance (mm)',
-           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:r.balance_mm};}),
+          {label:'Rain (in)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:IN(r.rain_mm)};}),
+           backgroundColor:'#3b82f6cc',stack:'in',maxBarThickness:28,order:3},
+          {label:'Irrigation (in)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:IN(r.irrigation_mm)};}),
+           backgroundColor:'#22c55ecc',stack:'in',maxBarThickness:28,order:3},
+          {label:'ET loss (in)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:-IN(r.etc_mm)};}),
+           backgroundColor:'#ef444488',stack:'out',maxBarThickness:28,order:2},
+          {label:'Soil balance (in)',
+           data:data.map(function(r){return {x:new Date(r.ts+'T12:00:00'),y:IN(r.balance_mm)};}),
            type:'line',borderColor:'#f59e0b',backgroundColor:'transparent',
            borderWidth:2,pointRadius:3,pointBackgroundColor:'#f59e0b',tension:0.3,order:1,yAxisID:'y'}
         ]
@@ -4622,13 +4668,14 @@ function loadWaterBudgetChart(canvasId, url, hours) {
           legend:{display:true,position:'top',labels:{boxWidth:10,font:{size:8},padding:4}},
           tooltip:{callbacks:{label:function(ctx){
             var v = ctx.parsed.y;
-            return ctx.dataset.label + ': ' + (v >= 0 ? '+' : '') + v.toFixed(1) + 'mm';
+            return ctx.dataset.label + ': ' + (v >= 0 ? '+' : '') + v.toFixed(2) + ' in';
           }}}
         },
         scales:{
           x:Object.assign({},shTimeAxis(hours),{stacked:true}),
-          y:{display:true,stacked:true,ticks:{font:{size:9}},grid:{color:'#e5e7eb22'},
-             title:{display:true,text:'mm',font:{size:8}}}
+          y:{display:true,stacked:true,ticks:{font:{size:9},callback:function(v){return v.toFixed(2)+'"';}},
+             grid:{color:'#e5e7eb22'},
+             title:{display:true,text:'inches of water',font:{size:8}}}
         }
       }
     });
@@ -5619,6 +5666,7 @@ function cfgSave() {
     <a href="/moisture-sim" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">💧</span>Schedule</a>
     <a href="/calibrate" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🎛️</span>Calibrate</a>
     <div class="mob-nav-item" data-panel="cam"><span class="mob-icon">📷</span>Cam</div>
+    <div class="mob-nav-item" data-panel="deer"><span class="mob-icon">🦌</span>Deer</div>
   </div>
 </div>
 <script>
@@ -5642,6 +5690,8 @@ showPanel = function(id) {
 <!-- ═══ Water Meter Cam JS ═══ -->
 <script>
 var camInterval = null;
+var camLiveOn = false;       // live (rapid) view active?
+var camLiveSeq = 0;          // cancels in-flight live loop when toggled off
 
 function camToggleFlash() {
   fetch('/api/cam/flash', {method:'POST'}).then(function(r){return r.json()}).then(function(d){
@@ -5649,7 +5699,52 @@ function camToggleFlash() {
   }).catch(function(){});
 }
 
+// ⚡ Live View: rapidly poll /api/cam/capture (fresh frames, NO OCR/recording).
+// Self-chaining so the next frame is requested only after the current loads —
+// max fps with no overlapping requests, and it can't wedge the server.
+function camToggleLive() {
+  camLiveOn = !camLiveOn;
+  var btn = document.getElementById('cam-live-btn');
+  var status = document.getElementById('cam-status');
+  if (camLiveOn) {
+    btn.textContent = '⏸ Stop Live';
+    btn.style.background = 'var(--green)';
+    if (camInterval) { clearInterval(camInterval); camInterval = null; }  // pause 5s refresh
+    if (status) { status.textContent = '⚡ LIVE — aiming mode (not recording)'; status.style.color = 'var(--amber)'; }
+    camLiveLoop(++camLiveSeq);
+  } else {
+    btn.textContent = '⚡ Live View';
+    btn.style.background = '';
+    camLiveSeq++;  // cancels the running loop
+    if (status) { status.textContent = '● Live — refreshing every 5s'; status.style.color = 'var(--green)'; }
+    // resume normal cadence
+    camRefresh();
+    if (!camInterval) camInterval = setInterval(camRefresh, 5000);
+  }
+}
+
+function camLiveLoop(seq) {
+  if (!camLiveOn || seq !== camLiveSeq) return;  // toggled off / superseded
+  var panel = document.getElementById('p-cam');
+  if (!panel || !panel.classList.contains('active')) { camLiveOn = false; return; }
+  var img = document.getElementById('cam-img');
+  var ts = document.getElementById('cam-ts');
+  var next = new Image();
+  next.onload = function() {
+    if (seq !== camLiveSeq) return;
+    img.src = next.src;
+    if (ts) ts.textContent = 'Live: ' + new Date().toLocaleTimeString();
+    setTimeout(function(){ camLiveLoop(seq); }, 50);  // tiny gap, then next frame
+  };
+  next.onerror = function() {
+    if (seq !== camLiveSeq) return;
+    setTimeout(function(){ camLiveLoop(seq); }, 500);  // back off on error
+  };
+  next.src = '/api/cam/capture?t=' + Date.now();
+}
+
 function camRefresh() {
+  if (camLiveOn) return;  // live loop owns the image while active
   var panel = document.getElementById('p-cam');
   if (!panel || !panel.classList.contains('active')) return;
   var img = document.getElementById('cam-img');
@@ -5709,6 +5804,12 @@ showPanel = function(id) {
     if (!camInterval) camInterval = setInterval(camRefresh, 5000);
   } else {
     if (camInterval) { clearInterval(camInterval); camInterval = null; }
+    // Leaving the panel cancels live view so it doesn't poll in the background.
+    if (camLiveOn) {
+      camLiveOn = false; camLiveSeq++;
+      var btn = document.getElementById('cam-live-btn');
+      if (btn) { btn.textContent = '⚡ Live View'; btn.style.background = ''; }
+    }
   }
 };
 </script>

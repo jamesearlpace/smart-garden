@@ -3041,6 +3041,7 @@ a{color:var(--blue);text-decoration:none;}
     <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
     <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
     <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/sensor-history" class="nav-item"><span class="icon">🌡️</span> Sensor History</a>
     <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
     <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
     <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Schedule</a>

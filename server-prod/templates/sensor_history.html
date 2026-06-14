@@ -55,6 +55,19 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 .seg button:last-child { border-right: none; }
 .seg button.active { background: var(--green-dark); color: #fff; font-weight: 600; }
 
+/* sensor visibility chips */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: #fff; font-size: .8rem; cursor: pointer;
+  color: var(--text2); font-family: inherit; user-select: none; transition: all .15s; }
+.chip .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.chip.on { color: var(--text); font-weight: 600; border-color: currentColor; }
+.chip.off { opacity: .5; text-decoration: line-through; }
+.chip.off .dot { background: #cbd5e1 !important; }
+.chip-actions { display: inline-flex; gap: 6px; margin-left: auto; }
+.chip-link { background: none; border: none; color: var(--blue); font-size: .78rem; cursor: pointer;
+  font-family: inherit; padding: 5px 4px; }
+
 .chart-wrap { position: relative; height: 320px; }
 
 /* sensor summary cards */
@@ -121,6 +134,7 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
     </div>
     <span class="muted" id="metaNote"></span>
   </div>
+  <div class="chips" id="sensorChips"></div>
   <div class="chart-wrap"><canvas id="histChart"></canvas></div>
 </div>
 
@@ -137,8 +151,22 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 <script>
 var SENSOR_COLORS = ['#16a34a', '#3b82f6', '#f59e0b', '#a855f7'];
 var NUM_SENSORS = 4;
-var state = { hours: 24, mode: 'raw' };
+var state = { hours: 24, mode: 'raw', visible: loadVisible() };
 var chart = null;
+var lastCals = {}, lastSeries = {};
+
+// Which sensors are shown in the chart (persisted). Default: all on.
+function loadVisible() {
+  try {
+    var saved = JSON.parse(localStorage.getItem('sg-sensor-visible') || 'null');
+    if (saved && typeof saved === 'object') return saved;
+  } catch (e) {}
+  return {0: true, 1: true, 2: true, 3: true};
+}
+function saveVisible() {
+  try { localStorage.setItem('sg-sensor-visible', JSON.stringify(state.visible)); } catch (e) {}
+}
+function isVisible(i) { return state.visible[i] !== false; }
 
 function fmtTs(ts, hours) {
   var d = new Date(ts);
@@ -189,6 +217,7 @@ function renderChart(cals, allSeries) {
   // Build a unified, sorted set of timestamps across all sensors.
   var datasets = [];
   for (var i = 0; i < NUM_SENSORS; i++) {
+    if (!isVisible(i)) continue;            // respect sensor visibility toggles
     var series = allSeries[i] || [];
     if (!series.length) continue;
     var cal = cals[i] || {};
@@ -206,7 +235,11 @@ function renderChart(cals, allSeries) {
   if (chart) chart.destroy();
   var note = document.getElementById('metaNote');
   if (!datasets.length) {
-    note.textContent = 'No logged data in this window. Only enabled sensors are recorded.';
+    var anyVisible = false;
+    for (var k = 0; k < NUM_SENSORS; k++) { if (isVisible(k)) anyVisible = true; }
+    note.textContent = anyVisible
+      ? 'No logged data in this window. Only enabled sensors are recorded.'
+      : 'All sensors hidden — tap a chip above to show one.';
   } else {
     note.textContent = '';
   }
@@ -234,6 +267,43 @@ function renderChart(cals, allSeries) {
   });
 }
 
+function renderChips(cals) {
+  var wrap = document.getElementById('sensorChips');
+  wrap.innerHTML = '';
+  for (var i = 0; i < NUM_SENSORS; i++) {
+    var cal = cals[i] || {};
+    var name = cal.name || ('Sensor ' + i);
+    var on = isVisible(i);
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip ' + (on ? 'on' : 'off');
+    chip.style.color = on ? SENSOR_COLORS[i] : '';
+    chip.dataset.idx = i;
+    chip.innerHTML = '<span class="dot" style="background:' + SENSOR_COLORS[i] + '"></span>' + name;
+    chip.addEventListener('click', function() {
+      var idx = parseInt(this.dataset.idx);
+      state.visible[idx] = !isVisible(idx);
+      saveVisible();
+      renderChips(lastCals);
+      renderChart(lastCals, lastSeries);   // re-draw only; no refetch
+    });
+    wrap.appendChild(chip);
+  }
+  var actions = document.createElement('span');
+  actions.className = 'chip-actions';
+  actions.innerHTML = '<button type="button" class="chip-link" id="chipAll">All</button>' +
+                      '<button type="button" class="chip-link" id="chipNone">None</button>';
+  wrap.appendChild(actions);
+  document.getElementById('chipAll').addEventListener('click', function() {
+    for (var i = 0; i < NUM_SENSORS; i++) state.visible[i] = true;
+    saveVisible(); renderChips(lastCals); renderChart(lastCals, lastSeries);
+  });
+  document.getElementById('chipNone').addEventListener('click', function() {
+    for (var i = 0; i < NUM_SENSORS; i++) state.visible[i] = false;
+    saveVisible(); renderChips(lastCals); renderChart(lastCals, lastSeries);
+  });
+}
+
 function load() {
   var calReq = fetch('/api/calibration').then(function(r){ return r.json(); }).catch(function(){ return {sensors: []}; });
   var seriesReqs = [];
@@ -250,6 +320,8 @@ function load() {
     calList.forEach(function(c){ cals[c.index] = c; });
     var allSeries = {};
     for (var i = 0; i < NUM_SENSORS; i++) { allSeries[i] = res[1 + i] || []; }
+    lastCals = cals; lastSeries = allSeries;
+    renderChips(cals);
     renderChart(cals, allSeries);
     renderCards(cals, allSeries);
   });

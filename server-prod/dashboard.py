@@ -2185,13 +2185,51 @@ def create_app(config, engine, weather, billing):
     # to catch a systematic-misread drift the local pipeline is falsely sure of.
     ORACLE_VERIFY_SECS = float(os.environ.get("METER_ORACLE_VERIFY_SECS", "300"))
     ORACLE_DAILY_CAP = int(os.environ.get("METER_ORACLE_DAILY_CAP", "800"))
+    # Counts of read-jitter to allow when the meter is IDLE (no zone on): the
+    # register shouldn't move, so any advance beyond this when idle is suspect
+    # and must be corroborated before it moves the lock. 200 counts = 0.2 ft³.
+    ORACLE_IDLE_JITTER = float(os.environ.get("METER_ORACLE_IDLE_JITTER", "200"))
+    # Two oracle reads within this many counts of each other are reading the
+    # same physical state — used to corroborate a big jump or a downward
+    # correction before committing it (one-off garbage never repeats).
+    ORACLE_CORROB_TOL = float(os.environ.get("METER_ORACLE_CORROB_TOL", "300"))
     # Max gold-dataset images to keep PER DISTINCT reading (avoids flooding the
     # training set with identical numbers from a static meter).
     GOLD_MAX_PER_LABEL = int(os.environ.get("METER_GOLD_MAX_PER_LABEL", "3"))
     _oracle_state = {"last_call": 0.0, "last_verify": 0.0, "calls": 0,
                      "reanchors": 0, "labels": 0, "dupes": 0, "day": "",
                      "day_calls": 0, "busy": False, "confirmed_val": None,
-                     "last_result": None, "last_value": None}
+                     "last_result": None, "last_value": None,
+                     "pending_val": None, "pending_ts": 0.0}
+
+    def _active_gpm():
+        """Sum of est_gpm for zones the controller currently has ON (0 if idle).
+
+        Lets the oracle judge how far the register could PHYSICALLY have moved:
+        when no zone is running the meter shouldn't climb at all, so a big jump
+        is almost certainly a misread — not real water.
+        """
+        try:
+            active = status_summary().get("active_zones", []) or []
+        except Exception:
+            active = []
+        if not active:
+            return 0.0
+        gpm = 0.0
+        for z in config.get("zones", []):
+            if z.get("id") in active:
+                gpm += float(z.get("est_gpm", 4.0) or 0.0)
+        return max(gpm, 1.0)
+
+    def _oracle_ceiling(elapsed_s):
+        """Max plausible forward advance (counts) over elapsed_s, given which
+        zones are running. Idle → just read jitter; a zone on → its est_gpm ×
+        time × a safety margin. Far tighter than the old max_gpm-always bound,
+        which let a static meter 'advance' thousands of counts."""
+        gpm = _active_gpm()
+        margin = 1.5 if gpm > 0 else 1.0
+        counts = (gpm / 60.0) * max(elapsed_s, 0) * cam_ocr.COUNTS_PER_GAL * margin
+        return counts + ORACLE_IDLE_JITTER
 
     def _oracle_bank_label(frame, value, captured_ts, conf):
         """Bank a frame with an oracle-provided GOLD label (most trusted).
@@ -2340,19 +2378,17 @@ def create_app(config, engine, weather, billing):
         try:
             import vision_oracle
             # Give the model physics context so it can reason through glare on
-            # the HIGH digits: it can only count up from the lock, has a physical
-            # ceiling, and the leading digits barely change. (Low digits are
-            # still read straight from the image — see vision_oracle._build_hint.)
+            # the HIGH digits: the leading digits barely change, so tell it the
+            # expected prefix. We DELIBERATELY do NOT send a hard "you're at
+            # least X" floor: the lock itself can be wrong (a local over-read can
+            # ratchet it too high), and a floor would then bias the oracle to
+            # confirm the bad value instead of correcting it. Prefix alone fixes
+            # the glare-on-high-digits problem; the low digits come from pixels.
             lg0 = getattr(meter_reader, "last_good", None)
             hint = None
             if lg0 is not None:
-                window0 = max(stale_for, 30)
-                max_adv0 = (meter_reader.max_gpm / 60.0) * window0 \
-                    * cam_ocr.COUNTS_PER_GAL * 2 + 5000
                 hint = {
                     "last_value": int(lg0),
-                    "min_value": int(lg0),
-                    "max_value": int(lg0 + max_adv0),
                     "high_prefix": f"{int(lg0):09d}"[:4],
                 }
             res = vision_oracle.read_meter(frame, rotate180=True, hint=hint)
@@ -2368,20 +2404,17 @@ def create_app(config, engine, weather, billing):
             digits = res.get("digits", "") or ""
             lg = getattr(meter_reader, "last_good", None)
             anchor = getattr(meter_reader, "anchor_value", 0)
-            # Physical forward ceiling since the lock last moved (counts).
-            window = max(stale_for, 30)
-            max_adv = (meter_reader.max_gpm / 60.0) * window \
-                * cam_ocr.COUNTS_PER_GAL * 2 + 5000
+            # Idle-aware physical ceiling since the lock last moved (counts).
+            elapsed = max(stale_for, 5)
+            ceiling = _oracle_ceiling(elapsed)
             # HIGH-DIGIT GARBLE REPAIR: if the raw oracle value is implausible
-            # (below the anchor floor or impossibly far from the lock), the high
-            # digits were almost certainly mangled by glare while the low digits
-            # are good — splice the trusted low digits onto the lock's stable
-            # high digits so a low-conf frame actually gets corrected by AI
-            # instead of being thrown away.
+            # (its high digits were mangled by glare while the low digits are
+            # good), splice the trusted low digits onto the lock's stable high
+            # digits so a glared frame still produces a usable reading.
             raw_ok = (val is not None and val >= anchor - 5
-                      and lg is not None and 0 <= val - lg <= max_adv)
+                      and lg is not None and 0 <= val - lg <= ceiling)
             if not raw_ok and lg is not None:
-                spliced = _oracle_splice(digits, lg, max_adv)
+                spliced = _oracle_splice(digits, lg, ceiling)
                 if spliced is not None:
                     log.info("oracle high-digit garble repaired: raw %s -> "
                              "%09d (low digits trusted, lock %s)",
@@ -2390,22 +2423,44 @@ def create_app(config, engine, weather, billing):
             if val is None or val < anchor - 5:
                 log.warning("oracle value %s below anchor floor %s — ignored",
                             val, anchor)
+                _oracle_state["pending_val"] = None
                 return
-            if lg is not None:
-                if val > lg + max_adv:
-                    log.warning("oracle value %s implausibly high vs lock %s",
-                                val, lg)
-                    return
-                # FORWARD-ONLY (monotonic meter): never move the lock backward
-                # on an automatic oracle read. In evening glare GPT-4o garbles
-                # BOTH the high AND low digits, so a value below the lock is a
-                # misread, not a real decrease — hold the lock and show stale.
-                # Genuine high-drift is corrected only via the manual
-                # "AI Re-anchor" button (user-triggered override).
-                if val < lg:
-                    log.info("oracle %09d below lock %s — holding (meter "
-                             "monotonic; likely a blurry misread)", val, lg)
-                    return
+            # ── Accept / corroborate ────────────────────────────────────────
+            # A water meter is monotonic, but the LOCK is only an estimate and
+            # can be wrong in EITHER direction (a local over-read ratchets it too
+            # high; a glare misread could read low). So:
+            #   • A small FORWARD step within the idle-aware physical ceiling is
+            #     normal real flow → accept immediately.
+            #   • ANY larger move — a big jump up OR a downward correction —
+            #     requires a SECOND oracle read to agree within ORACLE_CORROB_TOL
+            #     before it moves the lock. One-off garbage (high or low) never
+            #     repeats, so it's held as "pending"; two independent reads that
+            #     agree are trusted (this is what lets the lock self-heal back
+            #     DOWN after a local over-read, instead of being stuck high).
+            commit = False
+            if lg is None:
+                commit = True
+            else:
+                d = val - lg
+                if 0 <= d <= ceiling:
+                    commit = True                      # normal forward progress
+                else:
+                    prev = _oracle_state.get("pending_val")
+                    if prev is not None and abs(val - prev) <= ORACLE_CORROB_TOL:
+                        commit = True                  # corroborated (up or down)
+                        log.info("oracle move corroborated: %09d (lock %s, "
+                                 "prev pending %s)", val, lg, prev)
+                    else:
+                        _oracle_state["pending_val"] = val
+                        _oracle_state["pending_ts"] = now
+                        log.info("oracle %09d vs lock %s beyond physical "
+                                 "ceiling (%.0f counts, idle_gpm=%.1f) — "
+                                 "holding for 2nd confirming read",
+                                 val, lg, ceiling, _active_gpm())
+                        return
+            if not commit:
+                return
+            _oracle_state["pending_val"] = None
             if meter_reader.reanchor(val, ts=now, source="oracle"):
                 _oracle_state["reanchors"] += 1
                 cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]

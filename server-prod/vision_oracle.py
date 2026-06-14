@@ -35,41 +35,42 @@ _SYS = (
 
 def _build_hint(hint):
     """Turn a context dict into a plain-language prompt addendum that helps the
-    model disambiguate glare-garbled HIGH digits using physics it can't see in
-    the pixels: the meter is a cumulative odometer (only counts UP), so the
-    reading must be >= the last known value and <= a physical ceiling, and the
-    leading digits almost never change between reads.
+    model disambiguate glare-garbled HIGH digits using context it can't see in
+    the pixels: the leading digits almost never change between reads, so the
+    expected prefix is a strong anchor for the left side of the display.
 
-    Critical framing: the bounds are for DISAMBIGUATING glare on the high
-    digits ONLY. The low (right-hand) digits change with every gallon and must
-    be read straight from the image — never overridden by the bounds.
+    Critical framing: the prefix helps disambiguate glare on the HIGH (left)
+    digits ONLY. The reading is NOT forced to be >= the last value — the last
+    value is just a rough sanity-check, because our previous estimate can be
+    slightly off. The LOW (right-hand) digits change with every gallon and must
+    be read straight from the image — report exactly what you see, even if the
+    result is a little below the last estimate.
     """
     if not hint:
         return ""
     parts = []
     last = hint.get("last_value")
-    lo = hint.get("min_value", last)
+    lo = hint.get("min_value")
     hi = hint.get("max_value")
     prefix = hint.get("high_prefix")
     if last is not None:
         parts.append(
-            f"This meter was last read as {int(last):09d} "
-            f"({int(last) / 1000:,.3f} ft\u00b3). A water meter only counts UP and "
-            "never resets.")
+            f"For context, this meter was last estimated near {int(last):09d} "
+            f"({int(last) / 1000:,.3f} ft\u00b3); it's a cumulative odometer that "
+            "rises slowly, but that estimate may be slightly off so do not force "
+            "your answer to match it.")
     if lo is not None and hi is not None:
         parts.append(
-            f"So the true reading right now is between {int(lo):09d} and "
-            f"{int(hi):09d} — it cannot be below {int(lo):09d}.")
+            f"It is normally in the rough range {int(lo):09d}-{int(hi):09d}.")
     if prefix:
         parts.append(
             f"The leading digits are almost certainly '{prefix}' (the high "
             "digits barely move between reads); if glare makes the left side "
             "ambiguous, trust this prefix.")
     parts.append(
-        "Use these bounds ONLY to resolve glare on the LEFT/high digits. The "
+        "Use the context ONLY to resolve glare on the LEFT/high digits. The "
         "RIGHT-hand (low) digits change constantly — read those directly from "
-        "the image and report exactly what you see, even if it makes the value "
-        "larger than the last read.")
+        "the image and report exactly what you see.")
     return " ".join(parts)
 
 

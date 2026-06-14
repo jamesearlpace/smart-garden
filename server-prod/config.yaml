@@ -32,12 +32,12 @@ sensors:
 soil_calibration:
   0:
     name: Garden
-    dry: 3500
+    dry: 896
     wet: 1500
   1:
     name: Grapes
-    dry: 3500
-    wet: 1500
+    dry: 2676
+    wet: 340
   2:
     name: Fruit Trees
     dry: 3500
@@ -223,7 +223,7 @@ zones:
   name: Grapes
   type: drip
   installed: true
-  auto_mode: false
+  auto_mode: true
   heads: 1
   description: Grape vine drip
   root_depth_in: 12
@@ -282,7 +282,7 @@ billing:
     rate: 10.97
   base_fee: 34.26
   sewer_flat: 91.18
-  storm_flat: 28.72
+  storm_flat: 32.17
 weather_adjustment:
   baseline_temp_f: 60.0
   baseline_humidity_pct: 50.0
@@ -299,3 +299,40 @@ dashboard:
   host: 0.0.0.0
   threads: 16
 vacation_mode: false
+battery_calibration:
+  points:
+  - ts: '2026-06-05T15:33:15'
+    raw_v: 13.3665
+    actual_v: 13.4
+  - ts: '2026-06-05T15:34:10'
+    raw_v: 13.0449
+    actual_v: 13.4
+  - ts: '2026-06-07T13:58:19'
+    raw_v: 13.1614
+    actual_v: 13.2
+  - ts: '2026-06-07T17:15:54'
+    raw_v: 14.5236
+    actual_v: 14.5
+  - ts: '2026-06-07T17:16:04'
+    raw_v: 14.5848
+    actual_v: 14.5
+  - ts: '2026-06-07T17:16:40'
+    raw_v: 14.8283
+    actual_v: 14.6
+  - ts: '2026-06-11T16:12:39'
+    raw_v: 15.0985
+    actual_v: 14.6
+  - ts: '2026-06-11T16:13:04'
+    raw_v: 14.7319
+    actual_v: 14.7
+  - ts: '2026-06-11T16:13:58'
+    raw_v: 14.5379
+    actual_v: 14.6
+  coeffs:
+  - -49.39086338
+  - 8.30423456
+  - -0.26889601
+  degree: 2
+  rmse: 0.1171
+  model: quadratic fit (n=9)
+  updated: '2026-06-11T16:13:58'

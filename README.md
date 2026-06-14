@@ -23,18 +23,20 @@ ESP32-based irrigation controller for the Pace family smart garden.
 Valves 1-8 are controlled via the MCP23017 I/O expander over I2C (GPIO 21/22).
 Valves 9-10 are controlled directly from ESP32 GPIO 25/26 and 27/14.
 
-| Valve | MCP23017 Pin | L298N Board | Zone Name |
-|-------|-------------|-------------|-----------|
-| 1 | PA0/PA1 | Board 1 Ch A | Garden (drip) |
-| 2 | PA2/PA3 | Board 1 Ch B | Grapes (drip) |
-| 3 | PA4/PA5 | Board 2 Ch A | Fruit Trees |
-| 4 | PA6/PA7 | Board 2 Ch B | South Lawn |
-| 5 | PB0/PB1 | Board 3 Ch A | East Lawn |
-| 6 | PB2/PB3 | Board 3 Ch B | West/NW Lawn |
-| 7 | PB4/PB5 | Board 4 Ch A | NE Lawn |
-| 8 | PB6/PB7 | Board 4 Ch B | Peonies (drip) |
-| 9 | GPIO 25/26 | Board 5 Ch A | Garden (drip) |
-| 10 | GPIO 27/14 | Board 5 Ch B | Spare |
+| Valve | MCP23017 Pin | L298N Board | Zone ID | Zone Name | Type |
+|-------|-------------|-------------|---------|-----------|------|
+| 1 | PB0/PB1 | Board 3 Ch A | 0 | Front Yard A | sprinkler |
+| 2 | PB2/PB3 | Board 3 Ch B | 1 | Front Yard B | sprinkler |
+| 3 | PB4/PB5 | Board 4 Ch A | 2 | Enclosed Backyard A (fruit trees side) | sprinkler |
+| 4 | PB6/PB7 | Board 4 Ch B | 3 | Enclosed Backyard B (garden side) | sprinkler |
+| 5 | GPIO 25/26 (ESP32) | Board 5 Ch A | 4 | Southeast | sprinkler |
+| 6 | PA0/PA1 | Board 1 Ch A | 5 | South | sprinkler |
+| 7 | PA6/PA7 | Board 2 Ch B | 6 | Southwest | sprinkler |
+| 8 | PA4/PA5 | Board 2 Ch A | 7 | Garden | drip (disabled) |
+| 9 | PA2/PA3 | Board 1 Ch B | 8 | Grapes | drip (uninstalled) |
+| 10 | GPIO 27/14 (ESP32) | Board 5 Ch B | 9 | Spare | (unused) |
+
+> **Note:** Valves were physically reshuffled during install — see `// was valve X` comments in `src/config.h`. The dropdown / UI uses **Zone N = id + 1** (Zone 1 → id 0 → Valve 1). Garden + Grapes are currently `installed: false` in config.yaml; the server skips them. Re-enable by flipping the flag and (for drip) re-adding the id to `evening_zones`.
 
 ### Power Gate
 MOSFET power gate on GPIO 2 controls 12V to all L298N boards.

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow & Leaks — Smart Garden</title>
+<style>
+:root{
+  --bg:#f5f7f9; --card:#fff; --border:#e8ecf0; --text:#1a2b3c; --text2:#5f7082;
+  --green:#22c55e; --blue:#3b82f6; --amber:#f59e0b; --red:#ef4444;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}
+h1{font-size:1.4rem;margin-bottom:4px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+h2{font-size:1.05rem;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.zone{border:1px solid var(--border);border-radius:10px;padding:12px}
+.zone .nm{font-weight:600;font-size:.95rem}
+.zone .gpm{font-size:1.7rem;font-weight:700;margin:4px 0}
+.zone .meta{font-size:.74rem;color:var(--text2);line-height:1.5}
+.pill{display:inline-block;font-size:.66rem;padding:1px 7px;border-radius:20px;font-weight:600}
+.pill.spr{background:#dbeafe;color:#1d4ed8}.pill.drip{background:#dcfce7;color:#15803d}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--text2);font-weight:600;position:sticky;top:0;background:var(--card)}
+.scroll{max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:10px}
+.banner{padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:.9rem}
+.banner.ok{background:rgba(34,197,94,.1);color:#15803d;border:1px solid #bbf7d0}
+.banner.warn{background:rgba(245,158,11,.12);color:#b45309;border:1px solid #fde68a}
+.banner.urgent{background:rgba(239,68,68,.12);color:#b91c1c;border:1px solid #fecaca;font-weight:600}
+.muted{color:var(--text2)}
+.s-idle{color:var(--text2)}.s-zone{color:var(--green)}.s-unexplained,.s-highflow{color:var(--red);font-weight:600}
+.s-gap{color:var(--amber)}.s-multi{color:var(--blue)}
+.ev{padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:.84rem;border:1px solid var(--border)}
+.ev.urgent{background:rgba(239,68,68,.08);border-color:#fecaca}
+.ev.warning{background:rgba(245,158,11,.08);border-color:#fde68a}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+button{font:inherit;padding:5px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer}
+</style>
+</head>
+<body>
+  <div class="row">
+    <div><h1>💧 Flow & Leak Monitor</h1>
+      <div class="sub">Per-zone GPM learned from the real meter · leak & overrun detection · <a href="/">← Dashboard</a> · <a href="/costs">Costs</a></div>
+    </div>
+    <button onclick="load()">↻ Refresh</button>
+  </div>
+
+  <div id="banner" class="banner ok">Loading…</div>
+
+  <div class="card">
+    <h2>Per-Zone Flow Rate (gal/min)</h2>
+    <div class="muted" style="font-size:.78rem;margin-bottom:10px">
+      Measured from actual metered flow while each zone ran alone. <b>Measured</b> is a recency-weighted
+      estimate (latest runs count more, so a drip line gaining emitters is tracked); <b>median</b> is the
+      stable cross-check. Falls back to the configured estimate until a zone has run under the meter.
+    </div>
+    <div id="zones" class="grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>Alerts & Events</h2>
+    <div id="events"></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw Flow Log <span class="muted" style="font-size:.78rem">(every ~15s — for troubleshooting)</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>Register ft³</th><th>Δ ft³</th><th>Int</th><th>gal/min</th><th>Zones On</th><th>State</th><th>Note</th></tr></thead>
+        <tbody id="samples"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function fmtTime(iso){try{return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit'})}catch(e){return iso}}
+
+function load(){
+  fetch('/api/flow?samples=150').then(r=>r.json()).then(d=>{
+    // Banner
+    var open=d.open_events||[];
+    var b=document.getElementById('banner');
+    if(open.length){
+      var urgent=open.some(e=>e.severity==='urgent');
+      b.className='banner '+(urgent?'urgent':'warn');
+      b.innerHTML=(urgent?'🚨 ':'⚠️ ')+open.map(e=>esc(e.note||e.kind)+(e.peak_gpm?(' ('+e.peak_gpm.toFixed(2)+' gpm)'):'')).join(' · ');
+    } else {
+      b.className='banner ok'; b.textContent='✓ No active leaks or anomalies. Water flow looks normal.';
+    }
+    // Zones
+    document.getElementById('zones').innerHTML=(d.zones||[]).map(z=>{
+      var measured = z.measured_gpm!=null ? z.measured_gpm.toFixed(2) : null;
+      var shown = measured!=null ? measured : (z.config_gpm!=null? z.config_gpm.toFixed(2):'—');
+      var src = measured!=null ? 'measured' : 'config (not yet measured)';
+      var typ = z.type==='drip' ? '<span class="pill drip">drip</span>' : '<span class="pill spr">sprinkler</span>';
+      return '<div class="zone"><div class="nm">'+esc(z.name)+' '+typ+'</div>'+
+        '<div class="gpm">'+shown+'<span style="font-size:.7rem;font-weight:500;color:var(--text2)"> gpm</span></div>'+
+        '<div class="meta">'+src+'<br>'+
+        (z.median_gpm!=null?('median '+z.median_gpm.toFixed(2)+' · '):'')+
+        (z.last_run_gpm!=null?('last run '+z.last_run_gpm.toFixed(2)+' · '):'')+
+        'runs '+(z.n_runs||0)+' · config '+(z.config_gpm!=null?z.config_gpm:'—')+
+        (z.last_updated?('<br>updated '+fmtTime(z.last_updated)):'')+'</div></div>';
+    }).join('') || '<div class="muted">No zones configured.</div>';
+    // Events
+    document.getElementById('events').innerHTML=(d.events||[]).slice(0,12).map(e=>{
+      var when=fmtTime(e.start_ts)+(e.end_ts?(' → '+fmtTime(e.end_ts)):' (ongoing)');
+      var g=e.gallons?(' · '+e.gallons.toFixed(1)+' gal'):'';
+      var pk=e.peak_gpm?(' · peak '+e.peak_gpm.toFixed(2)+' gpm'):'';
+      return '<div class="ev '+esc(e.severity||'')+'"><b>'+esc((e.kind||'').toUpperCase())+'</b> — '+esc(e.note||'')+
+        '<div class="muted" style="font-size:.74rem">'+when+g+pk+(e.resolved?' · resolved':'')+'</div></div>';
+    }).join('') || '<div class="muted">No events yet — leaks, overruns and high-flow anomalies will appear here.</div>';
+    // Samples
+    document.getElementById('samples').innerHTML=(d.samples||[]).map(s=>
+      '<tr><td>'+fmtTime(s.ts)+'</td><td>'+(s.reading_cf!=null?s.reading_cf.toLocaleString():'—')+'</td>'+
+      '<td>'+(s.delta_cf!=null?s.delta_cf.toFixed(3):'—')+'</td><td>'+(s.interval_s||'')+'s</td>'+
+      '<td>'+(s.gpm!=null?s.gpm.toFixed(2):'—')+'</td><td>'+esc(s.active_zones||'—')+'</td>'+
+      '<td class="s-'+esc(s.state)+'">'+esc(s.state)+'</td><td class="muted">'+esc(s.note||'')+'</td></tr>'
+    ).join('') || '<tr><td colspan="8" class="muted">No samples yet.</td></tr>';
+  }).catch(e=>{document.getElementById('banner').className='banner warn';document.getElementById('banner').textContent='Failed to load: '+e});
+}
+load(); setInterval(load, 15000);
+</script>
+</body>
+</html>

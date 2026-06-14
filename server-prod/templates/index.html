@@ -358,8 +358,7 @@ a{color:var(--blue);text-decoration:none}
 
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
-  .main{margin-left:0;padding:16px 16px 80px}
-  .mobile-nav{display:block}
+  .main{margin-left:0;padding:16px 16px calc(84px + env(safe-area-inset-bottom,0))}
   .stats-row{grid-template-columns:repeat(2,1fr);gap:10px}
   .zone-grid{grid-template-columns:1fr}
   .schedule-grid{grid-template-columns:repeat(7,minmax(44px,1fr));gap:4px}
@@ -450,6 +449,8 @@ a{color:var(--blue);text-decoration:none}
     <div class="nav-item" data-panel="settings"><span class="icon">⚙️</span> Settings</div>
     <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
     <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Schedule</a>
+    <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💵</span> Water Cost</a>
+    <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Flow &amp; Leaks</a>
     <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🎛️</span> Calibrate</a>
     <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
     <div class="nav-item" data-panel="deer"><span class="icon">🦌</span> Deer Repellent</div>
@@ -2020,6 +2021,7 @@ a{color:var(--blue);text-decoration:none}
       <span class="aside">
         <button id="cam-live-btn" onclick="camToggleLive()" class="btn" style="font-size:.78rem;padding:4px 12px">⚡ Live View</button>
         <button onclick="camToggleFlash()" class="btn" style="font-size:.78rem;padding:4px 12px">💡 Flash</button>
+        <button id="cam-reanchor-btn" onclick="camReanchor()" class="btn" style="font-size:.78rem;padding:4px 12px" title="Ask GPT-4o vision to read the meter and reset the lock to the true value">🤖 AI Re-anchor</button>
       </span>
     </div>
 
@@ -2027,8 +2029,13 @@ a{color:var(--blue);text-decoration:none}
       <div style="margin-bottom:8px">
         <span id="cam-status" style="color:var(--green);font-size:.85rem">● Live — refreshing every 5s</span>
       </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;font-size:.78rem;color:var(--text2)">
+        <span>Size</span>
+        <input id="cam-size" type="range" min="120" max="600" step="20" value="240"
+               oninput="camSetSize(this.value)" style="width:160px;vertical-align:middle">
+      </div>
       <img id="cam-img" alt="Waiting for first image..."
-           style="max-width:100%;border-radius:8px;border:2px solid var(--border);cursor:pointer"
+           style="max-width:100%;max-height:240px;border-radius:8px;border:2px solid var(--border);cursor:pointer;transform:rotate(180deg)"
            onclick="window.open('/api/cam/latest?t='+Date.now(),'_blank')">
       <div id="cam-ts" style="margin-top:6px;font-size:.78rem;color:var(--text2)"></div>
     </div>
@@ -2042,17 +2049,47 @@ a{color:var(--blue);text-decoration:none}
       <table style="width:100%;font-size:.8rem;border-collapse:collapse">
         <thead>
           <tr style="text-align:left;border-bottom:2px solid var(--border);position:sticky;top:0;background:var(--bg)">
-            <th style="padding:8px 10px">Time</th>
+            <th style="padding:8px 10px" title="When OCR finished / row rendered">Processed</th>
+            <th style="padding:8px 10px" title="When the cam captured this frame">Captured</th>
+            <th style="padding:8px 10px" title="Time since the previous frame was captured — should be ~5s">Gap</th>
+            <th style="padding:8px 10px" title="Processed minus Captured — how far behind real-time">Lag</th>
+            <th style="padding:8px 10px" title="Frames still buffered when this one was processed">Q</th>
             <th style="padding:8px 10px">Reading</th>
-            <th style="padding:8px 10px">Δ</th>
+            <th style="padding:8px 10px" title="What the OCR digit-model thinks this single frame reads (with fit score), before validation — may differ from the committed Reading">OCR Guess</th>
+            <th style="padding:8px 10px" title="Total cubic feet (decimal 3 from right)">ft³</th>
+            <th style="padding:8px 10px" title="Total gallons (1 ft³ = 7.48 gal)">Gallons</th>
+            <th style="padding:8px 10px" title="Change in cubic feet since previous reading">Δ ft³</th>
+            <th style="padding:8px 10px" title="Change in gallons since previous reading">Δ gal</th>
+            <th style="padding:8px 10px" title="Flow rate (gal/min) averaged over real elapsed time since the value last changed">gal/min</th>
+            <th style="padding:8px 10px" title="raw = an actual OCR frame; derived = evenly-distributed estimate filling a blind gap">Kind</th>
             <th style="padding:8px 10px">Conf</th>
+            <th style="padding:8px 10px" title="Why this reading was kept/rejected">Note</th>
             <th style="padding:8px 10px">Raw OCR</th>
           </tr>
         </thead>
         <tbody id="cam-readings-body">
-          <tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings…</td></tr>
+          <tr><td colspan="16" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings…</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="section-header" style="margin-top:20px"><h2>🧠 Training Data</h2>
+      <span class="aside" style="font-size:.78rem;color:var(--text2)">
+        <span id="cam-train-stats">—</span>
+        <button onclick="camLoadTraining()" class="btn" style="font-size:.74rem;padding:3px 10px;margin-left:8px">↻ Refresh</button>
+      </span>
+    </div>
+    <div class="card" style="padding:12px">
+      <div style="font-size:.78rem;color:var(--text2);margin-bottom:10px;line-height:1.5">
+        Auto-labeled samples banked when the reading is high-confidence. The
+        filename label is the validator's read; <b>green</b> = the raw OCR guess
+        agreed with it (most trustworthy), <b>amber</b> = label came from the
+        physics/odometer logic without raw agreement (review these). These build
+        the dataset for a future custom per-digit model.
+      </div>
+      <div id="cam-train-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
+        <div style="color:var(--text2);font-size:.8rem">Loading…</div>
+      </div>
     </div>
   </div>
 
@@ -5656,35 +5693,23 @@ function cfgSave() {
 </script>
 
 <!-- ═══ Mobile Bottom Navigation (must be last element in body for reliable position:fixed) ═══ -->
-<div class="mobile-nav">
-  <div class="mobile-nav-inner">
-    <div class="mob-nav-item active" data-panel="home"><span class="mob-icon">🏠</span>Home</div>
-    <div class="mob-nav-item" data-panel="zones"><span class="mob-icon">🌿</span>Zones</div>
-    <div class="mob-nav-item" data-panel="history"><span class="mob-icon">📊</span>History</div>
-    <div class="mob-nav-item" data-panel="settings"><span class="mob-icon">⚙️</span>Settings</div>
-    <a href="/forecast" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🌧️</span>Forecast</a>
-    <a href="/moisture-sim" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">💧</span>Schedule</a>
-    <a href="/calibrate" class="mob-nav-item" style="text-decoration:none;color:inherit"><span class="mob-icon">🎛️</span>Calibrate</a>
-    <div class="mob-nav-item" data-panel="cam"><span class="mob-icon">📷</span>Cam</div>
-    <div class="mob-nav-item" data-panel="deer"><span class="mob-icon">🦌</span>Deer</div>
-  </div>
-</div>
+{% include '_mobilenav.html' %}
 <script>
-// Re-bind mobile nav click handlers (nav is after main script)
-document.querySelectorAll('.mob-nav-item[data-panel]').forEach(function(item) {
-  item.addEventListener('click', function() { showPanel(item.dataset.panel); });
-});
-// Force mobile nav visible after chart rendering (history page has 20+ charts that hammer the DOM)
-var _origShow = showPanel;
-showPanel = function(id) {
-  _origShow(id);
-  if (id === 'history' && window.innerWidth <= 768) {
-    setTimeout(function() {
-      var nav = document.querySelector('.mobile-nav');
-      if (nav) { nav.style.display = 'block'; nav.style.visibility = 'visible'; }
-    }, 500);
+// Keep the bottom nav visible after the history panel renders its many charts.
+(function() {
+  var _origShow = window.showPanel;
+  if (typeof _origShow === 'function') {
+    window.showPanel = function(id) {
+      _origShow(id);
+      if (id === 'history' && window.innerWidth <= 768) {
+        setTimeout(function() {
+          var nav = document.querySelector('.sg-mobilenav');
+          if (nav) { nav.style.display = 'block'; nav.style.visibility = 'visible'; }
+        }, 500);
+      }
+    };
   }
-};
+})();
 </script>
 
 <!-- ═══ Water Meter Cam JS ═══ -->
@@ -5697,6 +5722,27 @@ function camToggleFlash() {
   fetch('/api/cam/flash', {method:'POST'}).then(function(r){return r.json()}).then(function(d){
     // brief flash status
   }).catch(function(){});
+}
+
+function camReanchor() {
+  var btn = document.getElementById('cam-reanchor-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '🤖 Reading…'; }
+  fetch('/api/cam/reanchor', {method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Re-anchor'; }
+    if (d.ok && d.value != null) {
+      var v = String(d.value).padStart(9,'0');
+      var disp = v.slice(0,6) + '.' + v.slice(6);
+      alert('GPT-4o read: ' + disp + ' ft³ (' + d.confidence + ')\n' +
+            (d.reanchored ? 'Lock re-anchored ✓' : 'Not applied (low conf or implausible)') +
+            '\n~' + (d.cost_tokens||0) + ' tokens');
+      camRefresh();
+    } else {
+      alert('AI re-anchor failed: ' + (d.error || 'unreadable'));
+    }
+  }).catch(function(e){
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Re-anchor'; }
+    alert('AI re-anchor error: ' + e);
+  });
 }
 
 // ⚡ Live View: rapidly poll /api/cam/capture (fresh frames, NO OCR/recording).
@@ -5743,20 +5789,88 @@ function camLiveLoop(seq) {
   next.src = '/api/cam/capture?t=' + Date.now();
 }
 
+function camSetSize(px) {
+  var img = document.getElementById('cam-img');
+  if (img) img.style.maxHeight = px + 'px';
+  try { localStorage.setItem('camImgSize', px); } catch (e) {}
+}
+(function camRestoreSize() {
+  try {
+    var saved = localStorage.getItem('camImgSize');
+    if (!saved) return;
+    var img = document.getElementById('cam-img');
+    var sl = document.getElementById('cam-size');
+    if (img) img.style.maxHeight = saved + 'px';
+    if (sl) sl.value = saved;
+  } catch (e) {}
+})();
+
 function camRefresh() {
   if (camLiveOn) return;  // live loop owns the image while active
   var panel = document.getElementById('p-cam');
   if (!panel || !panel.classList.contains('active')) return;
   var img = document.getElementById('cam-img');
   var ts = document.getElementById('cam-ts');
-  var newImg = new Image();
-  newImg.onload = function() {
-    img.src = newImg.src;
-    ts.textContent = 'Last image: ' + new Date().toLocaleTimeString();
-  };
-  newImg.src = '/api/cam/latest?t=' + Date.now();
+  // Fetch via fetch() so we can read the X-Capture-Time header (the REAL time
+  // the cam captured this frame). The image can be old if OCR is backed up, so
+  // never show the browser's clock as if it were the capture time.
+  fetch('/api/cam/latest?t=' + Date.now()).then(function(r){
+    var cap = r.headers.get('X-Capture-Time');
+    return r.blob().then(function(b){ return {blob: b, cap: cap}; });
+  }).then(function(o){
+    var url = URL.createObjectURL(o.blob);
+    var newImg = new Image();
+    newImg.onload = function() {
+      if (img.src && img.src.indexOf('blob:') === 0) URL.revokeObjectURL(img.src);
+      img.src = url;
+      if (ts) {
+        if (o.cap) {
+          var capDt = new Date(o.cap);
+          var age = Math.round((Date.now() - capDt.getTime())/1000);
+          var ageStr = age < 60 ? age + 's ago'
+                     : Math.floor(age/60) + 'm ' + (age%60) + 's ago';
+          var col = age >= 30 ? 'var(--red)' : (age >= 10 ? 'var(--amber)' : 'var(--text2)');
+          ts.innerHTML = 'Captured: ' + capDt.toLocaleTimeString() +
+                         ' <span style="color:' + col + '">(' + ageStr + ')</span>';
+        } else {
+          ts.textContent = 'Captured: (unknown)';
+        }
+      }
+    };
+    newImg.src = url;
+  }).catch(function(){});
   // Also refresh readings table
   camLoadReadings();
+}
+
+function camLoadTraining() {
+  fetch('/api/cam/training?limit=60').then(function(r){return r.json()}).then(function(d){
+    var grid = document.getElementById('cam-train-grid');
+    var stats = document.getElementById('cam-train-stats');
+    if (stats) {
+      var shown = (d.samples||[]);
+      var agree = shown.filter(function(s){return s.agree===true}).length;
+      stats.textContent = (d.total||0) + ' samples (cap ' + (d.max||0) + ') · ' +
+                          agree + '/' + shown.length + ' OCR-agreed shown';
+    }
+    if (!grid) return;
+    if (!d.samples || !d.samples.length) {
+      grid.innerHTML = '<div style="color:var(--text2);font-size:.8rem">No samples banked yet — they appear as high-confidence reads happen.</div>';
+      return;
+    }
+    grid.innerHTML = d.samples.map(function(s) {
+      var border = s.agree === true ? 'var(--green)' : 'var(--amber)';
+      var lbl = String(s.label||'');
+      var disp = lbl.length === 9 ? (lbl.slice(0,6) + '.' + lbl.slice(6)) : lbl;
+      return '<div style="border:2px solid ' + border + ';border-radius:8px;overflow:hidden;background:var(--bg)">' +
+        '<img src="/api/cam/training/img/' + encodeURIComponent(s.file) + '" ' +
+        'style="width:100%;display:block;transform:rotate(180deg)" loading="lazy">' +
+        '<div style="padding:5px 7px;font-family:monospace;font-size:.78rem;font-weight:bold">' + esc(disp) + ' <span style="font-size:.62rem;color:var(--text2)">ft\u00b3</span></div>' +
+        (s.ocr_guess && s.ocr_guess !== s.label ?
+          '<div style="padding:0 7px 5px;font-size:.62rem;color:var(--amber)">OCR: ' + esc(s.ocr_guess) + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }).catch(function(e){ console.error('Training load error:', e); });
 }
 
 function camLoadReadings() {
@@ -5774,22 +5888,102 @@ function camLoadReadings() {
     status.textContent = 'Orientation: ' + orient + ' | Avg \u0394: ' + (d.avg_rate || 0).toFixed(4);
 
     if (!d.readings || !d.readings.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings\u2026</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="16" style="padding:12px;text-align:center;color:var(--text2)">Waiting for readings\u2026</td></tr>';
       return;
     }
 
-    tbody.innerHTML = d.readings.map(function(r) {
+    tbody.innerHTML = d.readings.map(function(r, _ri) {
       var c = r.confidence === 'high' ? 'var(--green)' :
               r.confidence === 'medium' ? 'var(--amber)' :
               r.confidence === 'low' ? 'var(--red)' : 'var(--text2)';
       var raw = String(r.raw_n || r.raw_f || r.error || '');
       if (raw.length > 40) raw = raw.substring(0,40) + '\u2026';
-      return '<tr style="border-bottom:1px solid var(--border)">' +
+      // Highlight high lag (reading is stale) in amber/red
+      var lagNum = parseFloat(r.lag);
+      var lagColor = 'var(--text2)';
+      if (!isNaN(lagNum)) {
+        if (lagNum >= 30) lagColor = 'var(--red)';
+        else if (lagNum >= 10) lagColor = 'var(--amber)';
+      }
+      // Highlight positive water-usage deltas in green so a run stands out
+      var dft3 = parseFloat(r.delta_ft3);
+      var dColor = (!isNaN(dft3) && dft3 > 0) ? 'var(--green)' : 'var(--text2)';
+      // Display-delta fallback: the engine only fills Δ on a CONFIRMED high-conf
+      // advance, so "hold"/"stale" rows show a blank Δ even though the shown
+      // reading climbed (e.g. caught up from ≥094012120 to 094012171). When the
+      // engine left Δ blank, derive it from the change in the DISPLAYED reading
+      // vs the previous (older) row so the Δ column always tracks what the eye
+      // sees. Purely presentational — does NOT touch the OCR lock, rate, banking
+      // or oracle. The "rate" (gal/min) column stays engine-only (needs real
+      // timing). parseShownFt3 strips the "≥" prefix and thousands commas.
+      var dispDeltaFt3 = '\u2014', dispDeltaGal = '\u2014';
+      function parseShownFt3(v) {
+        if (v == null) return NaN;
+        return parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+      }
+      if (isNaN(dft3) || (r.delta_ft3 == null || r.delta_ft3 === '\u2014')) {
+        var older = d.readings[_ri + 1];
+        if (older) {
+          var cur = parseShownFt3(r.reading_ft3);
+          var prv = parseShownFt3(older.reading_ft3);
+          if (!isNaN(cur) && !isNaN(prv)) {
+            var dd = cur - prv;
+            if (dd > 0.0004) {
+              dispDeltaFt3 = '+' + dd.toFixed(3);
+              dispDeltaGal = '+' + (dd * 7.48052).toFixed(1);
+              dColor = 'var(--green)';
+            }
+          }
+        }
+      }
+      // Final Δ values to render: engine value when it provided one, else the
+      // display-derived fallback computed above.
+      var showDeltaFt3 = (r.delta_ft3 != null && r.delta_ft3 !== '\u2014') ? r.delta_ft3 : dispDeltaFt3;
+      var showDeltaGal = (r.delta_gal != null && r.delta_gal !== '\u2014') ? r.delta_gal : dispDeltaGal;
+      // Highlight a capture gap that isn't ~5s (cam stalled / dropped frames)
+      var gapNum = parseFloat(r.gap);
+      var gapColor = 'var(--text2)';
+      if (!isNaN(gapNum)) {
+        if (gapNum >= 12 || gapNum < 3) gapColor = 'var(--red)';
+        else if (gapNum >= 7) gapColor = 'var(--amber)';
+      }
+      // Derived (back-fill) rows are estimates filling a blind gap: dim + italic.
+      var isDerived = r.kind === 'derived';
+      var rowStyle = isDerived
+        ? 'border-bottom:1px solid var(--border);font-style:italic;opacity:.65;background:rgba(255,255,255,.02)'
+        : 'border-bottom:1px solid var(--border)';
+      var kindLabel = isDerived ? 'derived' : 'raw';
+      var kindColor = isDerived ? 'var(--amber)' : 'var(--text2)';
+      // Stale rows: the meter has moved up but we can't read it, so the shown
+      // value is only a lower bound. Prefix "≥", dim, and color the conf amber
+      // so a stale number is never mistaken for a confirmed current reading.
+      var isStale = r.stale === true;
+      if (isStale) {
+        rowStyle = 'border-bottom:1px solid var(--border);opacity:.7;background:rgba(255,180,0,.05)';
+      }
+      var readingDisp = (isStale ? '≥ ' : '') + esc(r.reading);
+      var ft3Disp = (isStale ? '≥ ' : '') + esc(r.reading_ft3 || '\u2014');
+      var galDisp = (isStale ? '≥ ' : '') + esc(r.reading_gal || '\u2014');
+      var confColor = isStale ? 'var(--amber)' : c;
+      var ridAttr = r.id ? ' onclick="location.href=\'/cam/reading/' + encodeURIComponent(r.id) + '\'" title="Click to inspect this reading + its captured image"' : '';
+      var clickStyle = r.id ? 'cursor:pointer;' : '';
+      return '<tr style="' + clickStyle + rowStyle + '"' + ridAttr + '>' +
         '<td style="padding:4px 8px;white-space:nowrap">' + esc(r.ts) + '</td>' +
-        '<td style="padding:4px 8px;font-family:monospace;font-weight:bold">' + esc(r.reading) + '</td>' +
-        '<td style="padding:4px 8px;font-family:monospace">' + esc(r.delta) + '</td>' +
-        '<td style="padding:4px 8px;color:' + c + '">' + esc(r.confidence) + '</td>' +
-        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(raw) + '</td>' +
+        '<td style="padding:4px 8px;white-space:nowrap;color:var(--text2)">' + esc(r.captured || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:' + gapColor + '">' + esc(r.gap || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:' + lagColor + '">' + esc(r.lag || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:var(--text2)">' + esc(String(r.queue != null ? r.queue : '\u2014')) + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;font-weight:bold">' + readingDisp + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;font-size:.72rem;color:var(--text2)">' + esc(r.ocr_guess || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace">' + ft3Disp + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace">' + galDisp + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:' + dColor + '">' + esc(showDeltaFt3 || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:' + dColor + '">' + esc(showDeltaGal || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-family:monospace;color:' + dColor + '">' + esc(r.rate || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;font-size:.72rem;color:' + kindColor + '">' + kindLabel + '</td>' +
+        '<td style="padding:4px 8px;color:' + confColor + '">' + esc(r.confidence) + '</td>' +
+        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2)">' + esc(r.note || '') + '</td>' +
+        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(raw) + '</td>' +
         '</tr>';
     }).join('');
   }).catch(function(e){ console.error('Readings error:', e); });
@@ -5802,6 +5996,7 @@ showPanel = function(id) {
   if (id === 'cam') {
     camRefresh();
     if (!camInterval) camInterval = setInterval(camRefresh, 5000);
+    camLoadTraining();
   } else {
     if (camInterval) { clearInterval(camInterval); camInterval = null; }
     // Leaving the panel cancels live view so it doesn't poll in the background.

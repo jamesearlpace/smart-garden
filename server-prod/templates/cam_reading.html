@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading detail — Smart Garden</title>
+<style>
+:root{
+  --bg:#f5f7f9; --card:#fff; --border:#e8ecf0; --text:#1a2b3c; --text2:#5f7082;
+  --green:#22c55e; --blue:#3b82f6; --amber:#f59e0b; --red:#ef4444;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:880px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+h2{font-size:1.0rem;margin-bottom:10px}
+.imgwrap{text-align:center;background:#11181f;border-radius:10px;padding:8px}
+.imgwrap img{max-width:100%;border-radius:6px;transform:rotate(180deg)}
+.imgnote{color:var(--text2);font-size:.78rem;margin-top:8px;text-align:center}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--text2);font-weight:600;width:42%;white-space:nowrap}
+td{font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace}
+.big{font-size:1.9rem;font-weight:700;font-family:ui-monospace,monospace;letter-spacing:1px}
+.pill{display:inline-block;font-size:.7rem;padding:2px 9px;border-radius:20px;font-weight:600}
+.c-high{background:#dcfce7;color:#15803d}.c-medium{background:#fef3c7;color:#b45309}
+.c-low,.c-stale{background:#fee2e2;color:#b91c1c}.c-none{background:#eef2f6;color:#5f7082}
+.muted{color:var(--text2)}
+.back{display:inline-block;margin-bottom:14px;font-size:.85rem}
+.warn{background:rgba(245,158,11,.1);border:1px solid #fde68a;color:#b45309;padding:10px 12px;border-radius:10px;font-size:.85rem;margin-bottom:14px}
+.kv-hi{color:var(--green);font-weight:600}
+</style>
+</head>
+<body>
+<a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
+<h1>Reading detail</h1>
+<div class="sub" id="sub">Loading record {{ rid }}&hellip;</div>
+
+<div id="content"></div>
+
+<script>
+var RID = {{ rid|tojson }};
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+// Human labels + order for the field dump (mirrors the live table columns).
+var FIELDS = [
+  ['ts','Processed (server time)'],
+  ['captured','Captured (cam time)'],
+  ['gap','Gap since prev frame'],
+  ['lag','Lag (processed − captured)'],
+  ['queue','Queue depth'],
+  ['reading','Reading (9-digit)'],
+  ['reading_ft3','Reading ft³'],
+  ['reading_gal','Reading gallons'],
+  ['ocr_guess','OCR guess (per-frame)'],
+  ['delta','Δ counts'],
+  ['delta_ft3','Δ ft³'],
+  ['delta_gal','Δ gallons'],
+  ['rate','Flow rate (gal/min)'],
+  ['kind','Kind'],
+  ['confidence','Confidence'],
+  ['stale','Stale (lower bound)'],
+  ['raw_low_match','Raw low-5 match'],
+  ['note','Note'],
+  ['raw_n','Raw OCR text'],
+  ['orientation','Orientation'],
+  ['error','Error'],
+  ['id','Record id'],
+];
+
+fetch('/api/cam/reading/' + encodeURIComponent(RID))
+  .then(function(r){ if(!r.ok) throw new Error('not found'); return r.json(); })
+  .then(function(d){
+    var e = d.entry || {};
+    var stalePrefix = e.stale === true ? '≥ ' : '';
+    document.getElementById('sub').innerHTML =
+      'Captured <b>' + esc(e.captured) + '</b> · processed <b>' + esc(e.ts) + '</b> · lag ' + esc(e.lag);
+
+    var rows = FIELDS.map(function(f){
+      var k = f[0], lbl = f[1];
+      if (!(k in e)) return '';
+      var v = e[k];
+      var cls = '';
+      if (k === 'confidence') {
+        v = '<span class="pill c-' + esc(e.confidence) + '">' + esc(e.confidence) + '</span>';
+      } else if ((k === 'delta_ft3' || k === 'delta_gal') && typeof e[k] === 'string' && e[k].indexOf('+') === 0) {
+        cls = 'kv-hi';
+      } else {
+        v = esc(v);
+      }
+      return '<tr><th>' + esc(lbl) + '</th><td class="' + cls + '">' + v + '</td></tr>';
+    }).join('');
+
+    var imgHtml = d.has_frame
+      ? '<div class="imgwrap"><img src="/api/cam/frame/' + encodeURIComponent(RID) + '" alt="captured frame"></div>'
+        + '<div class="imgnote">This is the exact frame the OCR processed for this row (rotated 180° to match the meter).</div>'
+      : '<div class="warn">No saved frame for this record. Frames are kept for the most recent ~720 readings (~1 hour); older ones are pruned. Derived/back-fill rows never have a frame.</div>';
+
+    document.getElementById('content').innerHTML =
+      '<div class="card"><h2>Captured image</h2>' + imgHtml + '</div>'
+      + '<div class="card"><h2>Reading</h2>'
+      + '<div class="big">' + stalePrefix + esc(e.reading_ft3) + ' <span class="muted" style="font-size:.8rem">ft³</span></div>'
+      + '<div class="muted">' + stalePrefix + esc(e.reading_gal) + ' gallons · raw OCR “' + esc(e.reading) + '”</div></div>'
+      + '<div class="card"><h2>All fields</h2><table>' + rows + '</table></div>';
+  })
+  .catch(function(){
+    document.getElementById('sub').textContent = 'Record ' + RID + ' not found.';
+    document.getElementById('content').innerHTML =
+      '<div class="warn">This reading is no longer in memory (the live table keeps the most recent ~4000 rows). Open a record from the current table to inspect it.</div>';
+  });
+</script>
+</body>
+</html>

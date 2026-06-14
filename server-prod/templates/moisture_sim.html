@@ -969,7 +969,14 @@ function generateRealData2026(zoneId, liveData, actualWaterings) {
           // Minutes still available under the cap (max 15 per step)
           var minutesThisStep = Math.min(15, zone.maxRuntimeMin - minutesWateredToday);
           var fracOfStep = minutesThisStep / 15;
-          var waterTarget = Math.min(100, madPct + 20);
+          // Refill to FIELD CAPACITY (100%), matching the real engine: it runs
+          // max_runtime_min and the balance fills to TAW. The minutesWateredToday
+          // cap above is the real limiter on how much water a single morning cycle
+          // adds. The old `madPct + 20` ceiling capped the projected refill at a
+          // shallow ~70% top-off, so summer ET (~20%/day of the 0.9" bucket) drained
+          // it below MAD again the very next morning — making the forecast falsely
+          // predict DAILY watering when the engine actually deep-soaks every ~2-3 days.
+          var waterTarget = 100;
           var waterPerStep = (zone.precipRate / 4) * (100 / bucketIn) * fracOfStep;
           if (moisture + waterPerStep > waterTarget) waterPerStep = waterTarget - moisture;
           moisture += waterPerStep;
@@ -3253,20 +3260,7 @@ loadSeasonalOutlook();
 
 </div><!-- /.main -->
 
-<!-- ═══ Mobile bottom nav ═══ -->
-<div class="mobile-nav">
-  <div class="mobile-nav-inner">
-    <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
-    <a href="/#zones" class="mob-nav-item"><span class="mob-icon">🌿</span>Zones</a>
-    <a href="/map" class="mob-nav-item"><span class="mob-icon">🗺️</span>Map</a>
-    <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
-    <a href="/#settings" class="mob-nav-item"><span class="mob-icon">⚙️</span>Settings</a>
-    <a href="/forecast" class="mob-nav-item"><span class="mob-icon">🌧️</span>Forecast</a>
-    <a href="/moisture-sim" class="mob-nav-item active"><span class="mob-icon">💧</span>Schedule</a>
-    <a href="/calibrate" class="mob-nav-item"><span class="mob-icon">🎛️</span>Calibrate</a>
-    <a href="/#cam" class="mob-nav-item"><span class="mob-icon">📷</span>Cam</a>
-  </div>
-</div>
+{% include '_mobilenav.html' %}
 
 </body>
 </html>

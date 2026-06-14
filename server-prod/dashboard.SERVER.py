@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests as http_requests
 import yaml
@@ -21,7 +21,6 @@ from flask import make_response, Response, Flask, render_template, request, json
 import database as db
 from irrigation import ESP32_MANUAL_TIMEOUT
 from cam_ocr import MeterReader
-import cam_ocr
 import seasonal
 
 log = logging.getLogger("smart-garden")
@@ -345,11 +344,6 @@ def create_app(config, engine, weather, billing):
     @app.route("/forecast")
     def forecast_page():
         return render_template("forecast_merged.html")
-
-    @app.route("/sensor-history")
-    def sensor_history_page():
-        """Dedicated soil-sensor history page (raw + calibrated %, per sensor)."""
-        return render_template("sensor_history.html")
 
     @app.route("/api/seasonal-outlook")
     def api_seasonal_outlook():
@@ -1341,72 +1335,6 @@ def create_app(config, engine, weather, billing):
         budget = billing.should_tighten_budget()
         return jsonify({"bill": bill, "savings": savings, "budget": budget})
 
-    # ── Water Cost page (real meter usage from the cam) ───────────────────
-    # Isolated from the cam pipeline: reads `meter_reader.last_good` only and
-    # owns its own meter_snapshot table via the water_cost module. Safe to edit
-    # alongside cam work — touches no cam routes or OCR state.
-    import water_cost
-    _water_cost_ready = {"done": False}
-
-    def _ensure_water_cost():
-        if not _water_cost_ready["done"]:
-            try:
-                water_cost.ensure_schema()
-                water_cost.seed_anchors()
-                _water_cost_ready["done"] = True
-            except Exception as e:
-                log.warning("water_cost init failed: %s", e)
-
-    def _live_meter_cf():
-        """Current whole-house register in ft³ from the OCR lock, plus a stale
-        flag. last_good is a 9-digit int where the last 3 digits are decimals."""
-        lg = getattr(meter_reader, "last_good", None)
-        if not lg:
-            return None, False
-        reading_cf = lg / 1000.0
-        stale = False
-        try:
-            lock_ts = getattr(meter_reader, "_lock_ts", None) or 0
-            stale_secs = getattr(meter_reader, "stale_secs", 20) or 20
-            if lock_ts:
-                stale = (time.time() - lock_ts) > max(120, stale_secs * 6)
-        except Exception:
-            pass
-        return reading_cf, stale
-
-    @app.route("/costs")
-    def costs_page():
-        return render_template("costs.html")
-
-    @app.route("/flow")
-    def flow_page():
-        return render_template("flow.html")
-
-    @app.route("/api/water-cost")
-    def api_water_cost():
-        _ensure_water_cost()
-        reading_cf, stale = _live_meter_cf()
-        # Lazily record one snapshot per day from the live reading so true
-        # billing-cycle history accrues without a separate scheduler job.
-        if reading_cf:
-            try:
-                water_cost.record_daily_snapshot(reading_cf, source="auto")
-            except Exception as e:
-                log.debug("snapshot skipped: %s", e)
-        return jsonify(water_cost.build_report(config, reading_cf, stale))
-
-    @app.route("/api/flow")
-    def api_flow():
-        """Per-zone GPM estimates + raw flow samples + leak/anomaly events."""
-        try:
-            import flow_monitor
-            limit = query_int("samples", 120, min_value=10, max_value=2000)
-            return jsonify(flow_monitor.build_report(config, limit))
-        except Exception as e:
-            log.warning("api_flow failed: %s", e)
-            return jsonify({"error": str(e), "zones": [], "samples": [],
-                            "events": [], "open_events": []})
-
     @app.route("/api/connectivity")
     def api_connectivity():
         hours = query_int("hours", 24, min_value=1, max_value=87600)
@@ -2033,415 +1961,20 @@ def create_app(config, engine, weather, billing):
     import threading as _threading
     OCR_TOWER_URL = os.environ.get("OCR_TOWER_URL", "http://192.168.0.120:5200/ocr")
     OCR_ENABLED = os.environ.get("OCR_ENABLED", "1") == "1"
-    # Training-data banking: when the validator produces a HIGH-confidence read,
-    # save (raw frame JPEG, validated 9-digit label) so a custom per-digit model
-    # can be trained later on THIS meter under THIS camera's real conditions.
-    # Banking continuously over days captures glare in every position and any
-    # camera drift, which is exactly the variation a robust model must learn.
-    # Auto-labeled = free: the label is the validator's own high-confidence read.
-    BANK_ENABLED = os.environ.get("METER_BANK_ENABLED", "1") == "1"
-    BANK_DIR = os.environ.get("METER_BANK_DIR", "/home/jamesearlpace/meter-training")
-    BANK_MAX = int(os.environ.get("METER_BANK_MAX", "20000"))
-    BANK_MIN_INTERVAL = float(os.environ.get("METER_BANK_MIN_INTERVAL", "5"))
-    # Per-reading frame ring: stash EVERY processed frame keyed by its row id so
-    # the UI can show "this is the exact image the OCR saw for this row." Bounded
-    # ring (newest N) so disk stays small — this is for live inspection/trust,
-    # not training (that's BANK_DIR). Default ~720 ≈ 1h of 5s frames (~30MB).
-    FRAME_DIR = os.environ.get("METER_FRAME_DIR", "/tmp/meter-frames")
-    FRAME_KEEP = int(os.environ.get("METER_FRAME_KEEP", "720"))
-    _frame_ids = _deque(maxlen=FRAME_KEEP)   # ids with a saved frame, oldest-left
-    cam_queue = _deque(maxlen=720)            # the lag buffer (~1h at 5s/frame)
+    cam_queue = _deque(maxlen=100)            # the lag buffer
     cam_queue_lock = _threading.Lock()
-    cam_ocr_stats = {"processed": 0, "errors": 0, "last_ms": None, "dropped": 0,
-                     "banked": 0}
-    _bank_state = {"last_ts": 0.0, "last_label": None}
-
-    def _save_frame(rid, frame):
-        """Persist a frame under its reading id, pruning the oldest beyond the
-        ring cap. Best-effort: never let a disk hiccup break OCR."""
-        if not rid or not frame:
-            return
-        try:
-            os.makedirs(FRAME_DIR, exist_ok=True)
-            with open(os.path.join(FRAME_DIR, f"{rid}.jpg"), "wb") as f:
-                f.write(frame)
-            if len(_frame_ids) == _frame_ids.maxlen:
-                old = _frame_ids[0]              # about to be evicted by append
-                try:
-                    os.remove(os.path.join(FRAME_DIR, f"{old}.jpg"))
-                except OSError:
-                    pass
-            _frame_ids.append(rid)
-        except Exception as e:
-            log.debug("save_frame failed: %s", e)
-
-
-    def _bank_sample(frame, entry, captured_ts):
-        """Save a high-confidence (frame, label) pair for future model training.
-
-        Only banks genuine high-confidence reads (not holds/stale/derived), at
-        most one per BANK_MIN_INTERVAL seconds, and skips consecutive duplicates
-        of the same label so a steady meter doesn't flood the disk with identical
-        frames. Filename embeds the label + timestamp so it's self-describing:
-        ``<9-digit-reading>_<epoch_ms>.jpg``.
-        """
-        if not BANK_ENABLED:
-            return
-        try:
-            if entry.get("confidence") != "high" or entry.get("kind") != "raw":
-                return
-            # Only bank when the OCR INDEPENDENTLY corroborates the reading: its
-            # raw low-5 digits must match the validated reading's low-5. This is
-            # the non-circular trust signal — it stops a drifted/garbage label
-            # from poisoning the training set (the bug that mislabeled frames
-            # showing 094008797 as 094012008).
-            if entry.get("raw_low_match") is not True:
-                return
-            label = str(entry.get("reading", "")).replace("\u2014", "").strip()
-            if not label.isdigit() or len(label) != 9:
-                return
-            now = captured_ts or time.time()
-            if now - _bank_state["last_ts"] < BANK_MIN_INTERVAL:
-                return
-            if label == _bank_state["last_label"]:
-                # Steady meter: keep occasional samples (every ~10x interval)
-                # so we still capture lighting drift, but don't spam identical
-                # frames every cycle.
-                if now - _bank_state["last_ts"] < BANK_MIN_INTERVAL * 10:
-                    return
-            os.makedirs(BANK_DIR, exist_ok=True)
-            # Per-distinct-number cap: don't flood the dataset with many images
-            # of the SAME reading (a model learns nothing from duplicates). Keep
-            # a few per number for lighting variety, skip the rest.
-            try:
-                same = sum(1 for f in os.listdir(BANK_DIR)
-                           if f.startswith(label + "_") and f.endswith(".jpg"))
-                if same >= GOLD_MAX_PER_LABEL:
-                    return
-            except OSError:
-                pass
-            # Cheap size cap: prune oldest if over BANK_MAX (count .jpg only).
-            try:
-                jpgs = sorted(f for f in os.listdir(BANK_DIR)
-                              if f.endswith(".jpg"))
-                if len(jpgs) >= BANK_MAX:
-                    for old in jpgs[:max(1, len(jpgs) - BANK_MAX + 1)]:
-                        for ext in (".jpg", ".json"):
-                            try:
-                                os.remove(os.path.join(
-                                    BANK_DIR, old[:-4] + ext))
-                            except OSError:
-                                pass
-            except OSError:
-                pass
-            stem = f"{label}_{int(now * 1000)}"
-            with open(os.path.join(BANK_DIR, stem + ".jpg"), "wb") as f:
-                f.write(frame)
-            # Sidecar metadata so label-filtering later can be rigorous: keep
-            # the OCR's own raw guess + fit score + what the validator did, so a
-            # training sample is only trusted when guess==label AND fit is high
-            # AND it's consistent with neighbours / audited against your manual
-            # anchor readings. This is what keeps the model from learning the
-            # current pipeline's mistakes.
-            try:
-                guess = str(entry.get("ocr_guess", "")).split()[0] \
-                    if entry.get("ocr_guess") else ""
-                meta = {
-                    "label": label,
-                    "ocr_guess": guess,
-                    "fit": entry.get("note", ""),
-                    "confidence": entry.get("confidence"),
-                    "captured_ts": now,
-                    "raw_ocr": entry.get("raw_n", ""),
-                    # Independent corroboration: raw OCR low-5 matched the label.
-                    "agree": entry.get("raw_low_match") is True,
-                }
-                import json as _json
-                with open(os.path.join(BANK_DIR, stem + ".json"), "w") as f:
-                    _json.dump(meta, f)
-            except Exception:
-                pass
-            _bank_state["last_ts"] = now
-            _bank_state["last_label"] = label
-            cam_ocr_stats["banked"] += 1
-        except Exception as e:
-            log.debug("bank_sample failed: %s", e)
-
-    # --- Vision-LLM oracle: the high-quality fallback + drift fix -----------
-    # The fast pipeline can't read through bad glare and can't recover from a
-    # false-high lock. So we call GPT-4o vision in two cases:
-    #   (a) STALE — the lock hasn't moved on a trusted read for a while, or
-    #   (b) LOW-CONFIDENCE — this very frame couldn't be read cleanly.
-    # Each trusted oracle read both RE-ANCHORS the lock (so the dashboard shows
-    # the truth) AND is banked as a GOLD training label (independent ground
-    # truth from a different model — exactly the data a future custom model
-    # needs). Rate-limited so cost stays at a few tenths of a cent per call.
-    ORACLE_ENABLED = os.environ.get("METER_ORACLE_ENABLED", "1") == "1"
-    ORACLE_STALE_SECS = float(os.environ.get("METER_ORACLE_STALE_SECS", "180"))
-    ORACLE_MIN_INTERVAL = float(os.environ.get("METER_ORACLE_MIN_INTERVAL", "45"))
-    ORACLE_LOWCONF_INTERVAL = float(
-        os.environ.get("METER_ORACLE_LOWCONF_INTERVAL", "60"))
-    # Trust-but-verify heartbeat: re-check even HIGH-confidence reads this often,
-    # to catch a systematic-misread drift the local pipeline is falsely sure of.
-    ORACLE_VERIFY_SECS = float(os.environ.get("METER_ORACLE_VERIFY_SECS", "300"))
-    ORACLE_DAILY_CAP = int(os.environ.get("METER_ORACLE_DAILY_CAP", "800"))
-    # Max gold-dataset images to keep PER DISTINCT reading (avoids flooding the
-    # training set with identical numbers from a static meter).
-    GOLD_MAX_PER_LABEL = int(os.environ.get("METER_GOLD_MAX_PER_LABEL", "3"))
-    _oracle_state = {"last_call": 0.0, "last_verify": 0.0, "calls": 0,
-                     "reanchors": 0, "labels": 0, "dupes": 0, "day": "",
-                     "day_calls": 0, "busy": False, "confirmed_val": None,
-                     "last_result": None, "last_value": None}
-
-    def _oracle_bank_label(frame, value, captured_ts, conf):
-        """Bank a frame with an oracle-provided GOLD label (most trusted).
-
-        DEDUP: only keep a small number of images PER DISTINCT reading. A static
-        meter would otherwise flood the gold set with hundreds of identical
-        numbers, which adds no training value (a model learns nothing from 200
-        copies of the same digits) and wastes disk. We keep up to
-        GOLD_MAX_PER_LABEL per value (a few, to capture lighting/glare variety)
-        and skip the rest.
-        """
-        try:
-            label = f"{int(value):09d}"
-            os.makedirs(BANK_DIR, exist_ok=True)
-            existing = 0
-            try:
-                existing = sum(1 for f in os.listdir(BANK_DIR)
-                               if f.startswith(label + "_") and f.endswith(".jpg"))
-            except OSError:
-                pass
-            if existing >= GOLD_MAX_PER_LABEL:
-                _oracle_state["dupes"] = _oracle_state.get("dupes", 0) + 1
-                return  # already have enough of this exact number
-            stem = f"{label}_{int((captured_ts or time.time()) * 1000)}_oracle"
-            with open(os.path.join(BANK_DIR, stem + ".jpg"), "wb") as f:
-                f.write(frame)
-            import json as _json
-            with open(os.path.join(BANK_DIR, stem + ".json"), "w") as f:
-                _json.dump({"label": label, "ocr_guess": label,
-                            "confidence": conf, "captured_ts": captured_ts,
-                            "source": "oracle", "agree": True}, f)
-            _oracle_state["labels"] += 1
-            cam_ocr_stats["oracle_labels"] = _oracle_state["labels"]
-        except Exception as e:
-            log.debug("oracle bank failed: %s", e)
-
-    def _maybe_oracle(frame, entry, captured_ts):
-        """Fast, NON-BLOCKING decision: should the oracle run? If so, spawn a
-        background thread for the slow GPT-4o call so the OCR worker keeps
-        processing frames every 5s. The worker must never block on the network.
-        """
-        if not ORACLE_ENABLED:
-            return
-        try:
-            import vision_oracle
-        except Exception:
-            return
-        if not vision_oracle.available():
-            return
-        # Only one oracle call in flight at a time.
-        if _oracle_state.get("busy"):
-            return
-        now = time.time()
-        today = time.strftime("%Y-%m-%d")
-        if _oracle_state["day"] != today:
-            _oracle_state["day"] = today
-            _oracle_state["day_calls"] = 0
-        if _oracle_state["day_calls"] >= ORACLE_DAILY_CAP:
-            return
-
-        conf = (entry or {}).get("confidence")
-        lock_ts = getattr(meter_reader, "_lock_ts", None) or 0
-        stale_for = now - lock_ts
-        since_call = now - _oracle_state["last_call"]
-        since_verify = now - _oracle_state.get("last_verify", 0)
-
-        # When to call the oracle:
-        #  - LOW-CONF: this frame couldn't be read cleanly.
-        #  - STALE: the lock hasn't moved on a trusted read for a while.
-        #  - VERIFY HEARTBEAT: periodically check EVEN high-confidence reads, to
-        #    catch a systematic-misread drift the pipeline is falsely sure of.
-        is_stale = stale_for >= ORACLE_STALE_SECS
-        is_lowconf = conf in ("low", "medium", "stale", "none", None)
-        is_verify = since_verify >= ORACLE_VERIFY_SECS
-        # Don't re-send the SAME number to the AI. If this frame's reading is
-        # high-confidence and equals the value the oracle already confirmed,
-        # there's nothing new to verify or learn — skip the call. The oracle
-        # only needs to weigh in when the number is CHANGING (water moving) or
-        # when the local read is uncertain. This stops a static meter from
-        # racking up identical verification calls.
-        cur_val = None
-        try:
-            rd = str((entry or {}).get("reading", "")).strip()
-            if rd.isdigit():
-                cur_val = int(rd)
-        except Exception:
-            pass
-        unchanged = (cur_val is not None
-                     and cur_val == _oracle_state.get("confirmed_val"))
-        if conf == "high" and unchanged:
-            return
-        if is_stale and since_call < ORACLE_MIN_INTERVAL:
-            return
-        if is_lowconf and (not is_stale) and since_call < ORACLE_LOWCONF_INTERVAL:
-            return
-        if not (is_stale or is_lowconf or is_verify):
-            return
-
-        # Reserve the slot NOW (so the next frames don't also fire), then hand
-        # the slow work to a background thread and return immediately.
-        _oracle_state["busy"] = True
-        _oracle_state["last_call"] = now
-        if is_verify:
-            _oracle_state["last_verify"] = now
-        _oracle_state["day_calls"] += 1
-        _threading.Thread(
-            target=_oracle_run, args=(bytes(frame), captured_ts, stale_for, now),
-            daemon=True, name="oracle").start()
-
-    def _oracle_splice(oracle_digits, lock, ceiling):
-        """Repair an oracle read whose HIGH digits are garbled.
-
-        Under glare GPT-4o reads the LOW (moving) digits of the LCD reliably but
-        sometimes mangles the leading 1-2 digits (09 -> 34/84), so the raw value
-        lands far below the anchor floor and gets discarded — the meter then
-        sits stale for hours even though AI read the changing digits correctly.
-        The meter's high digits barely ever move (094 won't roll for thousands
-        of cubic feet), so keep the lock's high digits and overlay the oracle's
-        trusted low digits. Try the longest overlay first; accept the first that
-        is a physically-plausible forward step from the lock. Returns int|None.
-        """
-        if lock is None or not oracle_digits:
-            return None
-        lock_s = f"{int(lock):09d}"
-        for k in range(7, 4, -1):                 # overlay low 7..5 digits
-            if len(oracle_digits) < k:
-                continue
-            low = oracle_digits[-k:]
-            try:
-                cand = int(lock_s[:9 - k] + low)
-            except ValueError:
-                continue
-            d = cand - lock
-            # FORWARD-ONLY: a water meter is monotonic. Only accept a spliced
-            # value at or ahead of the lock (within the physical ceiling). A
-            # candidate below the lock means the oracle's low digits were ALSO
-            # misread (systematic evening blur) — never let that pull the lock
-            # backward; hold instead.
-            if 0 <= d <= ceiling:
-                return cand
-        return None
-
-    def _oracle_run(frame, captured_ts, stale_for, now):
-        """Background: the slow GPT-4o call + re-anchor. Never runs in the OCR
-        worker thread, so frame processing keeps its 5s cadence."""
-        try:
-            import vision_oracle
-            # Give the model physics context so it can reason through glare on
-            # the HIGH digits: it can only count up from the lock, has a physical
-            # ceiling, and the leading digits barely change. (Low digits are
-            # still read straight from the image — see vision_oracle._build_hint.)
-            lg0 = getattr(meter_reader, "last_good", None)
-            hint = None
-            if lg0 is not None:
-                window0 = max(stale_for, 30)
-                max_adv0 = (meter_reader.max_gpm / 60.0) * window0 \
-                    * cam_ocr.COUNTS_PER_GAL * 2 + 5000
-                hint = {
-                    "last_value": int(lg0),
-                    "min_value": int(lg0),
-                    "max_value": int(lg0 + max_adv0),
-                    "high_prefix": f"{int(lg0):09d}"[:4],
-                }
-            res = vision_oracle.read_meter(frame, rotate180=True, hint=hint)
-            _oracle_state["calls"] += 1
-            _oracle_state["last_result"] = res
-            _oracle_state["last_value"] = res.get("value")
-            cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
-            if not res.get("ok") or res.get("confidence") == "low" \
-                    or not res.get("readable"):
-                log.info("oracle read not trusted: %s", res)
-                return
-            val = res["value"]
-            digits = res.get("digits", "") or ""
-            lg = getattr(meter_reader, "last_good", None)
-            anchor = getattr(meter_reader, "anchor_value", 0)
-            # Physical forward ceiling since the lock last moved (counts).
-            window = max(stale_for, 30)
-            max_adv = (meter_reader.max_gpm / 60.0) * window \
-                * cam_ocr.COUNTS_PER_GAL * 2 + 5000
-            # HIGH-DIGIT GARBLE REPAIR: if the raw oracle value is implausible
-            # (below the anchor floor or impossibly far from the lock), the high
-            # digits were almost certainly mangled by glare while the low digits
-            # are good — splice the trusted low digits onto the lock's stable
-            # high digits so a low-conf frame actually gets corrected by AI
-            # instead of being thrown away.
-            raw_ok = (val is not None and val >= anchor - 5
-                      and lg is not None and 0 <= val - lg <= max_adv)
-            if not raw_ok and lg is not None:
-                spliced = _oracle_splice(digits, lg, max_adv)
-                if spliced is not None:
-                    log.info("oracle high-digit garble repaired: raw %s -> "
-                             "%09d (low digits trusted, lock %s)",
-                             val, spliced, lg)
-                    val = spliced
-            if val is None or val < anchor - 5:
-                log.warning("oracle value %s below anchor floor %s — ignored",
-                            val, anchor)
-                return
-            if lg is not None:
-                if val > lg + max_adv:
-                    log.warning("oracle value %s implausibly high vs lock %s",
-                                val, lg)
-                    return
-                # FORWARD-ONLY (monotonic meter): never move the lock backward
-                # on an automatic oracle read. In evening glare GPT-4o garbles
-                # BOTH the high AND low digits, so a value below the lock is a
-                # misread, not a real decrease — hold the lock and show stale.
-                # Genuine high-drift is corrected only via the manual
-                # "AI Re-anchor" button (user-triggered override).
-                if val < lg:
-                    log.info("oracle %09d below lock %s — holding (meter "
-                             "monotonic; likely a blurry misread)", val, lg)
-                    return
-            if meter_reader.reanchor(val, ts=now, source="oracle"):
-                _oracle_state["reanchors"] += 1
-                cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]
-                log.info("oracle read %09d (conf=%s, was lock %s) — reanchored + banked",
-                         val, res.get("confidence"), lg)
-            # Remember the confirmed value so we don't re-send the SAME number.
-            _oracle_state["confirmed_val"] = val
-            _oracle_bank_label(frame, val, captured_ts, res.get("confidence"))
-        except Exception as e:
-            log.debug("oracle thread failed: %s", e)
-        finally:
-            _oracle_state["busy"] = False
+    cam_ocr_stats = {"processed": 0, "errors": 0, "last_ms": None, "dropped": 0}
 
     def _ocr_worker():
-        """OCR every frame in order, oldest-first (FIFO).
-
-        Data quality over latency: we want EVERY 5s frame processed and shown,
-        preserving the 5-second spacing, even if that means falling behind for
-        a while and catching up later. OCR on the tower (~1s/frame) is normally
-        faster than the 5s capture cadence, so the queue stays near empty; if
-        the tower hiccups and a backlog builds, the worker simply works through
-        it in order. The deque is still bounded (maxlen=720 ≈ 1h) so a long
-        outage can't grow memory without limit — only then are the very oldest
-        frames dropped.
-        """
+        """Drain the frame buffer oldest-first, OCR each on the tower, store it."""
         while True:
-            item = None
-            depth = 0
+            frame = None
             with cam_queue_lock:
                 if cam_queue:
-                    item = cam_queue.popleft()      # oldest frame first
-                depth = len(cam_queue)              # frames still waiting
-            if item is None:
+                    frame = cam_queue.popleft()
+            if frame is None:
                 time.sleep(0.25)
                 continue
-            captured_ts, frame = item
             try:
                 r = http_requests.post(
                     OCR_TOWER_URL, data=frame,
@@ -2450,18 +1983,8 @@ def create_app(config, engine, weather, billing):
                 if r.status_code == 200:
                     text = r.json().get("text", "")
                     cam_ocr_stats["last_ms"] = r.json().get("ms")
-                    entry = meter_reader.process_text(
-                        text, captured_ts=captured_ts, queue_depth=depth)
+                    meter_reader.process_text(text)
                     cam_ocr_stats["processed"] += 1
-                    # Stash THIS frame under the row's id so the reading-detail
-                    # page can show the exact image the OCR saw for this row.
-                    _save_frame(entry.get("id"), frame)
-                    # Bank the raw frame + label when the read is high-confidence
-                    # (builds an auto-labeled dataset for a future custom model).
-                    _bank_sample(frame, entry, captured_ts)
-                    # Low-confidence or stale? Ask the vision LLM to read it,
-                    # re-anchor, and bank a gold label (rate-limited internally).
-                    _maybe_oracle(frame, entry, captured_ts)
                 else:
                     cam_ocr_stats["errors"] += 1
                     log.warning("tower OCR %s: %s", r.status_code, r.text[:120])
@@ -2473,16 +1996,6 @@ def create_app(config, engine, weather, billing):
     if OCR_ENABLED:
         _threading.Thread(target=_ocr_worker, daemon=True, name="ocr-worker").start()
         log.info("OCR worker started -> %s", OCR_TOWER_URL)
-
-    # Flow monitor: correlate the live meter register with which zone is ON to
-    # estimate per-zone GPM (recency-weighted) and detect leaks / overruns /
-    # high-flow anomalies. Isolated module, owns its own tables, read-only on
-    # the meter lock. Background sampler runs independently of the OCR worker.
-    try:
-        import flow_monitor
-        flow_monitor.start(meter_reader, status_summary, config)
-    except Exception as e:
-        log.warning("flow_monitor start failed: %s", e)
 
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
@@ -2507,42 +2020,21 @@ def create_app(config, engine, weather, billing):
                 log.warning("cam_upload: rejected tunnel request without valid token from %s",
                             request.headers.get("Cf-Connecting-Ip", "?"))
                 return jsonify({"error": "unauthorized"}), 401
-        # Time the body read — on this lossy WiFi a 50KB JPEG can take many
-        # seconds to actually transfer (TCP retransmits). That transfer time is
-        # the gap between when the camera CAPTURED the frame and when it lands
-        # here. Subtract it so the "capture time" reflects the pixels, not the
-        # arrival. (Fully accurate timing needs a firmware capture-timestamp;
-        # this is a good no-reflash approximation.)
-        _t_recv0 = time.time()
         data = request.get_data(cache=False)
-        transfer_s = time.time() - _t_recv0
         if not data or len(data) < 100:
             return jsonify({"error": "No image data"}), 400
         if len(data) > CAM_MAX_UPLOAD_BYTES:
             return jsonify({"error": "image too large"}), 413
         cam_state["image"] = data
-        # Capture time ≈ now − transfer time (the body was being sent during
-        # the transfer; the frame was grabbed at the START of that send).
-        capture_dt = datetime.now() - timedelta(seconds=transfer_s)
-        cam_state["timestamp"] = capture_dt.isoformat()
-        cam_state["transfer_s"] = round(transfer_s, 2)
+        cam_state["timestamp"] = datetime.now().isoformat()
         cam_state["ocr_count"] += 1
-        if transfer_s >= 2:
-            log.info("cam upload slow: %.1fs transfer (%d bytes) — frame is that old",
-                     transfer_s, len(data))
         # Enqueue for off-box OCR (lag buffer). Non-blocking: the deque is
-        # bounded (maxlen=720 ≈ 1h) so only a very long outage drops the oldest
-        # frame. We tag each frame with its capture time so the readings table
-        # can show capture-vs-processed lag and preserve true 5s spacing.
+        # bounded (maxlen=100) so a full queue silently drops the oldest frame.
         if OCR_ENABLED:
             with cam_queue_lock:
                 if len(cam_queue) == cam_queue.maxlen:
                     cam_ocr_stats["dropped"] += 1
-                # Tag with the SAME transfer-corrected capture time the live
-                # image exposes (X-Capture-Time), not plain arrival time, so the
-                # readings table's "Captured" column and the live image agree on
-                # exactly when the cam grabbed the frame.
-                cam_queue.append((capture_dt.timestamp(), data))
+                cam_queue.append(data)
         return "OK", 200
 
     @app.route("/api/cam/latest")
@@ -2550,13 +2042,8 @@ def create_app(config, engine, weather, billing):
         """Serve the most recently pushed image."""
         if not cam_state["image"]:
             return jsonify({"error": "No image yet"}), 404
-        # Expose the REAL capture time (when the cam uploaded this frame) so the
-        # UI can show that instead of the browser's clock-at-load. The image can
-        # be many seconds/minutes old if OCR is backed up — the browser must not
-        # claim it's current.
         return Response(cam_state["image"], mimetype="image/jpeg",
-                       headers={"Cache-Control": "no-cache",
-                                "X-Capture-Time": cam_state["timestamp"] or ""})
+                       headers={"Cache-Control": "no-cache"})
 
     @app.route("/api/cam/status")
     def cam_status():
@@ -2573,7 +2060,6 @@ def create_app(config, engine, weather, billing):
                 "processed": cam_ocr_stats["processed"],
                 "errors": cam_ocr_stats["errors"],
                 "dropped": cam_ocr_stats["dropped"],
-                "banked": cam_ocr_stats.get("banked", 0),
                 "last_ms": cam_ocr_stats["last_ms"],
             },
         })
@@ -2588,107 +2074,6 @@ def create_app(config, engine, weather, billing):
             "orientation": meter_reader.orientation,
             "avg_rate": round(meter_reader.avg_rate, 4),
         })
-
-    @app.route("/api/cam/training")
-    def cam_training_list():
-        """List banked training samples (newest first) with their metadata, so
-        the Training tab can show the auto-labeled dataset for review."""
-        import json as _json
-        limit = request.args.get("limit", 60, type=int)
-        out = []
-        total = 0
-        try:
-            jpgs = sorted((f for f in os.listdir(BANK_DIR)
-                           if f.endswith(".jpg")), reverse=True)
-            total = len(jpgs)
-            for name in jpgs[:limit]:
-                stem = name[:-4]
-                meta = {}
-                try:
-                    with open(os.path.join(BANK_DIR, stem + ".json")) as mf:
-                        meta = _json.load(mf)
-                except Exception:
-                    pass
-                label = meta.get("label") or stem.split("_")[0]
-                out.append({
-                    "file": name,
-                    "label": label,
-                    "ocr_guess": meta.get("ocr_guess", ""),
-                    "agree": meta.get("agree"),
-                    "confidence": meta.get("confidence", ""),
-                    "fit": meta.get("fit", ""),
-                })
-        except FileNotFoundError:
-            pass
-        return jsonify({"samples": out, "total": total,
-                        "dir": BANK_DIR, "max": BANK_MAX})
-
-    @app.route("/api/cam/training/img/<path:fname>")
-    def cam_training_img(fname):
-        """Serve one banked training JPEG (filename only, no path traversal)."""
-        safe = os.path.basename(fname)
-        if not safe.endswith(".jpg"):
-            return jsonify({"error": "bad name"}), 400
-        path = os.path.join(BANK_DIR, safe)
-        if not os.path.exists(path):
-            return jsonify({"error": "not found"}), 404
-        return Response(open(path, "rb").read(), mimetype="image/jpeg",
-                        headers={"Cache-Control": "max-age=3600"})
-
-    @app.route("/api/cam/frame/<rid>")
-    def cam_frame(rid):
-        """Serve the exact frame the OCR saw for a given reading id (or 404)."""
-        safe = os.path.basename(str(rid))
-        path = os.path.join(FRAME_DIR, f"{safe}.jpg")
-        if not os.path.exists(path):
-            return jsonify({"error": "frame not found"}), 404
-        return Response(open(path, "rb").read(), mimetype="image/jpeg",
-                        headers={"Cache-Control": "max-age=3600"})
-
-    @app.route("/api/cam/reading/<rid>")
-    def cam_reading_one(rid):
-        """Return one reading row's full field dump + whether its frame exists."""
-        entry = meter_reader.get_reading_by_id(rid)
-        if entry is None:
-            return jsonify({"found": False}), 404
-        has_frame = os.path.exists(os.path.join(FRAME_DIR, f"{os.path.basename(rid)}.jpg"))
-        return jsonify({"found": True, "entry": entry, "has_frame": has_frame})
-
-    @app.route("/cam/reading/<rid>")
-    def cam_reading_page(rid):
-        """Per-reading detail page: the captured image + every table field."""
-        return render_template("cam_reading.html", rid=rid)
-
-    @app.route("/api/cam/reanchor", methods=["POST"])
-    def cam_reanchor():
-        """Manually trigger a vision-LLM read + re-anchor right now."""
-        try:
-            import vision_oracle
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"oracle import: {e}"}), 500
-        if not vision_oracle.available():
-            return jsonify({"ok": False, "error": "no OPENAI_API_KEY"}), 400
-        try:
-            raw = http_requests.get(
-                OCR_TOWER_URL.replace("/ocr", "/raw.jpg"), timeout=8).content
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"no frame: {e}"}), 502
-        # Soft hint: give the model the expected high-digit prefix to fight
-        # glare, but NO hard floor — this is the manual override, so it must be
-        # free to correct the lock in either direction.
-        lg0 = getattr(meter_reader, "last_good", None)
-        hint = ({"last_value": int(lg0), "high_prefix": f"{int(lg0):09d}"[:4]}
-                if lg0 is not None else None)
-        res = vision_oracle.read_meter(raw, rotate180=True, hint=hint)
-        applied = False
-        if res.get("ok") and res.get("readable") and res.get("confidence") != "low":
-            applied = meter_reader.reanchor(res["value"], source="manual-oracle")
-        return jsonify({"ok": res.get("ok"), "value": res.get("value"),
-                        "confidence": res.get("confidence"),
-                        "readable": res.get("readable"),
-                        "reanchored": applied,
-                        "cost_tokens": res.get("cost_tokens"),
-                        "error": res.get("error")})
 
     @app.route("/api/cam/capture")
     def cam_capture():

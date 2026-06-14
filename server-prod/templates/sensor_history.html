@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sensor History — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f5f7f9; --card: #ffffff;
+  --border: #e8ecf0; --border-light: #f0f2f5;
+  --text: #1a2b3c; --text2: #5f7082; --text3: #9ba8b5;
+  --green: #22c55e; --green-dark: #16a34a; --green-bg: rgba(34,197,94,.08);
+  --blue: #3b82f6; --blue-bg: rgba(59,130,246,.08);
+  --amber: #f59e0b; --amber-bg: rgba(245,158,11,.08);
+  --red: #ef4444; --red-bg: rgba(239,68,68,.08);
+  --bg-sidebar: #1b2e1f; --bg-sidebar-hover: rgba(255,255,255,.08);
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --sidebar-w: 220px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; }
+
+.sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-w); height: 100vh; background: var(--bg-sidebar);
+  color: #fff; display: flex; flex-direction: column; z-index: 100; }
+.sidebar-brand { padding: 24px 20px 20px; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08) }
+.sidebar-brand .logo { font-size: 1.8rem }
+.sidebar-brand .name { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em }
+.sidebar-brand .loc { font-size: .7rem; color: rgba(255,255,255,.5); margin-top: 1px }
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto }
+.sidebar .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+  cursor: pointer; transition: all .2s; color: rgba(255,255,255,.6); font-size: .88rem; font-weight: 500; margin-bottom: 2px;
+  text-decoration: none; }
+.sidebar .nav-item:hover { background: var(--bg-sidebar-hover); color: rgba(255,255,255,.85) }
+.sidebar .nav-item.active { background: rgba(34,197,94,.18); color: #4ade80; font-weight: 600 }
+.sidebar .nav-item .icon { font-size: 1.15rem; width: 24px; text-align: center }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.08); font-size: .72rem; color: rgba(255,255,255,.35) }
+
+.main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; max-width: 980px; }
+h1 { font-size: 1.4rem; margin-bottom: 4px; }
+.sub { color: var(--text2); font-size: .85rem; margin-bottom: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px;
+        border: 1px solid var(--border); box-shadow: var(--shadow); }
+.card h2 { font-size: 1rem; margin-bottom: 10px; }
+.muted { color: var(--text2); font-size: .8rem; }
+.loading { text-align: center; padding: 40px; color: var(--text2); }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; background: #fff; padding: 7px 14px; font-size: .82rem; cursor: pointer;
+  color: var(--text2); font-family: inherit; border-right: 1px solid var(--border); }
+.seg button:last-child { border-right: none; }
+.seg button.active { background: var(--green-dark); color: #fff; font-weight: 600; }
+
+.chart-wrap { position: relative; height: 320px; }
+
+/* sensor summary cards */
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.sensor-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: #fff; }
+.sensor-card .nm { font-weight: 700; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+.sensor-card .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.sensor-card .big { font-size: 1.7rem; font-weight: 800; margin: 6px 0 2px; letter-spacing: -.01em; }
+.sensor-card .row { display: flex; justify-content: space-between; font-size: .78rem; color: var(--text2);
+  padding: 2px 0; }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .68rem; font-weight: 700; }
+.pill.ok    { background: var(--green-bg); color: var(--green-dark); }
+.pill.warn  { background: var(--amber-bg); color: var(--amber); }
+.pill.bad   { background: var(--red-bg);   color: var(--red); }
+.pill.off   { background: #eef1f4;         color: var(--text3); }
+
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 16px 16px 80px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">🌱</span>
+    <div>
+      <div class="name">Smart Garden</div>
+      <div class="loc">Duvall, WA</div>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
+    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/map" class="nav-item"><span class="icon">🗺️</span> Zone Map</a>
+    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/sensor-history" class="nav-item active"><span class="icon">🌡️</span> Sensor History</a>
+    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
+    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Moisture</a>
+    <a href="/costs" class="nav-item"><span class="icon">💵</span> Water Cost</a>
+    <a href="/calibrate" class="nav-item"><span class="icon">🎛️</span> Calibrate</a>
+    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
+  </div>
+  <div class="sidebar-footer">Soil moisture trends</div>
+</nav>
+
+<div class="main">
+<h1>🌡️ Sensor History</h1>
+<div class="sub">Raw &amp; calibrated soil-moisture readings over time, per sensor</div>
+
+<div class="card">
+  <div class="controls">
+    <div class="seg" id="rangeSeg">
+      <button data-hours="24" class="active">24h</button>
+      <button data-hours="168">7d</button>
+      <button data-hours="720">30d</button>
+      <button data-hours="2160">90d</button>
+    </div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="raw" class="active">Raw</button>
+      <button data-mode="pct">Moisture %</button>
+    </div>
+    <span class="muted" id="metaNote"></span>
+  </div>
+  <div class="chart-wrap"><canvas id="histChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>Sensors</h2>
+  <div class="sensor-grid" id="sensorGrid">
+    <div class="loading">Loading sensors…</div>
+  </div>
+</div>
+</div><!-- /.main -->
+
+{% include '_mobilenav.html' %}
+
+<script>
+var SENSOR_COLORS = ['#16a34a', '#3b82f6', '#f59e0b', '#a855f7'];
+var NUM_SENSORS = 4;
+var state = { hours: 24, mode: 'raw' };
+var chart = null;
+
+function fmtTs(ts, hours) {
+  var d = new Date(ts);
+  if (hours <= 24) return d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
+  return (d.getMonth()+1) + '/' + d.getDate() + ' ' +
+         d.toLocaleTimeString('en-US', {hour: 'numeric'});
+}
+
+function classify(cal, series) {
+  // cal: {enabled, raw (live), dry, wet}; series: [{ts,raw,pct}]
+  if (!cal.enabled && (!series || series.length === 0)) return {cls: 'off', txt: 'Disabled'};
+  var live = cal.raw;
+  if (live === 0 || live === null || live === undefined) return {cls: 'bad', txt: 'Check wiring'};
+  if (live > 0 && live < 1000) return {cls: 'warn', txt: 'Stuck low'};
+  if (live >= 4090) return {cls: 'bad', txt: 'Open / railed'};
+  return {cls: 'ok', txt: 'Working'};
+}
+
+function renderCards(cals, allSeries) {
+  var grid = document.getElementById('sensorGrid');
+  grid.innerHTML = '';
+  for (var i = 0; i < NUM_SENSORS; i++) {
+    var cal = cals[i] || {name: 'Sensor ' + i, enabled: false, raw: null, dry: null, wet: null};
+    var series = allSeries[i] || [];
+    var raws = series.map(function(p){ return p.raw; }).filter(function(v){ return v !== null && v !== undefined; });
+    var st = classify(cal, series);
+    var mn = raws.length ? Math.min.apply(null, raws) : '—';
+    var mx = raws.length ? Math.max.apply(null, raws) : '—';
+    var liveTxt = (cal.raw === null || cal.raw === undefined) ? '—' : cal.raw;
+    var pctTxt = (cal.pct === null || cal.pct === undefined) ? '—' : cal.pct + '%';
+    var card = document.createElement('div');
+    card.className = 'sensor-card';
+    card.innerHTML =
+      '<div class="nm"><span class="sw" style="background:' + SENSOR_COLORS[i] + '"></span>' +
+        (cal.name || ('Sensor ' + i)) + '</div>' +
+      '<div class="big">' + liveTxt + ' <span class="muted" style="font-size:.8rem;font-weight:500">raw</span></div>' +
+      '<div class="row"><span>Moisture</span><span>' + pctTxt + '</span></div>' +
+      '<div class="row"><span>Status</span><span class="pill ' + st.cls + '">' + st.txt + '</span></div>' +
+      '<div class="row"><span>Range (window)</span><span>' + mn + ' – ' + mx + '</span></div>' +
+      '<div class="row"><span>Samples</span><span>' + raws.length + '</span></div>' +
+      '<div class="row"><span>Cal dry / wet</span><span>' +
+        (cal.dry != null ? cal.dry : '—') + ' / ' + (cal.wet != null ? cal.wet : '—') + '</span></div>';
+    grid.appendChild(card);
+  }
+}
+
+function renderChart(cals, allSeries) {
+  // Build a unified, sorted set of timestamps across all sensors.
+  var datasets = [];
+  for (var i = 0; i < NUM_SENSORS; i++) {
+    var series = allSeries[i] || [];
+    if (!series.length) continue;
+    var cal = cals[i] || {};
+    datasets.push({
+      label: (cal.name || ('Sensor ' + i)),
+      data: series.map(function(p) {
+        return { x: new Date(p.ts).getTime(), y: state.mode === 'pct' ? p.pct : p.raw };
+      }),
+      borderColor: SENSOR_COLORS[i],
+      backgroundColor: SENSOR_COLORS[i] + '22',
+      borderWidth: 2, pointRadius: 0, tension: .25, spanGaps: true
+    });
+  }
+  var ctx = document.getElementById('histChart').getContext('2d');
+  if (chart) chart.destroy();
+  var note = document.getElementById('metaNote');
+  if (!datasets.length) {
+    note.textContent = 'No logged data in this window. Only enabled sensors are recorded.';
+  } else {
+    note.textContent = '';
+  }
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets: datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: {
+        x: { type: 'linear',
+             ticks: { callback: function(v){ return fmtTs(v, state.hours); }, maxTicksLimit: 8, font: {size: 10} },
+             grid: { display: false } },
+        y: { beginAtZero: state.mode === 'pct',
+             max: state.mode === 'pct' ? 100 : undefined,
+             title: { display: true, text: state.mode === 'pct' ? 'Moisture %' : 'Raw ADC (lower = wetter)' } }
+      },
+      plugins: {
+        legend: { position: 'top', labels: { boxWidth: 12, font: {size: 11} } },
+        tooltip: { callbacks: {
+          title: function(items){ return fmtTs(items[0].parsed.x, state.hours); }
+        } }
+      }
+    }
+  });
+}
+
+function load() {
+  var calReq = fetch('/api/calibration').then(function(r){ return r.json(); }).catch(function(){ return {sensors: []}; });
+  var seriesReqs = [];
+  for (var i = 0; i < NUM_SENSORS; i++) {
+    seriesReqs.push(
+      fetch('/api/sensor-history?type=soil&index=' + i + '&hours=' + state.hours)
+        .then(function(r){ return r.json(); }).catch(function(){ return []; })
+    );
+  }
+  Promise.all([calReq].concat(seriesReqs)).then(function(res) {
+    var calSnap = res[0] || {};
+    var calList = (calSnap.sensors || []);
+    var cals = {};
+    calList.forEach(function(c){ cals[c.index] = c; });
+    var allSeries = {};
+    for (var i = 0; i < NUM_SENSORS; i++) { allSeries[i] = res[1 + i] || []; }
+    renderChart(cals, allSeries);
+    renderCards(cals, allSeries);
+  });
+}
+
+document.getElementById('rangeSeg').addEventListener('click', function(e) {
+  if (e.target.tagName !== 'BUTTON') return;
+  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  e.target.classList.add('active');
+  state.hours = parseInt(e.target.dataset.hours);
+  load();
+});
+document.getElementById('modeSeg').addEventListener('click', function(e) {
+  if (e.target.tagName !== 'BUTTON') return;
+  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  e.target.classList.add('active');
+  state.mode = e.target.dataset.mode;
+  load();
+});
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Water Cost — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f5f7f9; --card: #ffffff; --bg-card: #ffffff;
+  --border: #e8ecf0; --border-light: #f0f2f5;
+  --text: #1a2b3c; --text2: #5f7082; --text3: #9ba8b5;
+  --green: #22c55e; --green-dark: #16a34a; --green-light: #dcfce7; --green-bg: rgba(34,197,94,.08);
+  --blue: #3b82f6; --blue-light: #dbeafe; --blue-bg: rgba(59,130,246,.08);
+  --amber: #f59e0b; --amber-light: #fef3c7; --amber-bg: rgba(245,158,11,.08);
+  --red: #ef4444; --red-light: #fee2e2; --red-bg: rgba(239,68,68,.08);
+  --purple: #a855f7;
+  --bg-sidebar: #1b2e1f; --bg-sidebar-hover: rgba(255,255,255,.08);
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --sidebar-w: 220px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; }
+
+/* Sidebar (cloned from dashboard) */
+.sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-w); height: 100vh; background: var(--bg-sidebar);
+  color: #fff; display: flex; flex-direction: column; z-index: 100; }
+.sidebar-brand { padding: 24px 20px 20px; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08) }
+.sidebar-brand .logo { font-size: 1.8rem }
+.sidebar-brand .name { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em }
+.sidebar-brand .loc { font-size: .7rem; color: rgba(255,255,255,.5); margin-top: 1px }
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto }
+.sidebar .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+  cursor: pointer; transition: all .2s; color: rgba(255,255,255,.6); font-size: .88rem; font-weight: 500; margin-bottom: 2px;
+  text-decoration: none; }
+.sidebar .nav-item:hover { background: var(--bg-sidebar-hover); color: rgba(255,255,255,.85) }
+.sidebar .nav-item.active { background: rgba(34,197,94,.18); color: #4ade80; font-weight: 600 }
+.sidebar .nav-item .icon { font-size: 1.15rem; width: 24px; text-align: center }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,.08); font-size: .72rem; color: rgba(255,255,255,.35) }
+.sidebar-footer .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px }
+.sidebar-footer .status-dot.online { background: #4ade80; box-shadow: 0 0 6px rgba(74,222,128,.5) }
+.sidebar-footer .status-dot.offline { background: #f87171; box-shadow: 0 0 6px rgba(248,113,113,.5) }
+
+.main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; max-width: 980px; }
+h1 { font-size: 1.4rem; margin-bottom: 4px; }
+.sub { color: var(--text2); font-size: .85rem; margin-bottom: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px;
+        border: 1px solid var(--border); box-shadow: var(--shadow); }
+.card h2 { font-size: 1rem; margin-bottom: 10px; }
+a { color: var(--blue); text-decoration: none; }
+.loading { text-align: center; padding: 40px; color: var(--text2); }
+.muted { color: var(--text2); font-size: .8rem; }
+
+/* hero stat row */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.stat { background: var(--border-light); border-radius: 10px; padding: 14px; text-align: center; }
+.stat .val { font-size: 1.5rem; font-weight: 800; letter-spacing: -.01em; }
+.stat .val.big { font-size: 1.9rem; }
+.stat .lbl { font-size: .7rem; color: var(--text2); margin-top: 3px; text-transform: uppercase; letter-spacing: .04em; }
+.stat .sub2 { font-size: .72rem; color: var(--text3); margin-top: 2px; }
+.green { color: var(--green-dark); } .blue { color: var(--blue); } .amber { color: var(--amber); } .red { color: var(--red); }
+
+.pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .72rem; font-weight: 700; }
+.pill.tier { background: var(--amber-bg); color: var(--amber); }
+.pill.stale { background: var(--red-bg); color: var(--red); }
+.pill.live { background: var(--green-bg); color: var(--green-dark); }
+
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--border-light); }
+th:first-child, td:first-child { text-align: left; }
+th { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); font-weight: 600; }
+tr.est td { color: var(--blue); font-style: italic; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* tier bar */
+.tierbar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); margin: 4px 0 10px; }
+.tierbar .seg { display: flex; align-items: center; justify-content: center; font-size: .68rem; color: #fff; font-weight: 600; min-width: 0; overflow: hidden; white-space: nowrap; }
+
+/* insight banner */
+.insight { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 12px;
+           background: linear-gradient(135deg, var(--amber-bg), rgba(239,68,68,.06)); border: 1px solid var(--amber-light);
+           margin-bottom: 12px; }
+.insight .ic { font-size: 1.5rem; line-height: 1; }
+.insight .txt { font-size: .95rem; font-weight: 600; color: var(--text); }
+.insight.top { background: linear-gradient(135deg, var(--red-bg), rgba(239,68,68,.1)); border-color: var(--red-light); }
+
+/* tier journey legend + table */
+.tier-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 2px; font-size: .76rem; }
+.tier-legend .li { display: flex; align-items: center; gap: 5px; color: var(--text2); }
+.tier-legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+td .chk { font-weight: 700; }
+.now-dot { color: var(--green-dark); }
+
+canvas { max-width: 100%; }
+.chart-wrap { position: relative; height: 240px; }
+.chart-wrap.tall { height: 320px; }
+
+/* Mobile bottom nav */
+.mobile-nav { display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #fff;
+              border-top: 1px solid var(--border); box-shadow: 0 -2px 8px rgba(0,0,0,.05); z-index: 200; padding: 4px 0; }
+.mobile-nav-inner { display: flex; justify-content: space-around; }
+.mob-nav-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 8px;
+                font-size: .65rem; color: var(--text2); text-decoration: none; cursor: pointer; }
+.mob-nav-item.active { color: var(--green-dark); }
+.mob-nav-item .mob-icon { font-size: 1.2rem; }
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; padding: 16px 16px 80px; }
+  .mobile-nav { display: block; }
+  body { padding-bottom: 80px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">🌱</span>
+    <div>
+      <div class="name">Smart Garden</div>
+      <div class="loc">Duvall, WA</div>
+    </div>
+  </div>
+  <div class="sidebar-nav">
+    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
+    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/map" class="nav-item"><span class="icon">🗺️</span> Zone Map</a>
+    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
+    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Moisture</a>
+    <a href="/costs" class="nav-item active"><span class="icon">💵</span> Water Cost</a>
+    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
+  </div>
+  <div class="sidebar-footer">
+    <span class="status-dot" id="sb-dot"></span>
+    <span id="sb-status">Connecting…</span>
+    <div style="margin-top:6px">Auto-refresh 60s</div>
+  </div>
+</nav>
+
+<div class="main">
+<h1>💵 Water Cost</h1>
+<div class="sub">Actual bill tracking from the live water-meter camera</div>
+
+<div id="content"><div class="loading">Loading meter &amp; cost data…</div></div>
+</div><!-- /.main -->
+
+{% include '_mobilenav.html' %}
+
+<script>
+var usageChart = null, billChart = null, tierChart = null;
+
+function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':s);return d.innerHTML;}
+function money(n){return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function num(n,d){return Number(n).toLocaleString(undefined,{maximumFractionDigits:(d==null?0:d)});}
+
+var TIER_COLORS = ['#94a3b8','#60a5fa','#34d399','#fbbf24','#fb923c','#ef4444'];
+
+function render(d){
+  var c = document.getElementById('content');
+  if(!d || !d.rates){ c.innerHTML = '<div class="card">No data yet.</div>'; return; }
+
+  var m = d.meter, cy = d.cycle, r = d.rates;
+  var html = '';
+
+  // ── Meter + projected bill hero ──
+  html += '<div class="card">';
+  if(m){
+    var meterPill = m.stale
+      ? '<span class="pill stale">stale read</span>'
+      : '<span class="pill live">live</span>';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">'
+          + '<h2 style="margin:0">Meter ' + meterPill + '</h2>'
+          + '<span class="muted">as of ' + esc(fmtTime(d.as_of)) + '</span></div>';
+    html += '<div class="stats" style="margin-top:10px">';
+    html += stat(num(m.reading_cf,0), 'ft³ on meter', 'big', 'green', num(m.reading_gal,0)+' gal total');
+    html += stat(num(m.ccf,0), 'CCF (bill reads this)', '', 'blue', '1 CCF = 748 gal');
+    if(cy){
+      html += stat(money(cy.projected_total), 'projected bill', 'big', 'amber',
+                   'closes ~' + esc(shortDate(cy.close_date)));
+      html += stat(money(cy.so_far_total), 'cost so far', '', '', 'if cycle ended today');
+    }
+    html += '</div>';
+  } else {
+    html += '<h2>Meter</h2><p class="muted">No confirmed meter reading yet — '
+          + 'the OCR is still warming up or the lock is not set.</p>';
+  }
+  html += '</div>';
+
+  // ── Insight banner + Tier journey graph ──
+  if(cy){
+    var topTier = (cy.current_tier >= cy.num_tiers);
+    html += '<div class="insight' + (topTier?' top':'') + '">'
+          + '<span class="ic">' + (topTier?'🔴':'📈') + '</span>'
+          + '<span class="txt">' + esc(cy.insight) + '</span></div>';
+
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">'
+          + '<h2 style="margin:0">Tier journey this cycle</h2>'
+          + '<span class="muted">day ' + cy.days_elapsed + ' of ~' + cy.cycle_days + '</span></div>';
+    html += '<p class="muted" style="margin:2px 0 8px">Cumulative water use climbing through the price tiers. '
+          + 'Solid = so far, dashed = projected to cycle close. Each band is a price tier.</p>';
+    html += '<div class="chart-wrap tall"><canvas id="tierChart"></canvas></div>';
+
+    // tier legend
+    html += '<div class="tier-legend">';
+    r.tiers.forEach(function(t,i){
+      var lo = (i===0?0:r.tiers[i-1].max_cf);
+      var lbl = (i===0? 'Tier 1 base (free, first '+num(t.max_cf,0)+' ft³)'
+                : (t.max_cf>900000? 'Tier '+(i+1)+' top ($'+t.rate+'/100ft³)'
+                   : 'Tier '+(i+1)+' ($'+t.rate+'/100ft³)'));
+      html += '<span class="li"><span class="sw" style="background:'+TIER_COLORS[i%TIER_COLORS.length]+'"></span>'+esc(lbl)+'</span>';
+    });
+    html += '</div>';
+
+    // tier progression table
+    html += '<table style="margin-top:10px"><thead><tr><th>Tier</th><th>Rate /gal</th><th>Enters at</th><th>When</th><th>Status</th></tr></thead><tbody>';
+    cy.tier_progression.forEach(function(p){
+      var status, cls='';
+      if(p.crossed){ status='✓ in it'; cls='green'; }
+      else if(p.within_cycle){ status='projected'; cls='amber'; }
+      else { status='not this cycle'; cls=''; }
+      var when = p.crossed ? ('~day '+Math.round(p.day))
+               : (p.within_cycle ? ('~day '+Math.round(p.day)+' ('+esc(shortDate(p.date))+')') : '—');
+      html += '<tr><td>Tier '+p.tier+'</td><td>'+money(p.rate_per_gal)+'</td><td>'+num(p.entry_gal,0)+' gal</td>'
+            + '<td>'+when+'</td><td class="'+cls+'"><span class="chk">'+status+'</span></td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '</div>';
+  }
+
+  // ── Current cycle detail ──
+  if(cy){
+    html += '<div class="card">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">'
+          + '<h2 style="margin:0">This billing cycle</h2>'
+          + '<span class="pill tier">Tier ' + cy.current_tier + ' · '
+          + money(cy.marginal_rate) + '/100ft³ · ' + money(cy.marginal_per_gal*1) + '/gal</span></div>';
+    html += '<table style="margin-top:8px"><tbody>';
+    html += rowKV('Cycle window', esc(shortDate(cy.start_date)) + ' → ~' + esc(shortDate(cy.close_date))
+                  + ' &nbsp;<span class="muted">(' + cy.days_elapsed + ' of ~' + cy.cycle_days + ' days)</span>');
+    html += rowKV('Used so far', num(cy.used_cf,0) + ' ft³ · ' + num(cy.used_gal,0) + ' gal · ' + num(cy.used_ccf,1) + ' CCF');
+    html += rowKV('Daily average', num(cy.daily_cf,0) + ' ft³/day · ' + num(cy.daily_gal,0) + ' gal/day');
+    html += rowKV('Projected close usage', num(cy.projected_used_cf,0) + ' ft³ · ' + num(cy.projected_used_gal,0) + ' gal');
+    html += '</tbody></table>';
+
+    // projected bill stack
+    html += '<table style="margin-top:6px"><tbody>';
+    html += rowMoney('Water service (projected)', cy.projected_water);
+    html += rowMoney('Sewer (flat)', cy.sewer);
+    html += rowMoney('Storm drain (flat)', cy.storm);
+    html += '<tr style="font-weight:800"><td>Projected total</td><td></td><td style="text-align:right">'
+          + money(cy.projected_total) + '</td></tr>';
+    html += '</tbody></table>';
+
+    // tier breakdown bar
+    html += '<h2 style="margin-top:14px">Tier breakdown (projected)</h2>';
+    html += tierBar(cy.breakdown);
+    html += '<table style="margin-top:4px"><thead><tr><th>Tier</th><th>Rate /100ft³</th><th>ft³ used</th><th>Cost</th></tr></thead><tbody>';
+    cy.breakdown.forEach(function(t){
+      if(t.used_cf <= 0 && t.tier > cy.current_tier) return;
+      html += '<tr><td>' + esc(t.label) + '</td><td>' + (t.rate>0?money(t.rate):'—')
+            + '</td><td>' + num(t.used_cf,0) + '</td><td>' + (t.tier===1?'<span class="muted">in base</span>':money(t.cost)) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '</div>';
+  }
+
+  // ── Bill history + estimate ──
+  html += '<div class="card"><h2>Bill history</h2>';
+  html += '<div class="chart-wrap"><canvas id="billChart"></canvas></div>';
+  html += '<table style="margin-top:10px"><thead><tr><th>Cycle</th><th>Used (ft³)</th><th>Gallons</th>'
+        + '<th>Water</th><th>Sewer</th><th>Storm</th><th>Total</th></tr></thead><tbody>';
+  d.history.forEach(function(h){
+    html += '<tr class="' + (h.actual?'':'est') + '"><td>' + esc(h.label) + (h.actual?'':'')
+          + '</td><td>' + num(h.used_cf,0) + '</td><td>' + num(h.used_gal,0) + '</td><td>' + money(h.water)
+          + '</td><td>' + money(h.sewer) + '</td><td>' + money(h.storm) + '</td><td><b>' + money(h.total) + '</b></td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<p class="muted" style="margin-top:8px">Solid rows are real paid bills; the italic row is this cycle projected from the meter. '
+        + 'Rates: ' + r.year + ' City of Duvall · base ' + money(r.base_fee) + ' · sewer ' + money(r.sewer)
+        + ' · storm ' + money(r.storm) + ' · <a href="' + esc(r.source_url) + '" target="_blank" rel="noopener">rate source</a>.</p>';
+  html += '</div>';
+
+  // ── Daily usage from meter snapshots ──
+  html += '<div class="card"><h2>Daily water use (from meter)</h2>';
+  if(d.snapshots && d.snapshots.filter(function(s){return s.used_cf>0;}).length){
+    html += '<div class="chart-wrap"><canvas id="usageChart"></canvas></div>';
+    html += '<p class="muted" style="margin-top:8px">One snapshot per day from the camera. Bars before the first auto snapshot '
+          + 'are interpolated from real bill reads.</p>';
+  } else {
+    html += '<p class="muted">Daily usage history builds as the camera records one snapshot per day. '
+          + 'Check back tomorrow for the first bar.</p>';
+  }
+  html += '</div>';
+
+  c.innerHTML = html;
+
+  if(cy) drawTierChart(cy, d.rates, d.snapshots, cy.start_cf);
+  if(cy) drawBillChart(d.history);
+  var used = (d.snapshots||[]).filter(function(s){return s.used_cf>0;});
+  if(used.length) drawUsageChart(d.snapshots);
+}
+
+function stat(val,lbl,size,color,sub2){
+  return '<div class="stat"><div class="val ' + (size||'') + ' ' + (color||'') + '">' + val + '</div>'
+       + '<div class="lbl">' + esc(lbl) + '</div>'
+       + (sub2?'<div class="sub2">' + esc(sub2) + '</div>':'') + '</div>';
+}
+function rowKV(k,v){ return '<tr><td>' + esc(k) + '</td><td colspan="2" style="text-align:right">' + v + '</td></tr>'; }
+function rowMoney(k,v){ return '<tr><td>' + esc(k) + '</td><td></td><td style="text-align:right">' + money(v) + '</td></tr>'; }
+
+function tierBar(breakdown){
+  var total = breakdown.reduce(function(a,t){return a + (t.used_cf||0);},0) || 1;
+  var html = '<div class="tierbar">';
+  breakdown.forEach(function(t){
+    if(t.used_cf<=0) return;
+    var pct = (t.used_cf/total*100);
+    html += '<div class="seg" style="width:' + pct.toFixed(1) + '%;background:' + TIER_COLORS[(t.tier-1)%TIER_COLORS.length] + '" '
+          + 'title="' + esc(t.label) + ': ' + num(t.used_cf,0) + ' ft³">' + (pct>9?('T'+t.tier):'') + '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function hexA(hex, a){
+  var h = hex.replace('#',''); 
+  var r=parseInt(h.substring(0,2),16), g=parseInt(h.substring(2,4),16), b=parseInt(h.substring(4,6),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
+function dayOffset(startStr, dateStr){
+  try { return (new Date(dateStr+'T00:00:00') - new Date(startStr+'T00:00:00'))/86400000; }
+  catch(e){ return null; }
+}
+
+function drawTierChart(cy, r, snapshots, startCf){
+  var el = document.getElementById('tierChart'); if(!el) return;
+  if(tierChart) tierChart.destroy();
+  var de = cy.days_elapsed, cd = cy.cycle_days;
+
+  // Actual cumulative-usage points (relative to cycle start), from real
+  // snapshots that fall inside this cycle, always bracketed by start + now.
+  var actual = [{x:0, y:0}];
+  (snapshots||[]).forEach(function(s){
+    var off = dayOffset(cy.start_date, s.date);
+    if(off!=null && off>0 && off<=de){
+      actual.push({x: Math.round(off*10)/10, y: Math.max(0, s.reading_cf - startCf)});
+    }
+  });
+  actual.push({x: de, y: cy.used_cf});
+  actual.sort(function(a,b){return a.x-b.x;});
+  var proj = [{x:de, y:cy.used_cf}, {x:cd, y:cy.projected_used_cf}];
+
+  // Tier band boundaries (cumulative cf). Show headroom one boundary above proj.
+  var bounds = r.tiers.map(function(t){return t.max_cf;});
+  var yTop = cy.projected_used_cf;
+  for(var i=0;i<bounds.length;i++){ if(bounds[i] > yTop && bounds[i] < 900000){ yTop = bounds[i]; break; } }
+  yTop = Math.max(yTop, cy.used_cf) * 1.08;
+
+  var bandPlugin = {
+    id: 'tierBands',
+    beforeDraw: function(chart){
+      var ctx = chart.ctx, ca = chart.chartArea, ys = chart.scales.y;
+      if(!ca) return;
+      var prev = 0;
+      r.tiers.forEach(function(t, idx){
+        var hi = Math.min(t.max_cf, ys.max);
+        if(hi <= prev) { prev = t.max_cf; return; }
+        var yHi = ys.getPixelForValue(hi), yLo = ys.getPixelForValue(prev);
+        ctx.save();
+        ctx.fillStyle = hexA(TIER_COLORS[idx%TIER_COLORS.length], idx===0?0.10:0.16);
+        ctx.fillRect(ca.left, yHi, ca.right-ca.left, yLo-yHi);
+        // tier label at left edge of band
+        ctx.fillStyle = hexA(TIER_COLORS[idx%TIER_COLORS.length], 0.95);
+        ctx.font = '600 10px Inter, sans-serif';
+        ctx.textBaseline = 'top';
+        var lbl = (idx===0?'T1 base':'T'+(idx+1)+'  $'+t.rate+'/100ft³');
+        if(yLo - yHi > 14) ctx.fillText(lbl, ca.left+6, yHi+3);
+        ctx.restore();
+        prev = t.max_cf;
+      });
+      // "now" vertical marker
+      var xs = chart.scales.x;
+      var xNow = xs.getPixelForValue(de);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(22,163,74,.55)'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(xNow, ca.top); ctx.lineTo(xNow, ca.bottom); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(22,163,74,.9)'; ctx.font = '700 10px Inter, sans-serif'; ctx.textBaseline='top';
+      ctx.fillText('now', xNow+4, ca.top+2);
+      ctx.restore();
+    }
+  };
+
+  tierChart = new Chart(el, {
+    type: 'line',
+    data: { datasets: [
+      { label:'Used so far', data:actual, parsing:false, borderColor:'#16a34a',
+        backgroundColor:'rgba(22,163,74,.10)', borderWidth:2.5, fill:true, tension:.15,
+        pointRadius:actual.map(function(p){return p.x===de?5:0;}),
+        pointBackgroundColor:'#16a34a' },
+      { label:'Projected', data:proj, parsing:false, borderColor:'#f59e0b',
+        borderWidth:2, borderDash:[6,4], fill:false, pointRadius:proj.map(function(p){return p.x===cd?4:0;}),
+        pointBackgroundColor:'#f59e0b' }
+    ]},
+    options: { responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'nearest', intersect:false},
+      plugins:{ legend:{position:'bottom'},
+        tooltip:{ callbacks:{
+          title:function(items){ return 'Day ' + items[0].parsed.x; },
+          label:function(i){ return num(i.parsed.y,0)+' ft³ · '+num(i.parsed.y*7.48052,0)+' gal'; } } } },
+      scales:{
+        x:{ type:'linear', min:0, max:cd, title:{display:true,text:'day of billing cycle'},
+            grid:{display:false}, ticks:{stepSize:5} },
+        y:{ min:0, suggestedMax:yTop, title:{display:true,text:'cumulative ft³ used'} } }
+    },
+    plugins:[bandPlugin]
+  });
+}
+
+function drawBillChart(history){
+  var el = document.getElementById('billChart'); if(!el) return;
+  if(billChart) billChart.destroy();
+  billChart = new Chart(el, {
+    type:'bar',
+    data:{ labels: history.map(function(h){return h.label;}),
+      datasets:[
+        {label:'Water', data:history.map(function(h){return h.water;}), backgroundColor:'#60a5fa', stack:'s'},
+        {label:'Sewer', data:history.map(function(h){return h.sewer;}), backgroundColor:'#a78bfa', stack:'s'},
+        {label:'Storm', data:history.map(function(h){return h.storm;}), backgroundColor:'#34d399', stack:'s'}
+      ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{position:'bottom'},
+        tooltip:{ callbacks:{ footer:function(items){var t=0;items.forEach(function(i){t+=i.raw;});return 'Total: '+money(t);} } } },
+      scales:{ x:{stacked:true,grid:{display:false}},
+               y:{stacked:true,ticks:{callback:function(v){return '$'+v;}}} } }
+  });
+}
+
+function drawUsageChart(snaps){
+  var el = document.getElementById('usageChart'); if(!el) return;
+  if(usageChart) usageChart.destroy();
+  usageChart = new Chart(el, {
+    type:'bar',
+    data:{ labels: snaps.map(function(s){return s.date.slice(5);}),
+      datasets:[{ label:'Gallons/day', data:snaps.map(function(s){return s.used_gal;}),
+        backgroundColor: snaps.map(function(s){return s.source==='bill'?'#cbd5e1':'#3b82f6';}) }]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label:function(i){return num(i.raw,0)+' gal'; } } } },
+      scales:{ x:{grid:{display:false}}, y:{beginAtZero:true,title:{display:true,text:'gal/day'}} } }
+  });
+}
+
+function fmtTime(iso){ try{ var d=new Date(iso); return d.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return iso; } }
+function shortDate(s){ try{ var d=new Date(s+'T00:00:00'); return d.toLocaleDateString([], {month:'short',day:'numeric'}); }catch(e){ return s; } }
+
+function load(){
+  fetch('/api/water-cost').then(function(r){return r.json();}).then(render)
+    .catch(function(e){ document.getElementById('content').innerHTML =
+      '<div class="card red">Failed to load: ' + esc(e.message) + '</div>'; });
+}
+
+function refreshSidebarStatus(){
+  fetch('/api/health').then(function(r){return r.json();}).then(function(d){
+    var online = !!d.esp32_reachable;
+    var dot=document.getElementById('sb-dot'), lbl=document.getElementById('sb-status');
+    if(dot) dot.className='status-dot '+(online?'online':'offline');
+    if(lbl) lbl.textContent = online?'ESP32 online':'ESP32 offline';
+  }).catch(function(){});
+}
+
+load();
+refreshSidebarStatus();
+setInterval(load, 60000);
+setInterval(refreshSidebarStatus, 30000);
+</script>
+</body>
+</html>

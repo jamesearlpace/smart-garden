@@ -1,0 +1,136 @@
+{# ============================================================
+   Shared mobile bottom nav — 5 primary tabs + "More" sheet.
+   Self-contained (scoped CSS + JS), so it is IDENTICAL on every
+   page and never drifts again. Include with:  {% include '_mobilenav.html' %}
+
+   Links to in-page SPA panels use /#panel. On the home page ("/")
+   those are intercepted and routed to showPanel() with no reload;
+   from any other page they navigate to /#panel and index opens it
+   from the URL hash on load.
+   ============================================================ #}
+<style>
+.sg-mobilenav, .sg-sheet, .sg-sheet-backdrop { display: none; }
+@media (max-width: 768px) {
+  .sg-mobilenav {
+    display: block; position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000;
+    background: #fff; border-top: 1px solid #e5e7eb;
+    box-shadow: 0 -2px 10px rgba(0,0,0,.06);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .sg-mobilenav-inner { display: grid; grid-template-columns: repeat(5, 1fr); }
+  .sg-nav-item {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; padding: 7px 2px 6px; font-size: .68rem; line-height: 1;
+    color: #6b7280; text-decoration: none; background: none; border: none;
+    cursor: pointer; font-family: inherit; -webkit-tap-highlight-color: transparent;
+  }
+  .sg-nav-item .sg-ic { font-size: 1.25rem; line-height: 1; }
+  .sg-nav-item.active { color: #16a34a; font-weight: 600; }
+
+  /* "More" slide-up sheet */
+  .sg-sheet-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 1001;
+    background: rgba(0,0,0,.4); opacity: 0; pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  .sg-sheet-backdrop.open { opacity: 1; pointer-events: auto; }
+  .sg-sheet {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 1002;
+    background: #fff; border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 24px rgba(0,0,0,.18);
+    transform: translateY(100%); transition: transform .25s ease;
+    padding: 8px 12px calc(16px + env(safe-area-inset-bottom, 0));
+    max-height: 75vh; overflow-y: auto;
+  }
+  .sg-sheet.open { transform: translateY(0); }
+  .sg-sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: #d1d5db;
+    margin: 8px auto 12px; }
+  .sg-sheet-title { font-size: .8rem; font-weight: 600; color: #9ca3af;
+    text-transform: uppercase; letter-spacing: .04em; margin: 0 4px 8px; }
+  .sg-sheet-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .sg-sheet-item {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 12px 4px; border-radius: 10px; text-decoration: none;
+    color: #374151; font-size: .72rem; text-align: center; line-height: 1.15;
+    background: none; border: none; cursor: pointer; font-family: inherit;
+  }
+  .sg-sheet-item:active { background: #f3f4f6; }
+  .sg-sheet-item .sg-ic { font-size: 1.5rem; }
+  .sg-sheet-item.active { color: #16a34a; font-weight: 600; }
+
+  /* Keep page content clear of the fixed bar */
+  body { padding-bottom: 64px; }
+}
+</style>
+
+<nav class="sg-mobilenav">
+  <div class="sg-mobilenav-inner">
+    <a href="/#home" class="sg-nav-item" data-panel="home"><span class="sg-ic">🏠</span>Home</a>
+    <a href="/#zones" class="sg-nav-item" data-panel="zones"><span class="sg-ic">🌿</span>Zones</a>
+    <a href="/moisture-sim" class="sg-nav-item"><span class="sg-ic">💧</span>Schedule</a>
+    <a href="/forecast" class="sg-nav-item"><span class="sg-ic">🌧️</span>Forecast</a>
+    <button type="button" class="sg-nav-item" id="sgMoreBtn"><span class="sg-ic">⋯</span>More</button>
+  </div>
+</nav>
+
+<div class="sg-sheet-backdrop" id="sgSheetBackdrop"></div>
+<div class="sg-sheet" id="sgSheet" role="dialog" aria-label="More navigation">
+  <div class="sg-sheet-handle"></div>
+  <div class="sg-sheet-title">More</div>
+  <div class="sg-sheet-grid">
+    <a href="/#history" class="sg-sheet-item" data-panel="history"><span class="sg-ic">📊</span>History</a>
+    <a href="/sensor-history" class="sg-sheet-item"><span class="sg-ic">🌡️</span>Sensor History</a>
+    <a href="/#cam" class="sg-sheet-item" data-panel="cam"><span class="sg-ic">📷</span>Cam</a>
+    <a href="/#deer" class="sg-sheet-item" data-panel="deer"><span class="sg-ic">🦌</span>Deer</a>
+    <a href="/#settings" class="sg-sheet-item" data-panel="settings"><span class="sg-ic">⚙️</span>Settings</a>
+    <a href="/costs" class="sg-sheet-item"><span class="sg-ic">💵</span>Water Cost</a>
+    <a href="/flow" class="sg-sheet-item"><span class="sg-ic">🩺</span>Flow &amp; Leaks</a>
+    <a href="/calibrate" class="sg-sheet-item"><span class="sg-ic">🎛️</span>Calibrate</a>
+    <a href="/map" class="sg-sheet-item"><span class="sg-ic">🗺️</span>Zone Map</a>
+  </div>
+</div>
+
+<script>
+(function() {
+  var sheet = document.getElementById('sgSheet');
+  var backdrop = document.getElementById('sgSheetBackdrop');
+  var moreBtn = document.getElementById('sgMoreBtn');
+  function openSheet()  { sheet.classList.add('open'); backdrop.classList.add('open'); }
+  function closeSheet() { sheet.classList.remove('open'); backdrop.classList.remove('open'); }
+  if (moreBtn) moreBtn.addEventListener('click', function(e){ e.preventDefault(); openSheet(); });
+  if (backdrop) backdrop.addEventListener('click', closeSheet);
+
+  // Intercept in-page panel links so the SPA (home page) switches panels
+  // without a full reload. From other pages, let the browser navigate to
+  // /#panel and index opens it from the hash on load.
+  document.querySelectorAll('.sg-nav-item[data-panel], .sg-sheet-item[data-panel]').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      var panel = el.dataset.panel;
+      if (window.location.pathname === '/' && typeof window.showPanel === 'function') {
+        e.preventDefault();
+        try { history.replaceState(null, '', '/#' + panel); } catch(_) {}
+        window.showPanel(panel);
+        closeSheet();
+      }
+      // else: default navigation to /#panel
+    });
+  });
+
+  // Highlight the active item for the current location.
+  (function highlight() {
+    var path = window.location.pathname;
+    var hash = (window.location.hash || '').replace('#', '');
+    document.querySelectorAll('.sg-nav-item, .sg-sheet-item').forEach(function(el) {
+      var href = el.getAttribute('href') || '';
+      var isPanel = el.dataset.panel;
+      var on = false;
+      if (path === '/' && isPanel) {
+        on = (hash === isPanel) || (!hash && isPanel === 'home');
+      } else if (!isPanel && href === path) {
+        on = true;
+      }
+      el.classList.toggle('active', on);
+    });
+  })();
+})();
+</script>

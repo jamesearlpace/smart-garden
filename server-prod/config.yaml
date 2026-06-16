@@ -27,25 +27,25 @@ sensors:
   dht22: false
   soil_0: true
   soil_1: true
-  soil_2: false
-  soil_3: false
+  soil_2: true
+  soil_3: true
 soil_calibration:
   0:
     name: Garden
-    dry: 896
-    wet: 1500
+    dry: 2683
+    wet: 89
   1:
     name: Grapes
-    dry: 2676
-    wet: 340
+    dry: 2640
+    wet: 1012
   2:
     name: Fruit Trees
-    dry: 3500
-    wet: 1500
+    dry: 2513
+    wet: 1501
   3:
     name: South Lawn
-    dry: 3500
-    wet: 1500
+    dry: 2559
+    wet: 1203
 zones:
 - id: 0
   name: Front Yard A
@@ -328,11 +328,17 @@ battery_calibration:
   - ts: '2026-06-11T16:13:58'
     raw_v: 14.5379
     actual_v: 14.6
+  - ts: '2026-06-15T17:28:03'
+    raw_v: 13.5488
+    actual_v: 13.8
+  - ts: '2026-06-15T17:29:23'
+    raw_v: 13.5951
+    actual_v: 13.8
   coeffs:
-  - -49.39086338
-  - 8.30423456
-  - -0.26889601
+  - -51.00759929
+  - 8.53894673
+  - -0.27737354
   degree: 2
-  rmse: 0.1171
-  model: quadratic fit (n=9)
-  updated: '2026-06-11T16:13:58'
+  rmse: 0.1065
+  model: quadratic fit (n=11)
+  updated: '2026-06-15T17:29:23'

@@ -19,7 +19,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 h2{font-size:1.0rem;margin-bottom:10px}
 .imgwrap{text-align:center;background:#11181f;border-radius:10px;padding:8px}
-.imgwrap img{max-width:100%;border-radius:6px;transform:rotate(180deg)}
+.imgwrap img{max-width:100%;width:var(--img-w,100%);border-radius:6px;transform:rotate(180deg)}
+.imgsize{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:var(--text2);font-size:.78rem}
+.imgsize input[type=range]{flex:1;max-width:260px}
 .imgnote{color:var(--text2);font-size:.78rem;margin-top:8px;text-align:center}
 table{width:100%;border-collapse:collapse;font-size:.86rem}
 th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
@@ -65,6 +67,7 @@ var FIELDS = [
   ['rate','Flow rate (gal/min)'],
   ['kind','Kind'],
   ['confidence','Confidence'],
+  ['fresh_read','Fresh read of this frame'],
   ['stale','Stale (lower bound)'],
   ['raw_low_match','Raw low-5 match'],
   ['note','Note'],
@@ -98,16 +101,59 @@ fetch('/api/cam/reading/' + encodeURIComponent(RID))
     }).join('');
 
     var imgHtml = d.has_frame
-      ? '<div class="imgwrap"><img src="/api/cam/frame/' + encodeURIComponent(RID) + '" alt="captured frame"></div>'
+      ? '<div class="imgsize"><span>Size</span>'
+          + '<input type="range" id="imgSize" min="30" max="100" step="5">'
+          + '<span id="imgSizePct"></span></div>'
+        + '<div class="imgwrap"><img src="/api/cam/frame/' + encodeURIComponent(RID) + '" alt="captured frame"></div>'
         + '<div class="imgnote">This is the exact frame the OCR processed for this row (rotated 180° to match the meter).</div>'
       : '<div class="warn">No saved frame for this record. Frames are kept for the most recent ~720 readings (~1 hour); older ones are pruned. Derived/back-fill rows never have a frame.</div>';
 
+    // fresh_read = the system actually read THIS frame. When false, the number
+    // would just be a held/substituted lock value that doesn't correspond to
+    // this image, so show "Reading pending" instead of pairing the frame with a
+    // number it didn't produce. (The meter's running total is shown on the Cost
+    // page from the server-side lock — this page is strictly per-frame.)
+    var fresh = e.fresh_read === true;
+    var readingCard;
+    if (fresh) {
+      readingCard = '<div class="card"><h2>Reading</h2>'
+        + '<div class="big">' + esc(e.reading_ft3) + ' <span class="muted" style="font-size:.8rem">ft³</span></div>'
+        + '<div class="muted">' + esc(e.reading_gal) + ' gallons · raw OCR “' + esc(e.reading) + '”</div></div>';
+    } else {
+      var why = e.note ? esc(e.note) : 'this frame could not be read with confidence';
+      readingCard = '<div class="card"><h2>Reading</h2>'
+        + '<div class="big" style="color:var(--text2)">Reading pending</div>'
+        + '<div class="warn" style="margin-top:8px">The system did not produce a confident reading from THIS frame ('
+        + why + '), so no number is shown for it. The cam\u2019s best-known running'
+        + ' total is tracked separately on the Cost page. The OCR\u2019s raw per-frame'
+        + ' guess was \u201c' + esc(e.ocr_guess || '\u2014') + '\u201d (not trusted).</div></div>';
+    }
+
     document.getElementById('content').innerHTML =
       '<div class="card"><h2>Captured image</h2>' + imgHtml + '</div>'
-      + '<div class="card"><h2>Reading</h2>'
-      + '<div class="big">' + stalePrefix + esc(e.reading_ft3) + ' <span class="muted" style="font-size:.8rem">ft³</span></div>'
-      + '<div class="muted">' + stalePrefix + esc(e.reading_gal) + ' gallons · raw OCR “' + esc(e.reading) + '”</div></div>'
+      + readingCard
       + '<div class="card"><h2>All fields</h2><table>' + rows + '</table></div>';
+
+    // Resizable captured image — width as a % of the card, persisted so the
+    // choice sticks across readings (shared key with the same control idea on
+    // the Cam panel).
+    var slider = document.getElementById('imgSize');
+    if (slider) {
+      var saved = parseInt(localStorage.getItem('readingImgSize'), 10);
+      if (!(saved >= 30 && saved <= 100)) saved = 100;
+      var apply = function(pct){
+        document.documentElement.style.setProperty('--img-w', pct + '%');
+        var lbl = document.getElementById('imgSizePct');
+        if (lbl) lbl.textContent = pct + '%';
+      };
+      slider.value = saved;
+      apply(saved);
+      slider.addEventListener('input', function(){
+        var pct = parseInt(slider.value, 10);
+        apply(pct);
+        localStorage.setItem('readingImgSize', pct);
+      });
+    }
   })
   .catch(function(){
     document.getElementById('sub').textContent = 'Record ' + RID + ' not found.';

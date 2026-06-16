@@ -211,6 +211,60 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
 
 ---
 
+## 2026-06-13 — Ground-truth defense-in-depth (stop bad labels mistraining the CNN)
+
+**Context:** James saw the training grid still had wrong labels and asked the key question: *"how do we make sure it doesn't get stored like that and end up mistraining the CNN?"* Right question — a wrong label is worse than no label (it actively teaches the model the wrong thing).
+
+**Two root holes found:**
+1. **The monotonic audit can't catch systematic errors.** The wrong labels descended smoothly (`119983 → 119163 → 115559…`) — internally consistent, so they pass the LNDS monotonicity check. When the reader makes the *same* mistake across many frames, no single-signal/physics check catches it.
+2. **The oracle's `agree:true` flag was circular/dishonest.** `_oracle_bank_label` hardcoded `agree:true` with `ocr_guess==label` — but the oracle IS the only reader, so it verifies nothing. **295 of 388 banked labels were oracle-only with this fake flag** → the majority of ground truth had zero independent verification.
+
+**The principle: collected ≠ verified.** Banking COLLECTS candidate (frame, label) pairs cheaply. The CNN must train ONLY on labels that pass INDEPENDENT verification — never raw banked labels. A label is CNN-eligible only when **two independent readers agree**: RapidOCR (small scene-text model, on the tower) and GPT-4o (oracle) fail in *different* ways, so a systematic error fooling one rarely fools both.
+
+**What shipped:**
+- **`dashboard.py` banking honesty fix** — `_oracle_bank_label(... local_low=)`: `agree` is now true ONLY if the local RapidOCR's independent low-5 digits match the oracle's value; oracle-alone = `agree:false` + records `local_low`. Threaded the local read's low-5 from `_maybe_oracle` → `_oracle_run` → bank. No more circular `agree:true`.
+- **`ocr-harness/build_cnn_dataset.py`** — the export gate. (1) LNDS monotonic backbone, then (2) re-reads every backbone frame with the tower's RapidOCR (free, independent architecture) and keeps a label only if the second reader agrees on all 9 digits (or low-5 with `--low-only`). Emits `manifest.jsonl` (CNN-ready) + `needs_review.jsonl` (disagreements, excluded until a human resolves). The CNN trains ONLY on the manifest.
+- Confirmed the poison by **independent viewing** (rotated frames): `094119983` etc. are glare-garbled — the trailing/middle digits don't match the stored label.
+
+**Lesson:** never let a pipeline's own output become ground truth without a *genuinely independent* check. Monotonicity (physics) catches impossible labels; cross-reader agreement (two architectures) catches systematic ones; a human spot-check montage catches the rest. Defense in depth, because each layer has a blind spot the others cover.
+
+**First cross-reader run (the calibration surprise):** strict "all 9 digits must match" rejected 301/384 — but the disagreements showed RapidOCR mostly returned **∅ (nothing)**, **10 digits**, or **scrambled order** (e.g. label `094010324` vs tower `401010324`) on this glary feed. So the rejections were mostly **false-rejects** (a weak 2nd reader), NOT proof the labels were wrong. Takeaway: RapidOCR is too noisy on this camera to be a strict 9-digit second vote. The robust setting is `--low-only` (require just the low-5 digits to agree — the ones that change + that both readers can usually get; the high digits come from the monotonic backbone anyway). Also worth adding later: use the ORACLE re-read (GPT-4o with context hint) as the second vote instead of RapidOCR, since the harness showed it's far more reliable. The gate logic is right; the *choice of second reader* matters.
+
+**2026-06-15 — oracle verifier + dedup + consensus resolver.** Two days of data → 627 frames; re-audit quarantined 92 new poison → 581 clean. Added to `build_cnn_dataset.py`: `--verifier oracle` (GPT-4o re-read with the slow-movement hint as the independent 2nd vote — the reliable reader) and `--max-per-label N` dedup. Also dropped live banking `GOLD_MAX_PER_LABEL` 3→1 (one clean image per number is enough for a per-digit CNN; cuts cost). Oracle-verified + dedup-to-1 = **104 verified / 305 review** of 409 deduped. The 305 disagreements were almost all **±1-5 on the fast-moving LAST digit** under glare (the high 8 digits matched). James confirmed the last digit DOES matter for a per-digit CNN, so we don't relax the rule. Instead: **`resolve_consensus.py`** — re-reads each disputed frame 3× with GPT-4o, promotes to the manifest only if a value wins a **strict majority** AND fits **monotonically between the trusted 104 anchors** (a meter can't go backward). Majority vote resolves stochastic glare disagreement without lowering the bar; corrected labels are written into the manifest (the CNN trains on manifest `(file,label)`, so no file rename needed). Result counts pending the run. **Key principle reaffirmed:** the manifest is the single source of truth for training; the filename's label is just a candidate.
+
+**Consensus result (final):** **104 → 395 verified labels.** Of 305 disputed frames, **291 promoted** (majority vote + monotonic gate), **72 of those had their label CORRECTED** by the vote (almost all last-digit glare errors like `...589→...584`, at 3/4 or 4/4 votes — exactly the bad labels that would have mistrained the CNN), only **14 stayed unresolved**. Two operational fixes were needed mid-effort: (1) the first run **ran the $10 OpenAI credit dry** and then spun forever on "exceeded your current quota" (backoff can't fix an empty wallet) — made the resolver **incremental + resumable** (`consensus_results.jsonl`, one durable line per frame, skips done frames on re-run) and **quota-aware** (raises `QuotaExhausted` and stops cleanly vs. the per-minute 429 which it waits out). (2) Added client-side throttle (~27 reads/min) to respect the 30K-token/min cap. With fresh credit the resumable run finished clean, 0 quota stops.
+
+**Label review gallery** (`/cam/labels`, `templates/cam_labels.html` + `/api/cam/labels`): merges manifest + needs_review into one color-coded gallery — Verified (green) / Promoted (blue) / Corrected (purple, shows "was X") / Review (amber) — with filter chips + counts, sorted by reading value. The Corrected filter is the spot-check view (did the vote's fix match the image?); Review is the small human-eyeball pile. Frames served via `/api/cam/training/img/<file>`.
+
+**2026-06-15 — manual edit + collection-off + finalize (DATASET DONE, CNN-ready).** Added inline editing to the gallery: each tile has **Fix** (type correct 9 digits), **OK** (confirm), **Reject** (exclude). Saved to `manual_labels.jsonl` (highest trust tier, `POST /api/cam/labels/update`, last-write-per-file wins), overriding all automated verdicts on read. New statuses **manual** (cyan) + **rejected** (red). James reviewed the whole set: **86 corrected, 8 OK'd, 36 rejected** (130 edits). **Turned OFF auto-collection** — `METER_BANK_ENABLED=0` via `collection.conf` drop-in (gates both `_bank_sample` and `_oracle_bank_label`; the oracle STILL reads/re-anchors the live meter, it just stops saving training images) so James isn't stuck on a manual-correction treadmill. **`finalize_dataset.py`** bakes everything into the final training file `cnn_train.jsonl` with trust priority manual > consensus/verified, excluding rejects + unresolved review: **373 frames (336 distinct readings), 0 unresolved, 0 missing.** Sources: 86 manual + 8 manual-ok + 197 consensus + 82 verified. THIS is the only file the CNN trains on.
+
+**➡️ NEXT: the closed-loop self-improving reader. Full plan + current-state doc: [`ocr-harness/CNN-CLOSED-LOOP-PLAN.md`](../smart-garden/ocr-harness/CNN-CLOSED-LOOP-PLAN.md).** Summary: CNN reads digits (free/fast) → low-conf or 5-min spot-check heartbeat falls through to GPT-4o oracle (independent verifier) → oracle agreements bank new verified labels, disagreements bank corrections → gated nightly retrain (champion/challenger: promote only if it beats the golden-set score). Three guardrails: (1) never let a reader's own output become a label without independent confirmation, (2) retraining is gated not auto, (3) monotonic physics is the final veto. Build order: train CNN v1 → wire inference path → verified-only correction banking → gated retraining → cost ramp-down.
+
+---
+
+## 2026-06-13 — OCR test harness + ground-truth audit (iterate without manual eyeballing)
+
+**Context:** James was tired of the loop "I troubleshoot → screenshot → you fix → I check again." He asked for a **test harness so the reader can be iterated automatically**, and flagged that the **banked training labels looked wrong** and he was nervous about them becoming ground truth. Both concerns were dead-on.
+
+**Ground-truth audit (his worry was justified).** I pulled banked frames, rotated them upright (camera is upside-down), and read them **independently** (a separate vision model from the pipeline — not circular). Found real poison: e.g. a frame whose true reading is `094100575` was banked as `094110575`; `094099518` banked as `094103951` (~4,400 too high). All from the ratcheting bug. The pipeline had been auto-labeling its own mistakes into the ground truth.
+
+**Tools built (in `MyCode/smart-garden/ocr-harness/`, see its README):**
+- **`golden.json`** — trusted ground truth, each frame's real reading verified by independent viewing (NOT the pipeline). `true` vs `stored_label` so poison is explicit.
+- **`harness.py`** — runs each golden frame through `vision_oracle.read_meter` with the realistic context hint, scores **per-frame** accuracy vs `true`, exits non-zero below threshold so a loop can iterate on reader code. Runs on the Acer (has the key + tower).
+- **`audit_labels.py`** — finds + quarantines poisoned labels via **Longest Non-Decreasing Subsequence** over (capture-time, label). The meter is monotonic, so the largest non-decreasing backbone is trustworthy; everything off it is an outlier. Robust to BOTH false-highs and false-lows (a naive running-min envelope flagged 215/396 because one false-low poisons the whole backward envelope — LNDS fixed that to a principled 69).
+- **`rotate_upright.py`** — 180° rotate helper for human verification.
+
+**Results:**
+- **Quarantined 69 poisoned frames (138 files incl. JSON), leaving 328 clean, monotonic ground-truth frames.** Reversible (moved to `~/meter-training-quarantine/`, nothing deleted). Caught the entire documented ratchet cluster (`094103951`–`094110575`).
+- **Improved the oracle hint** using the harness: the meter moves only a few hundred counts/read, so the first **six** digits barely change — told GPT-4o "the reading is very close to X, only the last 2-3 digits change." Oracle per-frame accuracy on the hardest-glare golden set went **20% → 60%** (typical frames read near 100%). The 2 remaining misses (`094099518`, `094100575`→`094100573`) are heavy-glare frames near the hardware ceiling.
+- **Oracle reads now appear as table rows** (`record_oracle_reading`, kind=`oracle`, 🤖 AI label, blue tint). Previously the AI was successfully reading glared frames the local OCR couldn't, but those reads were invisible — the table showed all "reading pending" even though the meter was being read. Now those show as real fresh reads.
+
+**Stable golden dir:** `~/ocr-golden/` on the Acer (the audit never touches it). Grow the golden set by viewing more upright frames and adding verified rows — makes the harness stronger over time.
+
+**Lesson:** never let a pipeline auto-label its own outputs into the ground truth without an independent check — errors become "training truth." The monotonicity audit is the cheap independent check that needs no AI and can't be fooled.
+
+---
+
 ## 2026-06-13 — Click-to-inspect reading detail (verify each row against its image)
 
 **Context:** James noticed the live image showed ~094098675 while the table's "captured this minute" row read ~094083407 — far behind — and (rightly) didn't trust it. He wanted to click any row and see the exact frame the OCR saw for it, plus all that row's data.
@@ -594,3 +648,22 @@ This stops the engine from making any further automatic decisions until you've d
 
 ---
 
+
+
+---
+
+## 2026-06-15 � CNN closed loop LIVE: v1?v2 gated retrain, confident-wrong guard, improvement metrics
+
+**Context:** The water-meter reader gained a real trainable model and the self-improving loop went end-to-end. Full detail in `ocr-harness/CNN-CLOSED-LOOP-PLAN.md` and repo memory `/memories/repo/water-meter-ocr.md`. Headlines:
+
+**CNN is now the live reader (Phases 1-3, earlier today):** custom per-digit CNN on the tower (`meter-cnn` service, port 5201) reads every frame free/fast; low-confidence frames fall back to the GPT-4o oracle, which also acts as an independent verifier and banks corrections. Physics/monotonic guard sits on top of everything.
+
+**Improvement metrics layer:** persisted `cnn_eval` + `cnn_daily` tables (`cnn_metrics.py`) so improvement is measurable across restarts and tagged by model version. Report page at `/cam/cnn-report`. Every oracle check is a free ground-truth sample of the CNN. Reading-detail page got a resizable captured-image slider.
+
+**Confident-wrong incident + systemic guard:** the CNN read a glary frame as `094180041` at **0.95 confidence** (wrong � true `094171953`) and ratcheted the lock ~2000 counts too high, because high-conf reads skip the oracle. Re-anchored to truth (James confirmed the value). Added a hard guard: a high-conf CNN read is trusted directly ONLY if it advances the lock <=500 counts (`CNN_MAX_TRUST_ADVANCE`); a bigger forward jump forces oracle corroboration first. This is now the 4th guardrail. Lesson: a confident reader can be confidently wrong � never trust a big jump on confidence alone, and do NOT lower the confidence threshold to "use the CNN more."
+
+**First gated retrain � v2 PROMOTED:** re-audited 650 banked frames (monotonic LNDS) ? quarantined 16 physically-impossible labels (incl the poison reads). Built an expanded verified set (614 frames / 456 distinct, +243 new oracle-verified). Trained challenger v2 and judged it against champion v1 on **60 held-out frames neither model trained on**. Result: **v1 55.0% vs v2 58.3% full-9 (+3.3 pts) -> PROMOTE.** Deployed v2 to the tower, bumped VERSION to v2, metrics now track the version transition. The loop works: collect -> verify -> audit -> gated retrain -> promote-only-if-better. Re-run `train_v2_gated.py` for v3+ as corrections accumulate; the champion baseline rises each cycle.
+
+**Honest state:** +3.3 pts is a modest first step; live oracle-checked accuracy is ~30% (live glare is the worst case). Value today = the loop is proven and measurable, not a one-shot win. James is fine waiting as long as it is improving � and now it is, with numbers.
+
+---

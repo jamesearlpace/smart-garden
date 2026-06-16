@@ -5950,11 +5950,14 @@ function camLoadReadings() {
       }
       // Derived (back-fill) rows are estimates filling a blind gap: dim + italic.
       var isDerived = r.kind === 'derived';
+      var isOracle = r.kind === 'oracle';
       var rowStyle = isDerived
         ? 'border-bottom:1px solid var(--border);font-style:italic;opacity:.65;background:rgba(255,255,255,.02)'
-        : 'border-bottom:1px solid var(--border)';
-      var kindLabel = isDerived ? 'derived' : 'raw';
-      var kindColor = isDerived ? 'var(--amber)' : 'var(--text2)';
+        : (isOracle
+            ? 'border-bottom:1px solid var(--border);background:rgba(59,130,246,.07)'
+            : 'border-bottom:1px solid var(--border)');
+      var kindLabel = isDerived ? 'derived' : (isOracle ? '🤖 AI' : 'raw');
+      var kindColor = isDerived ? 'var(--amber)' : (isOracle ? 'var(--blue)' : 'var(--text2)');
       // Stale rows: the meter has moved up but we can't read it, so the shown
       // value is only a lower bound. Prefix "≥", dim, and color the conf amber
       // so a stale number is never mistaken for a confirmed current reading.
@@ -5962,9 +5965,18 @@ function camLoadReadings() {
       if (isStale) {
         rowStyle = 'border-bottom:1px solid var(--border);opacity:.7;background:rgba(255,180,0,.05)';
       }
-      var readingDisp = (isStale ? '≥ ' : '') + esc(r.reading);
-      var ft3Disp = (isStale ? '≥ ' : '') + esc(r.reading_ft3 || '\u2014');
-      var galDisp = (isStale ? '≥ ' : '') + esc(r.reading_gal || '\u2014');
+      // fresh_read = the system actually READ this frame (trusted high-conf
+      // read). When false, the row's number would just be a held/substituted
+      // lock value that doesn't correspond to THIS image — so show "reading
+      // pending" instead of a number, and suppress the Δ. The meter's running
+      // total still lives on the Cost page (server-side lock); this only governs
+      // what each per-frame row claims to have read.
+      var fresh = r.fresh_read === true;
+      var pendCell = '<span style="color:var(--text3);font-style:italic">reading pending</span>';
+      var readingDisp = fresh ? esc(r.reading) : pendCell;
+      var ft3Disp = fresh ? esc(r.reading_ft3 || '\u2014') : '\u2014';
+      var galDisp = fresh ? esc(r.reading_gal || '\u2014') : '\u2014';
+      if (!fresh) { showDeltaFt3 = '\u2014'; showDeltaGal = '\u2014'; dColor = 'var(--text2)'; }
       var confColor = isStale ? 'var(--amber)' : c;
       var ridAttr = r.id ? ' onclick="location.href=\'/cam/reading/' + encodeURIComponent(r.id) + '\'" title="Click to inspect this reading + its captured image"' : '';
       var clickStyle = r.id ? 'cursor:pointer;' : '';

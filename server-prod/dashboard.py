@@ -2033,6 +2033,14 @@ def create_app(config, engine, weather, billing):
     import threading as _threading
     OCR_TOWER_URL = os.environ.get("OCR_TOWER_URL", "http://192.168.0.120:5200/ocr")
     OCR_ENABLED = os.environ.get("OCR_ENABLED", "1") == "1"
+    # Custom CNN reader (tower :5201) — the FAST FREE path. The OCR worker calls
+    # the CNN first; if it reads all 9 digits with high confidence we use that
+    # (free, ~100ms). Only when the CNN is unsure do we fall back to RapidOCR +
+    # the paid GPT-4o oracle. The CNN's digits are still fed through the physics
+    # validator (meter_reader), so the monotonic / forward-only guard stays on
+    # top of whatever reads the digits (guardrail #3).
+    CNN_URL = os.environ.get("METER_CNN_URL", "http://192.168.0.120:5201/cnn")
+    CNN_ENABLED = os.environ.get("METER_CNN_ENABLED", "1") == "1"
     # Training-data banking: when the validator produces a HIGH-confidence read,
     # save (raw frame JPEG, validated 9-digit label) so a custom per-digit model
     # can be trained later on THIS meter under THIS camera's real conditions.
@@ -2040,6 +2048,12 @@ def create_app(config, engine, weather, billing):
     # camera drift, which is exactly the variation a robust model must learn.
     # Auto-labeled = free: the label is the validator's own high-confidence read.
     BANK_ENABLED = os.environ.get("METER_BANK_ENABLED", "1") == "1"
+    # Local-OCR banking is SEPARATE and OFF by default now that the CNN is the
+    # primary reader: banking a CNN read keyed by its own digits is CIRCULAR
+    # (the model would label itself), and RapidOCR is too noisy to be a trusted
+    # verifier. So the ONLY banking path is the oracle (an independent verifier).
+    # _bank_sample stays gated behind this extra flag (default off).
+    LOCAL_BANK_ENABLED = os.environ.get("METER_LOCAL_BANK_ENABLED", "0") == "1"
     BANK_DIR = os.environ.get("METER_BANK_DIR", "/home/jamesearlpace/meter-training")
     BANK_MAX = int(os.environ.get("METER_BANK_MAX", "20000"))
     BANK_MIN_INTERVAL = float(os.environ.get("METER_BANK_MIN_INTERVAL", "5"))
@@ -2053,7 +2067,8 @@ def create_app(config, engine, weather, billing):
     cam_queue = _deque(maxlen=720)            # the lag buffer (~1h at 5s/frame)
     cam_queue_lock = _threading.Lock()
     cam_ocr_stats = {"processed": 0, "errors": 0, "last_ms": None, "dropped": 0,
-                     "banked": 0}
+                     "banked": 0, "cnn_used": 0, "cnn_fellback": 0,
+                     "reader": "?"}
     _bank_state = {"last_ts": 0.0, "last_label": None}
 
     def _save_frame(rid, frame):
@@ -2085,8 +2100,8 @@ def create_app(config, engine, weather, billing):
         frames. Filename embeds the label + timestamp so it's self-describing:
         ``<9-digit-reading>_<epoch_ms>.jpg``.
         """
-        if not BANK_ENABLED:
-            return
+        if not (BANK_ENABLED and LOCAL_BANK_ENABLED):
+            return            # local/circular banking off — oracle is the only banker
         try:
             if entry.get("confidence") != "high" or entry.get("kind") != "raw":
                 return
@@ -2193,9 +2208,23 @@ def create_app(config, engine, weather, billing):
     # same physical state — used to corroborate a big jump or a downward
     # correction before committing it (one-off garbage never repeats).
     ORACLE_CORROB_TOL = float(os.environ.get("METER_ORACLE_CORROB_TOL", "300"))
-    # Max gold-dataset images to keep PER DISTINCT reading (avoids flooding the
-    # training set with identical numbers from a static meter).
-    GOLD_MAX_PER_LABEL = int(os.environ.get("METER_GOLD_MAX_PER_LABEL", "3"))
+    # Max gold-dataset images to keep PER DISTINCT reading. One clean image per
+    # number is enough to train a per-digit model (a model learns nothing extra
+    # from 3 copies of the same digits), and it keeps the set lean. Raise via env
+    # if lighting variety per number turns out to matter for the CNN.
+    GOLD_MAX_PER_LABEL = int(os.environ.get("METER_GOLD_MAX_PER_LABEL", "1"))
+    # CONFIDENT-WRONG GUARD: a high-confidence CNN read is normally trusted
+    # directly (free path, no oracle). But a CNN can be CONFIDENTLY WRONG — on
+    # 2026-06-15 a 0.95-conf misread ratcheted the lock ~2000 counts too high,
+    # and because high-conf reads skip the oracle nothing caught it until the
+    # meter sat ~2000 high for a while. So: if a high-conf CNN read would
+    # ADVANCE the lock by more than this many counts (more than one frame of
+    # plausible flow), do NOT trust it directly — force the independent oracle
+    # to corroborate before the lock moves. Real fast usage / stale-recovery
+    # still works (the oracle confirms it); only confident-wrong jumps are
+    # stopped. A normal 5s frame at max flow advances ~290 counts.
+    CNN_MAX_TRUST_ADVANCE = float(
+        os.environ.get("METER_CNN_MAX_TRUST_ADVANCE", "500"))
     _oracle_state = {"last_call": 0.0, "last_verify": 0.0, "calls": 0,
                      "reanchors": 0, "labels": 0, "dupes": 0, "day": "",
                      "day_calls": 0, "busy": False, "confirmed_val": None,
@@ -2231,8 +2260,9 @@ def create_app(config, engine, weather, billing):
         counts = (gpm / 60.0) * max(elapsed_s, 0) * cam_ocr.COUNTS_PER_GAL * margin
         return counts + ORACLE_IDLE_JITTER
 
-    def _oracle_bank_label(frame, value, captured_ts, conf):
-        """Bank a frame with an oracle-provided GOLD label (most trusted).
+    def _oracle_bank_label(frame, value, captured_ts, conf, local_low=None,
+                           cnn_digits=None):
+        """Bank a frame with an oracle-provided GOLD label.
 
         DEDUP: only keep a small number of images PER DISTINCT reading. A static
         meter would otherwise flood the gold set with hundreds of identical
@@ -2240,7 +2270,17 @@ def create_app(config, engine, weather, billing):
         copies of the same digits) and wastes disk. We keep up to
         GOLD_MAX_PER_LABEL per value (a few, to capture lighting/glare variety)
         and skip the rest.
+
+        TRUST HONESTY: the oracle is a SINGLE reader, so we must NOT claim the
+        label was independently corroborated. ``agree`` is true only if the
+        local RapidOCR's low-5 digits (``local_low``, a genuinely independent
+        reader) match the oracle's value. Otherwise agree=false — the label is
+        oracle-only and must be cross-verified before it trains a CNN (see
+        ocr-harness/build_cnn_dataset.py). Never hardcode agree=true here;
+        that's the circular bug that let bad labels pose as ground truth.
         """
+        if not BANK_ENABLED:
+            return            # collection turned off — keep reading, stop banking
         try:
             label = f"{int(value):09d}"
             os.makedirs(BANK_DIR, exist_ok=True)
@@ -2256,20 +2296,53 @@ def create_app(config, engine, weather, billing):
             stem = f"{label}_{int((captured_ts or time.time()) * 1000)}_oracle"
             with open(os.path.join(BANK_DIR, stem + ".jpg"), "wb") as f:
                 f.write(frame)
+            # Honest agreement: only true if an INDEPENDENT reader (local
+            # RapidOCR low-5) matched the oracle's value. Oracle-alone = false.
+            agree = bool(local_low) and (local_low == label[-5:])
+            # CORRECTION TAGGING: record what the CNN said for this frame and
+            # whether it matched the oracle. cnn_correct=False = this is a
+            # genuine CNN failure the oracle caught = the highest-value training
+            # example for the next retrain. The LABEL is always the oracle's
+            # value (the trusted reader); cnn_* is just metadata.
+            cnn_correct = None
+            if cnn_digits and len(str(cnn_digits)) == 9:
+                cnn_correct = (str(cnn_digits) == label)
             import json as _json
             with open(os.path.join(BANK_DIR, stem + ".json"), "w") as f:
                 _json.dump({"label": label, "ocr_guess": label,
                             "confidence": conf, "captured_ts": captured_ts,
-                            "source": "oracle", "agree": True}, f)
+                            "source": "oracle", "agree": agree,
+                            "local_low": local_low or "",
+                            "cnn_said": cnn_digits or "",
+                            "cnn_correct": cnn_correct}, f)
+            if cnn_correct is False:
+                _oracle_state["corrections"] = _oracle_state.get("corrections", 0) + 1
+                cam_ocr_stats["cnn_corrections"] = _oracle_state["corrections"]
+                log.info("CNN correction banked: cnn said %s, oracle %s",
+                         cnn_digits, label)
             _oracle_state["labels"] += 1
             cam_ocr_stats["oracle_labels"] = _oracle_state["labels"]
+            # Persist the oracle-vs-CNN comparison for improvement reporting
+            # (every oracle read is a free CNN-accuracy sample).
+            try:
+                import cnn_metrics
+                cnn_metrics.log_eval(
+                    cnn_digits, _oracle_state.get("last_cnn_conf"),
+                    label, _oracle_state.get("cnn_version", "v1"),
+                    cam_ocr_stats.get("reader"))
+            except Exception:
+                pass
         except Exception as e:
             log.debug("oracle bank failed: %s", e)
 
-    def _maybe_oracle(frame, entry, captured_ts):
+    def _maybe_oracle(frame, entry, captured_ts, cnn_digits=None, force=False):
         """Fast, NON-BLOCKING decision: should the oracle run? If so, spawn a
         background thread for the slow GPT-4o call so the OCR worker keeps
         processing frames every 5s. The worker must never block on the network.
+
+        force=True bypasses the rate-limit / change gates (still respects the
+        in-flight lock and the daily cap) — used for high-risk events like a
+        suspicious big CNN jump that must be corroborated immediately.
         """
         if not ORACLE_ENABLED:
             return
@@ -2319,14 +2392,18 @@ def create_app(config, engine, weather, billing):
             pass
         unchanged = (cur_val is not None
                      and cur_val == _oracle_state.get("confirmed_val"))
-        if conf == "high" and unchanged:
-            return
-        if is_stale and since_call < ORACLE_MIN_INTERVAL:
-            return
-        if is_lowconf and (not is_stale) and since_call < ORACLE_LOWCONF_INTERVAL:
-            return
-        if not (is_stale or is_lowconf or is_verify):
-            return
+        # A forced call (e.g. a suspicious big CNN jump) skips the normal gates
+        # below — it's a high-risk event we always want verified right away.
+        if not force:
+            if conf == "high" and unchanged:
+                return
+            if is_stale and since_call < ORACLE_MIN_INTERVAL:
+                return
+            if is_lowconf and (not is_stale) \
+                    and since_call < ORACLE_LOWCONF_INTERVAL:
+                return
+            if not (is_stale or is_lowconf or is_verify):
+                return
 
         # Reserve the slot NOW (so the next frames don't also fire), then hand
         # the slow work to a background thread and return immediately.
@@ -2335,8 +2412,19 @@ def create_app(config, engine, weather, billing):
         if is_verify:
             _oracle_state["last_verify"] = now
         _oracle_state["day_calls"] += 1
+        # Capture the LOCAL reader's independent low-5 digits for this frame so
+        # the oracle bank can honestly record whether a second reader agreed.
+        local_low = None
+        try:
+            rl = (entry or {}).get("raw_n") or ""
+            digs = "".join(ch for ch in str(rl) if ch.isdigit())
+            if len(digs) >= 5:
+                local_low = digs[-5:]
+        except Exception:
+            local_low = None
         _threading.Thread(
-            target=_oracle_run, args=(bytes(frame), captured_ts, stale_for, now),
+            target=_oracle_run,
+            args=(bytes(frame), captured_ts, stale_for, now, local_low, cnn_digits),
             daemon=True, name="oracle").start()
 
     def _oracle_splice(oracle_digits, lock, ceiling):
@@ -2372,7 +2460,8 @@ def create_app(config, engine, weather, billing):
                 return cand
         return None
 
-    def _oracle_run(frame, captured_ts, stale_for, now):
+    def _oracle_run(frame, captured_ts, stale_for, now, local_low=None,
+                    cnn_digits=None):
         """Background: the slow GPT-4o call + re-anchor. Never runs in the OCR
         worker thread, so frame processing keeps its 5s cadence."""
         try:
@@ -2466,13 +2555,39 @@ def create_app(config, engine, weather, billing):
                 cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]
                 log.info("oracle read %09d (conf=%s, was lock %s) — reanchored + banked",
                          val, res.get("confidence"), lg)
+                # Surface this as a real readings-table row: the AI genuinely
+                # read THIS frame, so it shows its number (fresh_read) instead of
+                # the local OCR's "reading pending" for the same glared frame.
+                try:
+                    meter_reader.record_oracle_reading(val, captured_ts=captured_ts)
+                except Exception as e:
+                    log.debug("record_oracle_reading failed: %s", e)
             # Remember the confirmed value so we don't re-send the SAME number.
             _oracle_state["confirmed_val"] = val
-            _oracle_bank_label(frame, val, captured_ts, res.get("confidence"))
+            _oracle_bank_label(frame, val, captured_ts, res.get("confidence"),
+                               local_low=local_low, cnn_digits=cnn_digits)
         except Exception as e:
             log.debug("oracle thread failed: %s", e)
         finally:
             _oracle_state["busy"] = False
+
+    def _read_via_cnn(frame):
+        """Ask the tower CNN to read the frame. Returns its JSON dict
+        ({digits, min_conf, confidence, value, ms}) or None if unavailable.
+        The CNN is the fast free path; only its HIGH-confidence reads are used
+        directly (the caller decides), but its digits still pass through the
+        physics validator."""
+        if not CNN_ENABLED:
+            return None
+        try:
+            r = http_requests.post(
+                CNN_URL, data=frame,
+                headers={"Content-Type": "image/jpeg"}, timeout=8)
+            if r.status_code == 200:
+                return r.json()
+        except Exception as e:
+            log.debug("cnn call failed: %s", e)
+        return None
 
     def _ocr_worker():
         """OCR every frame in order, oldest-first (FIFO).
@@ -2498,13 +2613,64 @@ def create_app(config, engine, weather, billing):
                 continue
             captured_ts, frame = item
             try:
-                r = http_requests.post(
-                    OCR_TOWER_URL, data=frame,
-                    headers={"Content-Type": "image/jpeg"}, timeout=20,
-                )
-                if r.status_code == 200:
-                    text = r.json().get("text", "")
-                    cam_ocr_stats["last_ms"] = r.json().get("ms")
+                # 1) FAST FREE PATH: ask the custom CNN first. If it reads all 9
+                #    digits with high confidence, use that — no RapidOCR, no
+                #    paid oracle. Its digits still go through the physics
+                #    validator below, so the monotonic guard stays on top.
+                cnn = _read_via_cnn(frame)
+                text = None
+                used_cnn = False
+                cnn_big_jump = False    # high-conf CNN read, but a suspicious
+                                        # big advance -> force oracle to confirm
+                trust_cnn = False
+                if cnn and cnn.get("confidence") == "high" and cnn.get("digits"):
+                    # CONFIDENT-WRONG GUARD: don't trust a high-conf CNN read
+                    # blindly if it would jump the lock a long way forward — a
+                    # systematic misread can be confidently wrong. Let the
+                    # oracle (independent reader) corroborate big jumps first.
+                    lg = getattr(meter_reader, "last_good", None)
+                    cnn_val = None
+                    try:
+                        cnn_val = int(cnn["digits"])
+                    except (ValueError, TypeError):
+                        cnn_val = None
+                    if (lg is not None and cnn_val is not None
+                            and (cnn_val - int(lg)) > CNN_MAX_TRUST_ADVANCE):
+                        cnn_big_jump = True
+                        cam_ocr_stats["cnn_bigjump"] = (
+                            cam_ocr_stats.get("cnn_bigjump", 0) + 1)
+                        log.warning(
+                            "CNN high-conf BIG JUMP held for oracle: "
+                            "cnn=%s lock=%s (+%s) min_conf=%s",
+                            cnn.get("digits"), lg, cnn_val - int(lg),
+                            cnn.get("min_conf"))
+                    else:
+                        trust_cnn = True
+                if trust_cnn:
+                    text = cnn["digits"]
+                    cam_ocr_stats["last_ms"] = cnn.get("ms")
+                    cam_ocr_stats["cnn_used"] += 1
+                    cam_ocr_stats["reader"] = "cnn"
+                    used_cnn = True
+                else:
+                    # 2) FALLBACK: RapidOCR on the tower (the CNN was unsure,
+                    #    unavailable, or made a suspicious big jump). The paid
+                    #    oracle kicks in below for low-conf/stale/big-jump.
+                    if cnn is not None:
+                        cam_ocr_stats["cnn_fellback"] += 1
+                    r = http_requests.post(
+                        OCR_TOWER_URL, data=frame,
+                        headers={"Content-Type": "image/jpeg"}, timeout=20,
+                    )
+                    if r.status_code == 200:
+                        text = r.json().get("text", "")
+                        cam_ocr_stats["last_ms"] = r.json().get("ms")
+                        cam_ocr_stats["reader"] = "rapidocr"
+                    else:
+                        cam_ocr_stats["errors"] += 1
+                        log.warning("tower OCR %s: %s", r.status_code, r.text[:120])
+                        continue
+                if text is not None:
                     entry = meter_reader.process_text(
                         text, captured_ts=captured_ts, queue_depth=depth)
                     cam_ocr_stats["processed"] += 1
@@ -2516,13 +2682,33 @@ def create_app(config, engine, weather, billing):
                     _bank_sample(frame, entry, captured_ts)
                     # Low-confidence or stale? Ask the vision LLM to read it,
                     # re-anchor, and bank a gold label (rate-limited internally).
-                    _maybe_oracle(frame, entry, captured_ts)
-                else:
-                    cam_ocr_stats["errors"] += 1
-                    log.warning("tower OCR %s: %s", r.status_code, r.text[:120])
+                    # Also fires the periodic spot-check heartbeat even when the
+                    # CNN was confident — catches confident-but-wrong drift.
+                    # Pass the CNN's reading so the oracle bank can tag whether
+                    # the CNN was right (confirmation) or wrong (CORRECTION) —
+                    # corrections are the highest-value training data.
+                    cnn_digits = (cnn or {}).get("digits") if cnn else None
+                    # Stash CNN conf + version so the oracle eval log can record
+                    # a full accuracy sample.
+                    if cnn:
+                        _oracle_state["last_cnn_conf"] = cnn.get("min_conf")
+                        _oracle_state["cnn_version"] = cnn.get("version", "v1")
+                    # force=True on a suspicious big CNN jump so the oracle
+                    # corroborates it NOW (bypassing the rate limit) before the
+                    # lock is allowed to move that far.
+                    _maybe_oracle(frame, entry, captured_ts, cnn_digits,
+                                  force=cnn_big_jump)
+                    # Daily reader-split counters for cost-ramp reporting.
+                    try:
+                        import cnn_metrics
+                        cnn_metrics.bump_daily(
+                            cam_ocr_stats.get("reader"), used_cnn,
+                            (cnn is not None and not used_cnn))
+                    except Exception:
+                        pass
             except Exception as e:
                 cam_ocr_stats["errors"] += 1
-                log.debug("tower OCR call failed: %s", e)
+                log.debug("reader call failed: %s", e)
                 time.sleep(1.0)  # back off when the tower is unreachable
 
     if OCR_ENABLED:
@@ -2538,6 +2724,14 @@ def create_app(config, engine, weather, billing):
         flow_monitor.start(meter_reader, status_summary, config)
     except Exception as e:
         log.warning("flow_monitor start failed: %s", e)
+
+    # CNN metrics: persistent improvement reporting (live CNN accuracy over time
+    # from oracle verifications + daily reader split). Isolated, own tables.
+    try:
+        import cnn_metrics
+        cnn_metrics.ensure_schema()
+    except Exception as e:
+        log.warning("cnn_metrics init failed: %s", e)
 
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
@@ -2713,6 +2907,153 @@ def create_app(config, engine, weather, billing):
     def cam_reading_page(rid):
         """Per-reading detail page: the captured image + every table field."""
         return render_template("cam_reading.html", rid=rid)
+
+    # Dir holding the verified-dataset manifests (cnn-dataset builder output).
+    LABELS_DIR = os.environ.get("METER_LABELS_DIR",
+                                "/home/jamesearlpace/cnn-dataset-oracle")
+    MANUAL_PATH = os.path.join(LABELS_DIR, "manual_labels.jsonl")
+
+    def _load_manual():
+        """Manual corrections are the HIGHEST trust tier — a human looked at the
+        image and fixed/confirmed/rejected the label. Last write per file wins.
+        Returns {file: {label, action, ts}}; action ∈ correct|reject|ok."""
+        import json as _json
+        out = {}
+        if os.path.exists(MANUAL_PATH):
+            for line in open(MANUAL_PATH):
+                line = line.strip()
+                if line:
+                    try:
+                        rec = _json.loads(line)
+                        out[rec["file"]] = rec
+                    except Exception:
+                        pass
+        return out
+
+    @app.route("/api/cam/labels")
+    def cam_labels_api():
+        """Merge the verified manifest + needs-review into one status list so the
+        whole training/ground-truth set can be eyeballed in a gallery. Each item:
+        {file, label, status, detail}. status ∈ manual|verified|promoted|corrected|
+        review|rejected. Manual corrections override everything (highest trust).
+        Frames are served by /api/cam/training/img/<file>."""
+        import json as _json
+        items = []
+
+        def load(name):
+            p = os.path.join(LABELS_DIR, name)
+            out = []
+            if os.path.exists(p):
+                for line in open(p):
+                    line = line.strip()
+                    if line:
+                        try:
+                            out.append(_json.loads(line))
+                        except Exception:
+                            pass
+            return out
+
+        for m in load("manifest.jsonl"):
+            corrected = m.get("corrected_from")
+            if m.get("verifier") == "oracle-consensus":
+                status = "corrected" if corrected else "promoted"
+            else:
+                status = "verified"
+            detail = ""
+            if corrected:
+                detail = f"was {corrected} · {m.get('votes','?')}/{m.get('reps','?')} votes"
+            elif status == "promoted":
+                detail = f"{m.get('votes','?')}/{m.get('reps','?')} votes"
+            items.append({"file": m["file"], "label": m["label"],
+                          "status": status, "detail": detail})
+        for r in load("needs_review.jsonl"):
+            cw = r.get("consensus_winner")
+            detail = ""
+            if cw:
+                detail = f"2nd reader said {cw} ({r.get('consensus_count','?')} agree)"
+            elif r.get("second_read"):
+                detail = f"2nd reader said {r['second_read']}"
+            items.append({"file": r["file"], "label": r["label"],
+                          "status": "review", "detail": detail})
+
+        # Apply manual overrides — a human's edit beats every automated verdict.
+        manual = _load_manual()
+        for it in items:
+            mv = manual.get(it["file"])
+            if not mv:
+                continue
+            act = mv.get("action")
+            if act == "reject":
+                it["status"] = "rejected"
+                it["detail"] = "manually excluded from training"
+            elif act == "ok":
+                it["status"] = "manual"
+                it["detail"] = "manually confirmed"
+            elif act == "correct":
+                prev = it["label"]
+                it["label"] = mv["label"]
+                it["status"] = "manual"
+                it["detail"] = (f"manually corrected (was {prev})"
+                                if mv["label"] != prev else "manually confirmed")
+
+        # Sort by reading value so it reads like the meter climbing.
+        def keyfn(it):
+            d = "".join(c for c in it["label"] if c.isdigit())
+            return int(d) if d else 0
+        items.sort(key=keyfn)
+        counts = {}
+        for it in items:
+            counts[it["status"]] = counts.get(it["status"], 0) + 1
+        return jsonify({"items": items, "counts": counts, "total": len(items)})
+
+    @app.route("/api/cam/labels/update", methods=["POST"])
+    def cam_labels_update():
+        """Save a HUMAN correction for a frame (highest trust). Body JSON:
+        {file, action, label?}. action ∈ correct|reject|ok. Appended to
+        manual_labels.jsonl (last write per file wins on read)."""
+        import json as _json
+        data = request.get_json(silent=True) or {}
+        fname = os.path.basename(str(data.get("file", "")))
+        action = data.get("action")
+        if not fname.endswith(".jpg") or action not in ("correct", "reject", "ok"):
+            return jsonify({"ok": False, "error": "bad file or action"}), 400
+        rec = {"file": fname, "action": action,
+               "ts": datetime.now().isoformat()}
+        if action == "correct":
+            lbl = "".join(c for c in str(data.get("label", "")) if c.isdigit())
+            if len(lbl) != 9:
+                return jsonify({"ok": False, "error": "label must be 9 digits"}), 400
+            rec["label"] = lbl
+        try:
+            os.makedirs(LABELS_DIR, exist_ok=True)
+            with open(MANUAL_PATH, "a") as f:
+                f.write(_json.dumps(rec) + "\n")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "saved": rec})
+
+    @app.route("/cam/labels")
+    def cam_labels_page():
+        """Gallery to review every banked frame + its label + verification status."""
+        return render_template("cam_labels.html")
+
+    @app.route("/api/cam/cnn-report")
+    def cam_cnn_report():
+        """CNN improvement report: live accuracy over time (from oracle
+        verifications), per-version accuracy, and the daily reader split."""
+        try:
+            import cnn_metrics
+            rep = cnn_metrics.report(days=60)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        rep["stats"] = {k: cam_ocr_stats.get(k) for k in
+                        ("cnn_used", "cnn_fellback", "cnn_corrections",
+                         "oracle_labels", "reader", "processed")}
+        return jsonify(rep)
+
+    @app.route("/cam/cnn-report")
+    def cam_cnn_report_page():
+        return render_template("cnn_report.html")
 
     @app.route("/api/cam/reanchor", methods=["POST"])
     def cam_reanchor():

@@ -1,0 +1,16 @@
+[Unit]
+Description=Meter CNN digit reader (tower)
+After=network.target
+
+[Service]
+Type=simple
+User=jack
+WorkingDirectory=/home/jack/meter-cnn
+ExecStart=/home/jack/meter-ocr/.venv/bin/python /home/jack/meter-cnn/cnn_service.py
+Restart=always
+RestartSec=5
+Environment=METER_CNN_PORT=5201
+Environment=METER_CNN_THRESHOLD=0.90
+
+[Install]
+WantedBy=multi-user.target

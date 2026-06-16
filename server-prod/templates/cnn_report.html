@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CNN Improvement Report — Smart Garden</title>
+<style>
+:root{
+  --bg:#f5f7f9; --card:#fff; --border:#e8ecf0; --text:#1a2b3c; --text2:#5f7082;
+  --green:#22c55e; --blue:#3b82f6; --amber:#f59e0b; --red:#ef4444; --purple:#8b5cf6;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.45;padding:18px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}
+h1{font-size:1.4rem;margin-bottom:2px}
+h2{font-size:1.05rem;margin:0 0 10px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+.kpi .v{font-size:1.7rem;font-weight:800;letter-spacing:-.02em}
+.kpi .l{font-size:.74rem;color:var(--text2);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--text2);font-weight:600}
+.bar{height:10px;border-radius:5px;background:linear-gradient(90deg,var(--green),var(--green));display:inline-block;vertical-align:middle}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.good{color:var(--green)}.bad{color:var(--red)}.muted{color:var(--text2)}
+.spark{display:flex;gap:2px;align-items:flex-end;height:40px}
+.spark span{flex:1;background:var(--blue);border-radius:2px 2px 0 0;min-height:2px}
+</style>
+</head>
+<body>
+<a href="/#cam" style="font-size:.85rem">&larr; Back to Water Meter Cam</a>
+<h1>CNN Improvement Report</h1>
+<div class="sub" id="sub">Loading&hellip;</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="card">
+  <h2>Live CNN accuracy by model version</h2>
+  <div class="muted" style="font-size:.78rem;margin-bottom:8px">
+    Every oracle read is a free ground-truth check of the CNN. This is how often the CNN
+    matched the trusted oracle, per model version. Higher = better; should climb each retrain.
+  </div>
+  <table id="byver"><thead><tr><th>Version</th><th>Accuracy</th><th></th><th>Samples</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2>Daily reader split & cost trend</h2>
+  <div class="muted" style="font-size:.78rem;margin-bottom:8px">
+    CNN-handled (free) vs fell-back-to-oracle (paid). As the CNN improves, the free share
+    should rise and oracle calls should fall.
+  </div>
+  <table id="daily"><thead><tr><th>Date</th><th>Frames</th><th>CNN free</th><th>Fell back</th><th>Oracle calls</th><th>Live acc</th><th>Ver</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2>Recent oracle checks</h2>
+  <table id="recent"><thead><tr><th>Time</th><th>CNN said</th><th>Oracle</th><th>Match</th><th>CNN conf</th><th>Ver</th></tr></thead><tbody></tbody></table>
+</div>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function pct(n){return n==null?'—':n.toFixed(1)+'%';}
+
+fetch('/api/cam/cnn-report').then(function(r){return r.json();}).then(function(d){
+  if (d.error){ document.getElementById('sub').textContent='Error: '+d.error; return; }
+  var bv = d.by_version||[], daily=d.daily||[], recent=d.recent||[], st=d.stats||{};
+
+  // overall accuracy (all versions)
+  var totEval=0, totCorrect=0;
+  bv.forEach(function(v){ totEval+=v.evals; totCorrect+=(v.correct||0); });
+  var overall = totEval ? 100*totCorrect/totEval : null;
+  var freeShare = (st.cnn_used+st.cnn_fellback) ? 100*st.cnn_used/(st.cnn_used+st.cnn_fellback) : null;
+
+  document.getElementById('sub').innerHTML =
+    'Live CNN vs oracle over '+totEval+' checks. The CNN is the free reader; the oracle grades it for free on the hard frames.';
+
+  document.getElementById('kpis').innerHTML =
+    kpi(overall==null?'—':overall.toFixed(0)+'%', 'Live CNN accuracy', 'good')
+    + kpi(freeShare==null?'—':freeShare.toFixed(0)+'%', 'Frames CNN handled free (session)')
+    + kpi(st.cnn_corrections||0, 'Corrections captured (session)', 'bad')
+    + kpi(totEval, 'Oracle ground-truth checks');
+
+  // by version
+  var tb = document.querySelector('#byver tbody');
+  tb.innerHTML = bv.length ? bv.map(function(v){
+    var w = Math.max(2, v.acc_pct||0);
+    return '<tr><td class="mono">'+esc(v.model_version)+'</td>'
+      + '<td>'+pct(v.acc_pct)+'</td>'
+      + '<td style="width:40%"><span class="bar" style="width:'+w+'%"></span></td>'
+      + '<td>'+v.evals+'</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="muted">no checks yet</td></tr>';
+
+  // daily
+  var dt = document.querySelector('#daily tbody');
+  dt.innerHTML = daily.length ? daily.map(function(r){
+    var acc = r.evals ? (100*r.cnn_correct/r.evals).toFixed(0)+'%' : '—';
+    return '<tr><td>'+esc(r.date)+'</td><td>'+(r.frames||0)+'</td>'
+      + '<td class="good">'+(r.cnn_used||0)+'</td>'
+      + '<td>'+(r.cnn_fellback||0)+'</td>'
+      + '<td>'+(r.oracle_calls||0)+'</td>'
+      + '<td>'+acc+'</td><td class="mono">'+esc(r.model_version||'')+'</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="muted">no data yet</td></tr>';
+
+  // recent
+  var rt = document.querySelector('#recent tbody');
+  rt.innerHTML = recent.length ? recent.map(function(r){
+    var m = r.cnn_correct==null ? '<span class="muted">—</span>'
+          : (r.cnn_correct ? '<span class="good">match</span>' : '<span class="bad">corrected</span>');
+    return '<tr><td>'+esc((r.ts||'').slice(11,19))+'</td>'
+      + '<td class="mono">'+esc(r.cnn_value||'—')+'</td>'
+      + '<td class="mono">'+esc(r.oracle_value)+'</td>'
+      + '<td>'+m+'</td><td>'+(r.cnn_min_conf!=null?r.cnn_min_conf:'—')+'</td>'
+      + '<td class="mono">'+esc(r.model_version||'')+'</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="muted">no checks yet</td></tr>';
+}).catch(function(e){ document.getElementById('sub').textContent='Could not load report.'; });
+
+function kpi(v,l,cls){ return '<div class="kpi"><div class="v '+(cls||'')+'">'+v+'</div><div class="l">'+l+'</div></div>'; }
+</script>
+</body>
+</html>

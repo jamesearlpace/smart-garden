@@ -1,0 +1,15 @@
+# Temp/diagnostic artifacts (regenerated on demand)
+_*.jpg
+v2_out.log
+v2_err.log
+v2_train.log
+__pycache__/
+*.pyc
+
+# Redundant model copies — active model (meter_cnn.pt) is versioned; backups are not
+model/meter_cnn_v1_backup.pt
+model/meter_cnn_v2.pt
+
+# Local-only bundles
+*.tar
+data/cnn_train_v2.jsonl

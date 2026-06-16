@@ -54,23 +54,27 @@ def _build_hint(hint):
     hi = hint.get("max_value")
     prefix = hint.get("high_prefix")
     if last is not None:
+        ls = f"{int(last):09d}"
+        # The meter moves only a few hundred counts between reads, so the first
+        # SIX digits ("094100") barely change — only the last ~3 move. Telling
+        # the model the expected leading block is the single biggest accuracy
+        # win against glare on the middle digits (which it otherwise guesses).
         parts.append(
-            f"For context, this meter was last estimated near {int(last):09d} "
-            f"({int(last) / 1000:,.3f} ft\u00b3); it's a cumulative odometer that "
-            "rises slowly, but that estimate may be slightly off so do not force "
-            "your answer to match it.")
-    if lo is not None and hi is not None:
-        parts.append(
-            f"It is normally in the rough range {int(lo):09d}-{int(hi):09d}.")
+            f"For context, this meter was last read very close to {ls} "
+            f"({int(last) / 1000:,.3f} ft\u00b3). It is a cumulative odometer that "
+            "rises only slowly, so the reading you see is almost certainly within "
+            "a few counts of that. In practice the first SIX digits "
+            f"('{ls[:6]}') are the same as last time and ONLY THE LAST 2-3 DIGITS "
+            "have changed. Do not force a match, but use this to resolve glare on "
+            "the left and middle digits.")
     if prefix:
         parts.append(
-            f"The leading digits are almost certainly '{prefix}' (the high "
-            "digits barely move between reads); if glare makes the left side "
-            "ambiguous, trust this prefix.")
+            f"The leading digits are almost certainly '{prefix}'.")
     parts.append(
-        "Use the context ONLY to resolve glare on the LEFT/high digits. The "
-        "RIGHT-hand (low) digits change constantly — read those directly from "
-        "the image and report exactly what you see.")
+        "Read the LAST 3 digits directly and carefully from the image (those are "
+        "the ones that actually change) and report exactly what you see. Keep the "
+        "leading digits consistent with the context above unless the image very "
+        "clearly shows otherwise (e.g. a rollover).")
     return " ".join(parts)
 
 

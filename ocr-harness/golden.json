@@ -1,0 +1,10 @@
+{
+  "_comment": "TRUSTED ground truth. Each entry verified by a human/independent vision model viewing the frame UPRIGHT (rotated 180 from stored). 'true' is the real 9-digit meter reading. 'stored_label' is what the pipeline banked (may be WRONG — that's the point). Do NOT auto-generate this file from the pipeline; that would be circular.",
+  "frames": [
+    {"file": "094100762_1781411473267_oracle.jpg", "true": "094100762", "stored_label": "094100762", "label_ok": true,  "note": "clear post-fix read"},
+    {"file": "094100643_1781410847475_oracle.jpg", "true": "094100643", "stored_label": "094100643", "label_ok": true,  "note": "clear post-fix read"},
+    {"file": "094110575_1781410066514_oracle.jpg", "true": "094100575", "stored_label": "094110575", "label_ok": false, "note": "POISONED: middle 100 banked as 110 during ratchet bug"},
+    {"file": "094109752_1781409637066_oracle.jpg", "true": "094099752", "stored_label": "094109752", "label_ok": false, "note": "POISONED: middle 099 banked as 109"},
+    {"file": "094103951_1781409574163_oracle.jpg", "true": "094099518", "stored_label": "094103951", "label_ok": false, "note": "POISONED: true ~094099518, banked 094103951 (~4400 too high)"}
+  ]
+}

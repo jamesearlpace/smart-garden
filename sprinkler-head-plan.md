@@ -1,7 +1,49 @@
 # Sprinkler Head Selection Plan
 
 **Status:** Decision made — Hunter MP Rotators  
-**Last Updated:** 2026-05-07
+**Last Updated:** 2026-06-15
+
+---
+
+## ⏳ PLANNED — Head Removals Due to Low Pressure (2026-06-15)
+
+**Not yet applied.** James is physically removing several sprinkler heads because there
+isn't enough water pressure to feed all of them at once (low-flow supply, ~5.5–6.0 GPM).
+Fewer heads per zone = more pressure/throw at each remaining head. This documents the
+planned removal so it can eventually be reflected on the live map
+(`sprinklers.savagepace.com` → `MAP_HEADS` in `server-prod/templates/index.html`) and
+in the per-zone `est_gpm` config. **Do NOT edit the live map or config until the head
+list below is confirmed with James.**
+
+### Heads marked for removal — CONFIRMED 2026-06-15
+
+Confirmed by James: **#2, #5, #10, #14, #18, #27** (6 heads). Dot numbers correspond to
+`MAP_HEADS` index+1 (the same numbering shown on the digital map). One head removed from
+each of six zones — none is a single-head zone, so **no zone is eliminated**.
+
+| Head # | Zone (config id) | Heads on zone before → after | MAP_HEADS coords |
+|--------|------------------|------------------------------|------------------|
+| #2  | Zone 1 — Front Yard A         (id 0) | 4 → 3 | x:92.1, y:53.4 |
+| #5  | Zone 2 — Front Yard B         (id 1) | 4 → 3 | x:62.4, y:65.2 |
+| #10 | Zone 3 — Enclosed Backyard A  (id 2) | 4 → 3 | x:59.9, y:65.2 |
+| #14 | Zone 4 — Enclosed Backyard B  (id 3) | 4 → 3 | x:37.2, y:77.1 |
+| #18 | Zone 5 — Peonies              (id 4) | 4 → 3 | x:20.7, y:65.7 |
+| #27 | Zone 7 — South Lawn A         (id 6) | 4 → 3 | x:18.6, y:43.3 |
+
+### Why this helps
+- Low-flow supply can't sustain pressure across all 27+ heads simultaneously.
+- Dropping heads reduces per-zone GPM demand, raising residual pressure and throw at
+  the heads that remain (matches the MP Rotator design constraint of keeping each zone
+  under ~5.5 GPM total — see the design-constraint section below).
+
+### When applying later (the "show it eventually" part)
+1. ✅ Head list confirmed (#2, #5, #10, #14, #18, #27).
+2. Remove those entries from `MAP_HEADS` in `server-prod/templates/index.html`
+   (live mirror first per the mirror-layout workflow), OR mark them visually as
+   "removed" (greyed/✕) rather than deleting, so the map records what was pulled.
+3. Recompute each affected zone's `est_gpm` in `config.yaml` (fewer heads = lower GPM).
+   Affected zones: 0, 1, 2, 3, 4, 6 (each drops one head; no zone eliminated).
+4. Deploy + verify per the standard smart-garden mirror workflow; commit.
 
 ---
 

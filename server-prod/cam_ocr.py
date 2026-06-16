@@ -426,6 +426,24 @@ class MeterReader:
             return list(reversed(self.readings[-limit:]))
 
     # ------------------------------------------------------------------
+    def record_oracle_reading(self, value, captured_ts=None, note="AI vision read"):
+        """Append a readings-table row for a value the vision LLM read from a
+        specific frame. This is a GENUINE read of that image (the most trusted
+        reader we have), so it's marked fresh_read=true and shows its number —
+        unlike the held/substituted rows the local OCR emits when it can't read
+        a glared frame. Returns the new entry (with its id)."""
+        entry = self._entry(
+            reading=int(value), delta=None, confidence="high",
+            orientation=self.orientation, note=note,
+            captured_ts=captured_ts, kind="oracle",
+            ocr_guess=int(value))
+        with self.lock:
+            self.readings.append(entry)
+            if len(self.readings) > 4000:
+                self.readings = self.readings[-4000:]
+        return entry
+
+    # ------------------------------------------------------------------
     def get_reading_by_id(self, rid):
         """Return the single readings-table row dict with this id, or None.
 
@@ -969,6 +987,15 @@ class MeterReader:
             "rate": rate_str,
             "confidence": confidence,
             "stale": confidence == "stale",
+            # fresh_read = this row's number is the system's actual read of THIS
+            # frame (a trusted high-confidence read), NOT a held/substituted lock
+            # value carried over from an earlier frame. The UI shows the number
+            # only when fresh_read is true; otherwise it shows "reading pending"
+            # so a frame is never paired with a number the system didn't read
+            # from it. kind=="oracle" rows are GPT-4o reads of the actual frame
+            # (the most trusted reader) and count as fresh. Derived back-fill
+            # rows (kind=="derived") are interpolated estimates, never fresh.
+            "fresh_read": (confidence == "high" and kind in ("raw", "oracle")),
             "orientation": orientation,
             "raw_n": raw_n,
             "raw_f": raw_f,

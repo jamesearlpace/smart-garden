@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the meter-CNN gated retrain nightly
+
+[Timer]
+# 3:20 AM local — tower is idle, meter is static overnight (clean frames).
+OnCalendar=*-*-* 03:20:00
+# If the box was asleep/off at 3:20, run at next boot instead of skipping.
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly gated retrain of the meter-digit CNN (champion/challenger)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jack
+WorkingDirectory=/home/jack/meter-cnn
+# Train politely so the live CNN service + RapidOCR stay responsive.
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/home/jack/meter-ocr/.venv/bin/python /home/jack/meter-cnn/retrain.py
+TimeoutStartSec=14400

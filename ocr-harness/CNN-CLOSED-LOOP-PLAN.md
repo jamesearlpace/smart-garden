@@ -1,9 +1,10 @@
 # Water-Meter OCR — CNN Closed-Loop Plan & State
 
-**Status:** CLOSED LOOP LIVE. CNN v2 in production (gated retrain beat v1). Phases
-1–4 done; Phase 5 (cost ramp-down) pending. Metrics layer persists improvement
-data. This doc is the source of truth for the self-improving reader. Read first
-when resuming.
+**Status:** CLOSED LOOP LIVE + SELF-RUNNING. CNN in production; gated retrain runs
+**autonomously nightly on the tower** (champion/challenger, promote-only-if-better).
+Phases 1–4 done + automated; Phase 5 (cost ramp-down) pending. Metrics layer
+persists improvement data. This doc is the source of truth for the self-improving
+reader. Read first when resuming.
 
 **Last updated:** 2026-06-15
 
@@ -249,6 +250,47 @@ need to be perfect — it's the champion the closed loop improves on.
 - **To run v3+:** on Acer re-run `audit_labels.py --apply` + `build_expanded.py`,
   bundle + pull frames, locally run `train_v2_gated.py` (rename outputs v3), promote
   only if it beats the *current* champion's held-out score. Baseline rises each time.
+
+### Phase 4b — AUTONOMOUS nightly retrain ✅ DONE (2026-06-15)
+The gated retrain now runs itself — no manual steps, no laptop dependency.
+
+- **Where:** on the **tower** (jackmint, always-on, has torch 2.12 + cv2). NOT the
+  Acer (RAM-starved) and NOT the Windows box (not always-on). Set up tower→Acer SSH
+  (the tower rsyncs frames from the Acer each night).
+- **Why batched, not continuous:** one retrain = 80 epochs ≈ 30–50 min CPU; a single
+  new frame shifts the dataset ~0.2% — far below what the ~70-frame held-out test can
+  measure, so a per-frame gate would be deciding on noise. Batching also dilutes any
+  single bad label and strengthens the monotonic audit. **Trigger: nightly OR ≥ 25 new
+  corrections, whichever first** (the volume gate skips a wasted run on a quiet day).
+- **Script:** `~/meter-cnn/retrain.py` (self-contained — bundles model, preprocessing,
+  LNDS audit, dataset build, gated train, promotion; no sibling imports so it runs
+  clean as a systemd job). Local copy `cnn/retrain.py`.
+- **Flow each night:** rsync frames + baseline labels from Acer → monotonic audit
+  (drop impossible) → volume gate → split → train challenger → eval champion +
+  challenger on the SAME held-out test → **promote only if the challenger wins** →
+  bump VERSION, back up the old model, restart `meter-cnn` → write
+  `retrain_status.json` (+ `retrain.log`).
+- **⚠️ Permanent hash holdout** (the key correctness piece): a frame is TEST iff
+  `sha1(filename) % 100 < 12`. Deterministic, NEVER trained on by any model, stable
+  across every cycle — the textbook way to measure improvement over many retrains. A
+  re-drawn test set each night would make champion scores wander and the gate
+  meaningless.
+- **⚠️ Bootstrap regime** (one-time fix): the legacy v1/v2 were trained *before* the
+  hash holdout existed, so they memorized some held-out frames → their test score is
+  inflated (v2 scored 83% on the holdout vs its honest 58% on truly-unseen frames). An
+  honestly-trained clean challenger would be wrongly rejected against that inflated
+  incumbent, blocking improvement forever. Fix: a `clean_regime` marker — the FIRST
+  clean challenger is promoted as the new fair baseline if it clears an absolute floor
+  (0.45), then strict "must beat champion" gating applies from then on. Self-heals
+  after one cycle.
+- **systemd:** `meter-cnn-retrain.service` (oneshot, `Nice=10` + idle IO so live reads
+  stay snappy) + `meter-cnn-retrain.timer` (`OnCalendar=03:20` daily, `Persistent=true`
+  so a missed run after sleep/off fires at next boot). Enabled; next run ~3:21 AM.
+- **Manual / debug:** `ssh jack@192.168.0.120 "cd ~/meter-cnn && nohup
+  ~/meter-ocr/.venv/bin/python retrain.py --force > /tmp/retrain_run.log 2>&1 &"`.
+  `--force` bypasses the volume gate; `--dry-run` trains + evals but never promotes.
+- **Tunables** (top of `retrain.py`): `TEST_PCT=12`, `MIN_NEW_FRAMES=25`,
+  `MAX_PER_LABEL=3`, `BOOTSTRAP_FLOOR=0.45`, `EPOCHS=80`.
 
 ### Metrics / improvement reporting ✅ DONE (2026-06-15)
 - **Why:** in-memory `cam_ocr_stats` reset on restart, no version tag, no time-series

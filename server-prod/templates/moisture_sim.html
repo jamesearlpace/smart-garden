@@ -413,6 +413,30 @@ h2 { margin: 0; font-size: 1.05rem; }
     <div style="font-size:.7rem; color:var(--text2); margin-top:8px">
       Predictions use today's moisture balance, FAO‑56 ET₀ from the 7-day forecast, and forecast rainfall (65% effective). Manual‑mode zones never auto‑water; drip zones water manually only. Click a zone name to drill in.
     </div>
+
+    <!-- Run history + sensor response -->
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin:24px 0 8px">
+      <h3 style="font-size:.95rem; margin:0; color:var(--text)">📜 Run history &amp; sensor response</h3>
+      <div style="display:flex; align-items:center; gap:14px; font-size:.78rem">
+        <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--text2)">
+          <span>History:</span>
+          <select id="rh-days" style="font-size:.78rem; padding:3px 6px; border:1px solid var(--border); border-radius:5px">
+            <option value="3">3 days</option>
+            <option value="7">7 days</option>
+            <option value="14" selected>14 days</option>
+            <option value="30">30 days</option>
+          </select>
+        </label>
+        <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--text2)" title="Show short test toggles, manual blips, and cleanup artifacts">
+          <input type="checkbox" id="rh-tests"> Show test runs
+        </label>
+      </div>
+    </div>
+    <div style="font-size:.72rem; color:var(--text2); margin-bottom:10px">
+      🤖 Auto = engine decision · ✋ Manual = you ran it (≥1 min) · 🧪 Test = short toggles/blips (hidden by default).
+      For zones a soil sensor sits in, <b>Sensor</b> shows the reading just before the run → its peak within 3 h after (Δ = response). A clear Δ↑ confirms the sensor is placed &amp; calibrated right.
+    </div>
+    <div id="rh-content"><div style="color:var(--text3); font-size:.8rem; padding:8px">Loading run history…</div></div>
   </div>
 
   <!-- Seasonal Outlook Panel -->
@@ -589,6 +613,91 @@ function schedNextWaterText(zid) {
             nw.days_away + ' day' + (nw.days_away > 1 ? 's' : '') + ' away')
   };
 }
+
+// ═══ RUN HISTORY + SENSOR RESPONSE ═══════════════════════════════════════
+// Reads /api/zone-history (auto/manual/test classification + per-run sensor
+// before→peak-after for zones a sensor sits in). Lets you confirm a sensor is
+// placed & calibrated right by watching Δ rise after that zone runs.
+function fmtRunTime(iso) {
+  if (!iso) return '—';
+  var d = new Date(iso.replace(' ', 'T'));
+  var dn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+  var hh = d.getHours(); var ap = hh >= 12 ? 'PM' : 'AM'; var h12 = ((hh + 11) % 12) + 1;
+  var mm = (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+  return dn + ' ' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + h12 + ':' + mm + ap;
+}
+function kindBadge(kind) {
+  if (kind === 'auto') return '<span style="color:#16a34a; font-weight:600">🤖 Auto</span>';
+  if (kind === 'manual') return '<span style="color:#2563eb; font-weight:600">✋ Manual</span>';
+  return '<span style="color:#94a3b8">🧪 Test</span>';
+}
+function renderRunHistory(data) {
+  var wrap = document.getElementById('rh-content');
+  if (!wrap) return;
+  if (!data || !data.zones) { wrap.innerHTML = '<div style="color:var(--text3); font-size:.8rem; padding:8px">No data.</div>'; return; }
+  var html = '';
+  data.zones.forEach(function(z) {
+    var hasSensor = z.mapped_sensors && z.mapped_sensors.length > 0;
+    var sensorNote = hasSensor
+      ? '🌡️ ' + z.mapped_sensors.map(function(s){return s.name;}).join(' + ')
+      : '<span style="color:var(--text3)">no sensor here</span>';
+    var c = z.counts || {auto:0, manual:0, test:0};
+    html += '<details style="margin-bottom:10px; border:1px solid var(--border-light); border-radius:8px; overflow:hidden"'
+      + (z.runs && z.runs.length ? ' open' : '') + '>';
+    html += '<summary style="cursor:pointer; padding:10px 12px; background:var(--card); font-weight:600; color:var(--text); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; align-items:center">'
+      + '<span>Zone ' + (z.id + 1) + ' — ' + z.name + '</span>'
+      + '<span style="font-size:.72rem; font-weight:400; color:var(--text2)">'
+      + sensorNote + ' &nbsp;·&nbsp; 🤖' + c.auto + ' ✋' + c.manual + ' 🧪' + c.test
+      + '</span></summary>';
+    if (!z.runs || z.runs.length === 0) {
+      html += '<div style="padding:10px 12px; font-size:.78rem; color:var(--text3)">No runs in this window.</div></details>';
+      return;
+    }
+    html += '<div style="overflow-x:auto"><table class="az-table" style="min-width:auto"><thead><tr>'
+      + '<th>When</th><th>Type</th><th class="az-num">Min</th><th class="az-num">Gallons</th>';
+    if (hasSensor) html += '<th>Sensor before → after (Δ)</th>';
+    html += '</tr></thead><tbody>';
+    z.runs.forEach(function(r) {
+      html += '<tr><td class="az-name" style="font-weight:400">' + fmtRunTime(r.start) + '</td>'
+        + '<td>' + kindBadge(r.kind) + '</td>'
+        + '<td class="az-num">' + (r.dur_sec < 60 ? r.dur_sec + 's' : r.dur_min) + '</td>'
+        + '<td class="az-num">' + (r.gallons != null ? r.gallons : '—') + '</td>';
+      if (hasSensor) {
+        var cells = (r.sensors || []).map(function(s) {
+          if (s.before == null && s.after == null) return s.name + ': —';
+          var d = s.delta;
+          var dtxt = d == null ? '' : ' <b style="color:' + (d > 3 ? '#16a34a' : d < -3 ? '#dc2626' : '#94a3b8') + '">'
+            + (d > 0 ? '+' : '') + d + '%</b>';
+          return s.name + ': ' + (s.before == null ? '?' : s.before + '%') + ' → '
+            + (s.after == null ? '?' : s.after + '%') + dtxt;
+        }).join('<br>');
+        html += '<td style="font-size:.74rem">' + cells + '</td>';
+      }
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></details>';
+  });
+  wrap.innerHTML = html;
+}
+function loadRunHistory() {
+  var days = document.getElementById('rh-days');
+  var tests = document.getElementById('rh-tests');
+  var d = days ? days.value : '14';
+  var t = (tests && tests.checked) ? '1' : '0';
+  var wrap = document.getElementById('rh-content');
+  if (wrap) wrap.innerHTML = '<div style="color:var(--text3); font-size:.8rem; padding:8px">Loading run history…</div>';
+  fetch('/api/zone-history?days=' + d + '&include_tests=' + t)
+    .then(function(r){ return r.json(); })
+    .then(renderRunHistory)
+    .catch(function(){ if (wrap) wrap.innerHTML = '<div style="color:var(--red); font-size:.8rem; padding:8px">Failed to load run history.</div>'; });
+}
+document.addEventListener('DOMContentLoaded', function() {
+  var rd = document.getElementById('rh-days');
+  var rt = document.getElementById('rh-tests');
+  if (rd) rd.addEventListener('change', loadRunHistory);
+  if (rt) rt.addEventListener('change', loadRunHistory);
+});
+
 
 // Set UI controls to match restored state
 document.addEventListener('DOMContentLoaded', function() {
@@ -2695,6 +2804,9 @@ function refreshAllZones() {
     loadMsg.textContent = 'Error: ' + err;
     console.error('All-zones refresh error:', err);
   });
+
+  // Run history + sensor response (independent fetch; respects its own controls)
+  loadRunHistory();
 }
 
 function refresh() {

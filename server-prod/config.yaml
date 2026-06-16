@@ -342,3 +342,11 @@ battery_calibration:
   rmse: 0.1065
   model: quadratic fit (n=11)
   updated: '2026-06-15T17:29:23'
+# Which irrigation zone(s) each soil sensor sits in / is watered by.
+# sensor index -> list of irrigation zone ids. Used by /api/zone-history to
+# validate that a sensor actually responds when its zone runs. Edit as sensors move.
+sensor_zone_map:
+  0: []        # Garden sensor — no drip feeds this spot right now (should NOT respond)
+  1: [8]       # Grapes sensor — Grapes drip zone (properly placed)
+  2: [3]       # Fruit Trees sensor — sits in zone 3 (Enclosed Backyard B) area
+  3: [3]       # South Lawn sensor — also next to Fruit Trees in zone 3 area

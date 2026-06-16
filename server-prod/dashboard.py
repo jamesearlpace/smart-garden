@@ -580,6 +580,150 @@ def create_app(config, engine, weather, billing):
             "generated": now.isoformat(timespec="seconds"),
         })
 
+    @app.route("/api/zone-history")
+    def api_zone_history():
+        """Per-zone run history + sensor response. For each zone, returns its
+        watering runs classified as auto / manual / test, with gallons, and (for
+        zones a soil sensor sits in) the mapped sensor's reading just before the
+        run vs its peak in the hours after — so you can see if the sensor
+        actually responds to that zone's water (sensor-calibration validation).
+
+        Query: days (default 14), include_tests (0/1, default 0).
+        Test runs = manual_toggle, *orphaned_cleanup, and sub-60s manual blips.
+        """
+        from datetime import datetime, timedelta
+
+        days = query_int("days", 14, min_value=1, max_value=120)
+        include_tests = request.args.get("include_tests", "0") == "1"
+        after_window_h = 3  # hours after a run to look for the sensor's peak
+
+        # sensor index -> [zone ids]; default mirrors the physical layout but is
+        # config-overridable (sensors move over time).
+        szmap_raw = config.get("sensor_zone_map") or {0: [], 1: [8], 2: [3], 3: [3]}
+        szmap = {int(k): list(v or []) for k, v in szmap_raw.items()}
+        # reverse: zone id -> [sensor indices that should respond to it]
+        zone_sensors = {}
+        for sidx, zids in szmap.items():
+            for z in zids:
+                zone_sensors.setdefault(int(z), []).append(sidx)
+        # sensor display names from calibration block
+        cal = config.get("soil_calibration") or {}
+        sensor_names = {}
+        for sidx in range(4):
+            entry = cal.get(sidx) or cal.get(str(sidx)) or {}
+            sensor_names[sidx] = entry.get("name", f"Sensor {sidx}")
+
+        est_gpm = {z["id"]: z.get("est_gpm", 4.0) for z in config["zones"]}
+
+        def classify(reason, dur):
+            r = reason or ""
+            if "orphaned_cleanup" in r:
+                return "test"
+            if r.startswith("soil_dry"):
+                return "auto"
+            if r == "manual_toggle":
+                return "test"
+            if r == "manual":
+                return "test" if (dur or 0) < 60 else "manual"
+            return "test" if (dur or 0) < 60 else "manual"
+
+        conn = db.get_conn()
+        rows = conn.execute(
+            "SELECT id, zone_id, start_ts, end_ts, duration_sec, est_gallons, "
+            "trigger_reason, soil_before, soil_after FROM watering_event "
+            "WHERE start_ts >= datetime('now','localtime',?) ORDER BY start_ts DESC",
+            (f"-{days} days",),
+        ).fetchall()
+
+        def sensor_before(sidx, start_ts):
+            r = conn.execute(
+                "SELECT soil_pct FROM sensor_log WHERE zone_id=? AND ts<=? "
+                "AND ts>=strftime('%Y-%m-%dT%H:%M:%S', ?, '-2 hours') "
+                "ORDER BY ts DESC LIMIT 1",
+                (sidx, start_ts, start_ts),
+            ).fetchone()
+            return r["soil_pct"] if r and r["soil_pct"] is not None else None
+
+        def sensor_peak_after(sidx, end_ts):
+            if not end_ts:
+                return None
+            # NOTE: sensor_log.ts is stored T-separated (2026-06-16T07:53), but
+            # SQLite datetime() returns space-separated — string-comparing the two
+            # silently fails. Use strftime to keep the bound T-separated.
+            r = conn.execute(
+                "SELECT MAX(soil_pct) AS pk FROM sensor_log WHERE zone_id=? "
+                "AND ts>? AND ts<=strftime('%Y-%m-%dT%H:%M:%S', ?, ?)",
+                (sidx, end_ts, end_ts, f"+{after_window_h} hours"),
+            ).fetchone()
+            return r["pk"] if r and r["pk"] is not None else None
+
+        zones_out = []
+        for z in config["zones"]:
+            if not (z.get("installed", False) or z.get("type") == "drip"):
+                continue
+            zid = z["id"]
+            mapped = zone_sensors.get(zid, [])
+            runs = []
+            counts = {"auto": 0, "manual": 0, "test": 0}
+            for row in rows:
+                if row["zone_id"] != zid:
+                    continue
+                dur = row["duration_sec"] or 0
+                kind = classify(row["trigger_reason"], dur)
+                counts[kind] += 1
+                if kind == "test" and not include_tests:
+                    continue
+                gallons = row["est_gallons"]
+                if gallons is None or gallons == 0:
+                    gallons = est_gpm.get(zid, 4.0) * (dur / 60.0)
+                sensors = []
+                # Only do the (heavier) sensor lookup for non-test runs.
+                if kind != "test":
+                    for sidx in mapped:
+                        b = sensor_before(sidx, row["start_ts"])
+                        a = sensor_peak_after(sidx, row["end_ts"])
+                        delta = (round(a - b, 1) if (a is not None and b is not None)
+                                 else None)
+                        sensors.append({
+                            "idx": sidx, "name": sensor_names.get(sidx, f"S{sidx}"),
+                            "before": round(b, 1) if b is not None else None,
+                            "after": round(a, 1) if a is not None else None,
+                            "delta": delta,
+                        })
+                runs.append({
+                    "id": row["id"],
+                    "start": row["start_ts"],
+                    "end": row["end_ts"],
+                    "dur_min": round(dur / 60.0, 1),
+                    "dur_sec": dur,
+                    "kind": kind,
+                    "gallons": round(gallons, 1) if gallons is not None else None,
+                    "reason": row["trigger_reason"],
+                    "sensors": sensors,
+                })
+            zones_out.append({
+                "id": zid,
+                "name": z["name"],
+                "type": z.get("type", "sprinkler"),
+                "auto_mode": z.get("auto_mode", True),
+                "installed": z.get("installed", False),
+                "mapped_sensors": [
+                    {"idx": s, "name": sensor_names.get(s, f"S{s}")} for s in mapped
+                ],
+                "counts": counts,
+                "runs": runs,
+            })
+        conn.close()
+
+        return jsonify({
+            "days": days,
+            "include_tests": include_tests,
+            "sensor_zone_map": {str(k): v for k, v in szmap.items()},
+            "sensor_names": {str(k): v for k, v in sensor_names.items()},
+            "after_window_h": after_window_h,
+            "zones": zones_out,
+        })
+
     @app.route("/forecast-vs-actual")
     def forecast_vs_actual_page():
         return redirect("/forecast")

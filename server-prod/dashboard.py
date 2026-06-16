@@ -427,6 +427,159 @@ def create_app(config, engine, weather, billing):
             "window_end": config.get("watering_window", {}).get("end", "07:00"),
         })
 
+    @app.route("/api/schedule-7day")
+    def api_schedule_7day():
+        """AUTHORITATIVE 7-day watering schedule — the single source of truth
+        for the schedule page grid, the all-zones "Next" column, AND each
+        single-zone "Next Expected Watering" banner. Mirrors the engine:
+          - per-zone ET water-balance depletion from the live forecast
+          - sync-group coordination (whole group waters when its driest auto
+            member hits MAD); independent auto zones water on their own MAD
+          - site-wide rain skip (>= engine rain_forecast_mm threshold)
+          - serial scheduling inside the watering window, ordered by zone id
+          - weather-scaled runtime (max_runtime_min * scale_pct/100)
+        Returns day-rows x zone-cols so every consumer reads ONE computation
+        and they can never drift apart again.
+        """
+        from datetime import date, datetime, timedelta
+
+        # ── Inputs: source from status_summary() — the SAME warm-cached path
+        #    /api/status and /api/forecast use (the non-blocking weather.* calls
+        #    return empty in this request context). ──
+        summary = status_summary()
+        et0_today = summary.get("et0_today", 0) or 0.0
+        forecast = summary.get("forecast_7day") or []
+        # Cold cache (e.g. seconds after a restart) → the non-blocking summary
+        # comes back empty. Warm it once with a blocking fetch so the schedule
+        # isn't computed against zero ET (which would fire everything day 1 then
+        # nothing). Normal operation hits the warm path and skips this.
+        if not forecast:
+            try:
+                summary = engine.get_status_summary(allow_weather_fetch=True) or summary
+                et0_today = summary.get("et0_today", 0) or et0_today
+                forecast = summary.get("forecast_7day") or []
+            except Exception:
+                pass
+        fc_by_date = {f.get("date"): f for f in forecast}
+        season_idx = engine.weather.get_season_index()
+        ws = summary.get("weather_scale") or {}
+        scale_pct = ws.get("scale_pct", 100) if isinstance(ws, dict) else 100
+        groups = config.get("water_groups") or {}
+        member_of = {}
+        for gname, ids in groups.items():
+            for zid in ids:
+                member_of[zid] = gname
+        win = config.get("watering_window", {}) or {}
+        win_start = str(win.get("start", "04:00"))
+        try:
+            wh, wm = int(win_start.split(":")[0]), int(win_start.split(":")[1])
+        except Exception:
+            wh, wm = 4, 0
+
+        rain_skip_mm = 5.0  # engine skip_rules.rain_forecast_mm
+
+        # ── Per-zone sim state: installed AUTO zones only (manual/drip-manual
+        #    never auto-water, so they get no schedule column). ──
+        zstate = {}
+        cols = []
+        for z in config["zones"]:
+            if not z.get("installed", False):
+                continue
+            if not z.get("auto_mode", True):
+                continue
+            zid = z["id"]
+            taw = engine.get_zone_taw_mm(zid)
+            mad = engine.get_zone_mad_mm(zid)
+            bal = db.get_soil_balance(zid)
+            balance_mm = (bal["balance_mm"] if bal
+                          and bal.get("balance_mm") is not None else taw)
+            zstate[zid] = {
+                "taw": taw, "mad": mad, "bal": float(balance_mm),
+                "kc": z.get("kc", [0.9, 0.9, 0.9, 0.9]),
+                "run": z.get("max_runtime_min", 24),
+            }
+            cols.append({"id": zid, "name": z["name"],
+                         "type": z.get("type", "sprinkler")})
+
+        # ── Day boundary: window is e.g. 04:00-08:00. If it has already passed
+        #    today, the first simulated morning is tomorrow. ──
+        now = datetime.now()
+        win_end = str(win.get("end", "08:00"))
+        try:
+            end_h = int(win_end.split(":")[0])
+        except Exception:
+            end_h = 8
+        first_offset = 0 if now.hour < end_h else 1
+
+        def kc_for(zid):
+            arr = zstate[zid]["kc"]
+            if 0 <= season_idx < len(arr):
+                return arr[season_idx]
+            return 0.0  # dormant -> no ET demand (engine skips irrigation)
+
+        days = []
+        next_water = {}  # zid -> {date_label, start, minutes, days_away}
+        for n in range(7):
+            d = date.today() + timedelta(days=first_offset + n)
+            fc = fc_by_date.get(d.isoformat())
+            et0 = (fc["et0"] if fc and fc.get("et0") is not None else et0_today)
+            rain = (fc["rain"] if fc and fc.get("rain") is not None else 0.0)
+
+            # Deplete every zone by its ET demand; credit rain.
+            for zid, s in zstate.items():
+                etc = et0 * kc_for(zid)
+                s["bal"] = max(0.0, s["bal"] - etc + rain)
+
+            rain_skips = rain >= rain_skip_mm
+
+            # Firing set: group triggers + independent auto zones.
+            firing = set()
+            for gname, ids in groups.items():
+                members = [zid for zid in ids if zid in zstate]
+                if members and any(zstate[m]["bal"] <= zstate[m]["mad"]
+                                   for m in members):
+                    firing.update(members)
+            for zid, s in zstate.items():
+                if zid not in member_of and s["bal"] <= s["mad"]:
+                    firing.add(zid)
+            if rain_skips:
+                firing = set()
+
+            # Serial schedule inside the window, ordered by zone id.
+            t = datetime(d.year, d.month, d.day, wh, wm)
+            day_sched = {}
+            for zid in sorted(firing):
+                run = int(round(zstate[zid]["run"] * scale_pct / 100.0))
+                day_sched[str(zid)] = {
+                    "start": t.strftime("%H:%M"), "minutes": run,
+                }
+                t = t + timedelta(minutes=run)
+                zstate[zid]["bal"] = zstate[zid]["taw"]  # refill to field cap
+                if zid not in next_water:
+                    next_water[zid] = {
+                        "date_label": d.strftime("%a %b %d"),
+                        "iso": d.isoformat(),
+                        "start": day_sched[str(zid)]["start"],
+                        "minutes": run,
+                        "days_away": first_offset + n,
+                    }
+
+            days.append({
+                "date_label": d.strftime("%a %b %d"),
+                "iso": d.isoformat(),
+                "rain_skip": rain_skips,
+                "zones": day_sched,
+            })
+
+        return jsonify({
+            "columns": cols,
+            "days": days,
+            "next_water": {str(k): v for k, v in next_water.items()},
+            "scale_pct": scale_pct,
+            "window_start": win_start,
+            "generated": now.isoformat(timespec="seconds"),
+        })
+
     @app.route("/forecast-vs-actual")
     def forecast_vs_actual_page():
         return redirect("/forecast")

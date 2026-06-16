@@ -547,7 +547,9 @@ function saveHash() {
 }
 var hashParams = parseHash();
 
-var allZonesMode = (hashParams.zone === 'all');
+// Default to the all-zones schedule grid when no explicit zone is in the URL —
+// it's the authoritative, self-consistent overview. A specific #zone=N still works.
+var allZonesMode = hashParams.zone ? (hashParams.zone === 'all') : true;
 var currentZoneId = (hashParams.zone && hashParams.zone !== 'all') ? parseInt(hashParams.zone) : (ZONES.length > 0 ? ZONES[0].id : 0);
 var currentDays = hashParams.days ? parseInt(hashParams.days) : 7;
 var selectedYear = hashParams.year || '2026';
@@ -556,6 +558,37 @@ var weatherCache = {};
 var liveDataCache = {};
 var vacationOn = false; // mirrors config.vacation_mode; gates schedule predictions
 var precipChart = null, moistureChart = null;
+
+// ═══════════════════════════════════════════════════════════════════
+// AUTHORITATIVE SCHEDULE — single source of truth for the schedule grid,
+// the all-zones "Next water" column, AND each single-zone banner. The
+// server computes it once (mirroring the engine: group sync, ET balance,
+// weather-scaled runtimes), so these displays can never drift apart again.
+// ═══════════════════════════════════════════════════════════════════
+var SCHED7 = null;
+function fetchSchedule7() {
+  return fetch('/api/schedule-7day').then(function(r){ return r.json(); })
+    .then(function(d){ SCHED7 = d; return d; })
+    .catch(function(){ return null; });
+}
+// {value, color, detail, short} for a zone, or null if schedule not loaded.
+function schedNextWaterText(zid) {
+  if (!SCHED7 || !SCHED7.next_water) return null;
+  var nw = SCHED7.next_water[String(zid)];
+  if (!nw) return { value: '> 7 days', color: '#22c55e', short: '> 7d',
+                    detail: 'No watering expected in the next 7 days.' };
+  var hh = parseInt(nw.start.split(':')[0]);
+  var mm = nw.start.split(':')[1];
+  var ap = hh >= 12 ? 'PM' : 'AM'; var hh12 = ((hh + 11) % 12) + 1;
+  var timeStr = hh12 + ':' + mm + ' ' + ap;
+  return {
+    value: nw.date_label + ' at ' + timeStr,
+    color: nw.days_away <= 1 ? '#f59e0b' : '#22c55e',
+    short: nw.date_label.replace(/^\w+ /, ''),
+    detail: 'Runs ~' + nw.minutes + ' min · ' + (nw.days_away === 0 ? 'today' :
+            nw.days_away + ' day' + (nw.days_away > 1 ? 's' : '') + ' away')
+  };
+}
 
 // Set UI controls to match restored state
 document.addEventListener('DOMContentLoaded', function() {
@@ -2489,9 +2522,11 @@ function refreshAllZones() {
 
   var fetches = [fetch2026Weather()];
   ZONES.forEach(function(z) { fetches.push(fetchLiveData(z.id)); });
+  fetches.push(fetchSchedule7());
 
   Promise.all(fetches).then(function(results) {
     loadMsg.style.display = 'none';
+    SCHED7 = results[results.length - 1] || SCHED7;
     var perZone = {};
     for (var i = 0; i < ZONES.length; i++) {
       perZone[ZONES[i].id] = results[i + 1];
@@ -2561,8 +2596,9 @@ function refreshAllZones() {
       if (vacationOn && pred.isAuto) {
         nextTxt = 'paused';
       } else if (pred.isAuto) {
-        if (firstFire >= 0) nextTxt = fmtNight(firstFire);
-        else nextTxt = '> 7d';
+        // Authoritative: read the server schedule, not the client predictor.
+        var _sn = schedNextWaterText(z.id);
+        nextTxt = _sn ? _sn.short : '—';
       } else {
         nextTxt = pred.isDrip ? 'manual only' : 'manual mode';
       }
@@ -2597,49 +2633,40 @@ function refreshAllZones() {
     // Refresh live valve state immediately after table renders
     refreshLiveValveState();
 
-    // ── Build 7-night schedule grid ──
-    var schedHtml = '<thead><tr><th>Zone</th>';
-    for (var ni2 = 0; ni2 < 7; ni2++) schedHtml += '<th class="az-num">' + fmtNight(ni2) + '</th>';
-    schedHtml += '<th class="az-num">Week total</th></tr></thead><tbody>';
-
-    ZONES.forEach(function(z) {
-      var ld = perZone[z.id];
-      var pred = _preds[z.id];
-      schedHtml += '<tr><td class="az-name"><a href="#" data-zone="' + z.id + '">' + z.name + '</a></td>';
-      if (!pred) {
-        for (var nx = 0; nx < 7; nx++) schedHtml += '<td class="az-cell-none">—</td>';
-        schedHtml += '<td class="az-cell-none">—</td></tr>';
-        return;
-      }
-      var weekMin = 0;
-      if (vacationOn && pred.isAuto) {
-        for (var pv = 0; pv < 7; pv++) schedHtml += '<td class="az-cell-none" title="Vacation mode — auto-watering paused">🏖️</td>';
-        schedHtml += '<td class="az-num"><b>paused</b></td></tr>';
-        return;
-      }
-      pred.nights.forEach(function(n, idx) {
-        if (n.willWater) {
-          var cls = 'az-cell-run';
-          if (idx === 0) cls = 'az-cell-urgent';
-          else if (idx <= 2) cls = 'az-cell-soon';
-          schedHtml += '<td class="' + cls + '">' + n.runtimeMin + 'm</td>';
-          weekMin += n.runtimeMin;
-        } else if (n.skipReason) {
-          schedHtml += '<td class="az-cell-skip">' + n.skipReason + '</td>';
-        } else {
-          schedHtml += '<td class="az-cell-none">—</td>';
-        }
+    // ── Build day-row × zone-col schedule grid (AUTHORITATIVE, from server) ──
+    // Rows = each of the next 7 days (starting now). Columns = zones. Each cell
+    // shows the start time + run minutes. Single source = /api/schedule-7day, so
+    // this grid, the "Next water" column above, and every single-zone banner all
+    // agree by construction.
+    var schedHtml = '';
+    if (SCHED7 && SCHED7.columns && SCHED7.days) {
+      schedHtml = '<thead><tr><th>Day</th>';
+      SCHED7.columns.forEach(function(c) {
+        schedHtml += '<th class="az-num">' + c.name + '</th>';
       });
-      schedHtml += '<td class="az-num"><b>' + (weekMin > 0 ? weekMin + 'm' : '—') + '</b></td></tr>';
-    });
-
-    // Footer row: zones firing per night
-    schedHtml += '<tr style="background:var(--border-light); font-weight:600">'
-      + '<td style="color:var(--text2); font-size:.72rem; text-transform:uppercase; letter-spacing:.03em">Zones firing</td>';
-    for (var fn = 0; fn < 7; fn++) {
-      schedHtml += '<td class="az-num">' + (firingByNight[fn] > 0 ? firingByNight[fn] : '—') + '</td>';
+      schedHtml += '</tr></thead><tbody>';
+      SCHED7.days.forEach(function(day, di) {
+        schedHtml += '<tr><td class="az-name">' + day.date_label
+          + (di === 0 ? ' <span style="color:var(--text3); font-weight:400">(next)</span>' : '')
+          + '</td>';
+        SCHED7.columns.forEach(function(c) {
+          var cell = day.zones[String(c.id)];
+          if (cell) {
+            var cls = di === 0 ? 'az-cell-urgent' : (di <= 2 ? 'az-cell-soon' : 'az-cell-run');
+            schedHtml += '<td class="' + cls + '" style="text-align:center">' + cell.start
+              + '<br><span style="font-size:.72rem; opacity:.8">' + cell.minutes + ' min</span></td>';
+          } else if (day.rain_skip) {
+            schedHtml += '<td class="az-cell-skip" style="text-align:center">rain skip</td>';
+          } else {
+            schedHtml += '<td class="az-cell-none" style="text-align:center">—</td>';
+          }
+        });
+        schedHtml += '</tr>';
+      });
+      schedHtml += '</tbody>';
+    } else {
+      schedHtml = '<tbody><tr><td style="color:var(--text3); padding:12px">Schedule loading…</td></tr></tbody>';
     }
-    schedHtml += '<td class="az-num">—</td></tr></tbody>';
     document.getElementById('az-schedule-table').innerHTML = schedHtml;
 
     // ── Summary banner ──
@@ -2706,6 +2733,28 @@ function refresh() {
 
   // Toggle legend: hide sim decision markers for real-data mode
   document.getElementById('legend-sim').style.display = selectedYear === '2026' ? 'none' : 'flex';
+
+  // AUTHORITATIVE single-zone banner: override whatever the inline client
+  // predictor wrote with the server schedule, so the per-zone "Next Expected
+  // Watering" matches the all-zones grid exactly. Resolves after the sync
+  // inline writes, so it wins. Skips manual/not-installed zones (their text is
+  // already correct) and only applies for the live 2026 view.
+  if (selectedYear === '2026') {
+    fetchSchedule7().then(function() {
+      if (allZonesMode) return;
+      var cz = null;
+      for (var ci = 0; ci < ZONES.length; ci++) { if (ZONES[ci].id === currentZoneId) { cz = ZONES[ci]; break; } }
+      if (!cz || cz.auto_mode === false || !cz.installed) return;
+      var sn = schedNextWaterText(currentZoneId);
+      if (!sn) return;
+      var nwVal = document.getElementById('nw-value');
+      var nwDet = document.getElementById('nw-detail');
+      var nwBanner = document.getElementById('next-water-banner');
+      if (nwVal) { nwVal.textContent = sn.value; nwVal.style.color = sn.color; }
+      if (nwDet) nwDet.textContent = sn.detail;
+      if (nwBanner) nwBanner.style.display = '';
+    });
+  }
 
   if (selectedYear === '2026') {
     loadMsg.style.display = 'inline';

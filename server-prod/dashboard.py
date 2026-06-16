@@ -588,13 +588,19 @@ def create_app(config, engine, weather, billing):
         run vs its peak in the hours after — so you can see if the sensor
         actually responds to that zone's water (sensor-calibration validation).
 
-        Query: days (default 14), include_tests (0/1, default 0).
-        Test runs = manual_toggle, *orphaned_cleanup, and sub-60s manual blips.
+        Query: days (default 14), include_other (0/1, default 0).
+        Default view = AUTO runs only (the engine's real decisions). Manual runs
+        and short tests are both "James poking at it" noise → hidden unless
+        include_other=1. Counts are always returned so the header chips show
+        what's hidden.
         """
         from datetime import datetime, timedelta
 
         days = query_int("days", 14, min_value=1, max_value=120)
-        include_tests = request.args.get("include_tests", "0") == "1"
+        # include_other reveals BOTH manual and test runs (the user treats manual
+        # as testing too). Back-compat: include_tests=1 still works.
+        include_other = (request.args.get("include_other", "0") == "1"
+                         or request.args.get("include_tests", "0") == "1")
         after_window_h = 3  # hours after a run to look for the sensor's peak
 
         # sensor index -> [zone ids]; default mirrors the physical layout but is
@@ -671,7 +677,8 @@ def create_app(config, engine, weather, billing):
                 dur = row["duration_sec"] or 0
                 kind = classify(row["trigger_reason"], dur)
                 counts[kind] += 1
-                if kind == "test" and not include_tests:
+                # Default view = AUTO only. Manual + test are both "poking at it".
+                if kind != "auto" and not include_other:
                     continue
                 gallons = row["est_gallons"]
                 if gallons is None or gallons == 0:
@@ -717,7 +724,7 @@ def create_app(config, engine, weather, billing):
 
         return jsonify({
             "days": days,
-            "include_tests": include_tests,
+            "include_other": include_other,
             "sensor_zone_map": {str(k): v for k, v in szmap.items()},
             "sensor_names": {str(k): v for k, v in sensor_names.items()},
             "after_window_h": after_window_h,

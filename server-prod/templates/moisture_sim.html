@@ -427,13 +427,13 @@ h2 { margin: 0; font-size: 1.05rem; }
             <option value="30">30 days</option>
           </select>
         </label>
-        <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--text2)" title="Show short test toggles, manual blips, and cleanup artifacts">
-          <input type="checkbox" id="rh-tests"> Show test runs
+        <label style="display:flex; align-items:center; gap:5px; cursor:pointer; color:var(--text2)" title="Show your manual runs and short test toggles too">
+          <input type="checkbox" id="rh-tests"> Show manual &amp; test runs
         </label>
       </div>
     </div>
     <div style="font-size:.72rem; color:var(--text2); margin-bottom:10px">
-      🤖 Auto = engine decision · ✋ Manual = you ran it (≥1 min) · 🧪 Test = short toggles/blips (hidden by default).
+      Showing 🤖 <b>Auto</b> runs only (the engine's real decisions). Your ✋ manual runs and 🧪 short tests are hidden — toggle above to show them.
       For zones a soil sensor sits in, <b>Sensor</b> shows the reading just before the run → its peak within 3 h after (Δ = response). A clear Δ↑ confirms the sensor is placed &amp; calibrated right.
     </div>
     <div id="rh-content"><div style="color:var(--text3); font-size:.8rem; padding:8px">Loading run history…</div></div>
@@ -686,7 +686,7 @@ function loadRunHistory() {
   var t = (tests && tests.checked) ? '1' : '0';
   var wrap = document.getElementById('rh-content');
   if (wrap) wrap.innerHTML = '<div style="color:var(--text3); font-size:.8rem; padding:8px">Loading run history…</div>';
-  fetch('/api/zone-history?days=' + d + '&include_tests=' + t)
+  fetch('/api/zone-history?days=' + d + '&include_other=' + t)
     .then(function(r){ return r.json(); })
     .then(renderRunHistory)
     .catch(function(){ if (wrap) wrap.innerHTML = '<div style="color:var(--red); font-size:.8rem; padding:8px">Failed to load run history.</div>'; });

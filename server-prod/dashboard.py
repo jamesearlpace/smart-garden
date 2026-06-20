@@ -4270,6 +4270,20 @@ def create_app(config, engine, weather, billing):
                         "cost_tokens": res.get("cost_tokens"),
                         "error": res.get("error")})
 
+    @app.route("/api/cam/reanchor-manual", methods=["POST"])
+    def cam_reanchor_manual():
+        """Set the meter lock to a SPECIFIC human-read value (no AI). For when the
+        meter is plainly readable but the CNN/oracle can't, so the lock has gone
+        stale and the displayed total lags the truth. The manual reanchor may
+        move the lock in EITHER direction (it's an explicit human override)."""
+        data = request.get_json(silent=True) or {}
+        v = "".join(c for c in str(data.get("value", "")) if c.isdigit())
+        if len(v) != 9:
+            return jsonify({"ok": False, "error": "value must be 9 digits"}), 400
+        applied = meter_reader.reanchor(int(v), source="manual")
+        return jsonify({"ok": True, "value": v, "reanchored": bool(applied),
+                        "last_good": getattr(meter_reader, "last_good", None)})
+
     @app.route("/api/cam/capture")
     def cam_capture():
         """Proxy a JPEG capture from the ESP32-CAM (fallback)."""

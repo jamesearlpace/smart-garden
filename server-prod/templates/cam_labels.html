@@ -109,6 +109,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="bar" id="chips"></div>
 <div class="tools">
   <button class="tbtn" id="btn-recent">🆕 Review captures</button>
+  <button class="tbtn" id="btn-sort">🕒 Sort: Value</button>
   <button class="tbtn" id="btn-propagate" style="color:#0d9488;border-color:#99f6e4">🔗 Propagate from my fixes</button>
   <button class="tbtn ai" id="btn-reprocess">🤖 Re-read filtered with AI</button>
   <button class="tbtn retrain" id="btn-retrain">♻️ Retrain now</button>
@@ -136,7 +137,7 @@ function fmtLabel(l){
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
-var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false;
+var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false, SORT = 'value';
 
 function filtered(){
   if (filter==='all') return ALL;
@@ -145,8 +146,16 @@ function filtered(){
   return ALL.filter(function(i){return i.status===filter;});
 }
 
+function sortItems(items){
+  if (SORT==='newest'){
+    return items.slice().sort(function(a,b){
+      return (b.captured_ms||0)-(a.captured_ms||0); });
+  }
+  return items;  // server already sorts by meter value (the climb)
+}
+
 function render(){
-  var items = filtered();
+  var items = sortItems(filtered());
   document.getElementById('grid').innerHTML = items.map(function(i){
     var prop = '';
     if (i.proposed){
@@ -338,6 +347,13 @@ document.getElementById('btn-reprocess').onclick = function(){
       if(res.ok){ if(pollTimer) clearTimeout(pollTimer); pollReprocess(); }
       else { document.getElementById('btn-reprocess').disabled=false; setJob('⚠️ '+(res.error||'failed')); }
     }).catch(function(){ document.getElementById('btn-reprocess').disabled=false; setJob('⚠️ launch failed'); });
+};
+
+document.getElementById('btn-sort').onclick = function(){
+  SORT = (SORT==='value') ? 'newest' : 'value';
+  this.textContent = (SORT==='newest') ? '\ud83d\udd52 Sort: Newest' : '\ud83d\udd52 Sort: Value';
+  this.classList.toggle('on', SORT==='newest');
+  render();
 };
 
 document.getElementById('btn-recent').onclick = function(){

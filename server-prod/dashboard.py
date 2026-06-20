@@ -3722,6 +3722,36 @@ def create_app(config, engine, weather, billing):
         """Per-reading detail page: the captured image + every table field."""
         return render_template("cam_reading.html", rid=rid)
 
+    @app.route("/api/cam/review-queue")
+    def cam_review_queue():
+        """Active-learning queue: the frames most worth a human correction — the
+        ones the live pipeline could NOT confidently read (fresh_read False) that
+        still have a saved image. Newest first. Correcting THESE (not random
+        frames) is where one human minute moves the model the most, because they
+        are exactly where the CNN is failing right now."""
+        n = query_int("n", 40, min_value=1, max_value=200)
+        rows = meter_reader.get_readings(600) or []
+        out = []
+        for r in rows:
+            if r.get("fresh_read"):
+                continue
+            rid = str(r.get("id") or "")
+            if not rid or not os.path.exists(
+                    os.path.join(FRAME_DIR, f"{os.path.basename(rid)}.jpg")):
+                continue
+            out.append({"id": rid, "ts": r.get("ts"),
+                        "ocr_guess": r.get("ocr_guess") or "",
+                        "note": r.get("note") or "",
+                        "img": "/api/cam/frame/" + rid})
+            if len(out) >= n:
+                break
+        return jsonify({"queue": out, "count": len(out)})
+
+    @app.route("/cam/review")
+    def cam_review_page():
+        """Active-learning review queue page."""
+        return render_template("cam_review.html")
+
     # Dir holding the verified-dataset manifests (cnn-dataset builder output).
     LABELS_DIR = os.environ.get("METER_LABELS_DIR",
                                 "/home/jamesearlpace/cnn-dataset-oracle")

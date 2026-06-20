@@ -64,6 +64,9 @@ TEST_PCT = 12                  # ~12%% of frames held out forever (by name hash)
 MIN_TEST = 30                  # need at least this many test frames to judge
 MIN_NEW_FRAMES = 25            # skip retrain unless this many new since last run
 MAX_PER_LABEL = 3
+SYNTH_N = 600                  # recombined synthetic frames per retrain (covers
+                              # the leading-edge high digits real data lacks)
+SYNTH_MAX_STRIPS = 300         # cap real digit strips kept per value (memory)
 BOOTSTRAP_FLOOR = 0.45         # first clean challenger promotes if it clears this
 EPOCHS = 60                    # v2 plateaued by ~ep50; 60 = headroom, ~25%% faster
 BATCH = 32
@@ -160,13 +163,87 @@ class MeterDigits(Dataset):
 
     def __getitem__(self, i):
         r = self.rows[i]
-        gray = load_crop_gray(os.path.join(FRAMES, r["file"]))
+        if "img" in r:                       # in-memory synthetic (recombined)
+            gray = np.array(r["img"], dtype=np.float32, copy=True)
+        else:
+            gray = load_crop_gray(os.path.join(FRAMES, r["file"]))
         if self.train:
             gray = _augment(gray)
         x = torch.from_numpy(gray).unsqueeze(0)
         y = torch.tensor([int(c) for c in r["label"]][:N_DIGITS],
                          dtype=torch.long)
-        return x, y
+        w = torch.tensor(float(r.get("w", 1.0)), dtype=torch.float32)
+        return x, y, w
+
+
+# ---------------------------------------------------------------- synthetic
+# The meter is always weakest at its LEADING EDGE: the high digits only just
+# reached a new value, so real labeled data for them is near-zero (e.g. the
+# hundreds digit has spent its life as '1' and just rolled to '5'). We fix this
+# with ZERO new human labels by RECOMBINING real digit pixels: slice confidently
+# labeled frames into their 9 evenly-spaced digit cells, then reassemble those
+# real strips into values the meter hasn't physically shown yet. The model sees
+# every digit at every position using genuine pixels (real glare, real font).
+def _digit_cells(width):
+    return [(round(i * width / N_DIGITS), round((i + 1) * width / N_DIGITS))
+            for i in range(N_DIGITS)]
+
+
+def build_digit_library(train_rows):
+    """lib[d] = list of real 64xCELL strips showing digit d, pooled across ALL
+    positions (so even digits a position has never shown are available from the
+    positions that have). Built from TRAIN frames only — never test (no leak)."""
+    lib = {d: [] for d in range(10)}
+    cells = _digit_cells(IN_W)
+    rows = [r for r in train_rows if "file" in r]
+    random.shuffle(rows)
+    for r in rows:
+        lbl = r["label"]
+        if len(lbl) != N_DIGITS:
+            continue
+        if all(len(lib[int(c)]) >= SYNTH_MAX_STRIPS for c in lbl):
+            continue
+        try:
+            gray = load_crop_gray(os.path.join(FRAMES, r["file"]))
+        except Exception:
+            continue
+        for i, (x0, x1) in enumerate(cells):
+            d = int(lbl[i])
+            if len(lib[d]) < SYNTH_MAX_STRIPS:
+                lib[d].append(gray[:, x0:x1].copy())
+    return lib
+
+
+def synth_rows(lib, n):
+    """Generate n recombined frames focused on the leading edge. Positions 0-2
+    are the meter's fixed prefix (094); position 3 is biased toward the high
+    values real data lacks; positions 4-8 are uniform. Returns in-memory rows."""
+    if sum(1 for d in range(10) if lib[d]) < 9:
+        return []                         # not enough digit variety to compose
+    cells = _digit_cells(IN_W)
+    # bias the hundreds digit toward 5-9 (where the meter is heading) but keep
+    # some low values so it doesn't forget them.
+    p3_pool = [1, 2, 3, 4] + [5, 6, 7, 8, 9] * 3
+    rows = []
+    for _ in range(n):
+        digs = [0, 9, 4, random.choice(p3_pool)] + \
+               [random.randint(0, 9) for _ in range(5)]
+        if any(not lib[d] for d in digs):
+            continue
+        strips = []
+        for i, d in enumerate(digs):
+            s = random.choice(lib[d])
+            cw = cells[i][1] - cells[i][0]
+            if s.shape[1] != cw:
+                s = cv2.resize(s, (cw, IN_H), interpolation=cv2.INTER_AREA)
+            strips.append(s)
+        comp = np.hstack(strips)
+        if comp.shape[1] != IN_W:
+            comp = cv2.resize(comp, (IN_W, IN_H), interpolation=cv2.INTER_AREA)
+        rows.append({"img": comp.astype(np.float32),
+                     "label": "".join(str(d) for d in digs),
+                     "w": 1.0, "synth": True})
+    return rows
 
 
 # ---------------------------------------------------------------- audit
@@ -358,23 +435,39 @@ def gather_labels(manual=None):
     if manual:
         log(f"manual overlay: {n_correct} corrected, {n_ok} confirmed, "
             f"{n_reject} rejected, {n_revive} revived past audit")
-    return clean
+    # ---- TRUST TIERS: human > human-anchored > monotonically repaired/confirmed
+    # > auto. Used as per-sample loss weights so the model leans on the labels
+    # we trust and is pulled less by raw oracle reads (91%% of frames, ~10%% of
+    # which we've already caught as wrong).
+    trust = {}
+    for f in clean:
+        mv = manual.get(f)
+        if mv and mv.get("action") in ("correct", "ok"):
+            trust[f] = 3.0
+        elif f in prop:
+            trust[f] = {"anchor": 2.5, "repaired": 2.0,
+                        "confirmed": 1.5}.get(prop[f][0], 1.0)
+        else:
+            trust[f] = 1.0
+    return clean, trust
 
 
-def build_rows(clean):
-    """Dedup to MAX_PER_LABEL per distinct reading; split by permanent hash."""
+def build_rows(clean, trust=None):
+    """Dedup to MAX_PER_LABEL per distinct reading; split by permanent hash.
+    Attaches a per-sample trust weight (defaults 1.0)."""
+    trust = trust or {}
     per = {}
     train, test = [], []
     # test frames first (never capped — keep the benchmark complete)
     for f, lbl in sorted(clean.items()):
         if is_test(f):
-            test.append({"file": f, "label": lbl})
+            test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0)})
     for f, lbl in sorted(clean.items()):
         if is_test(f):
             continue
         if per.get(lbl, 0) >= MAX_PER_LABEL:
             continue
-        train.append({"file": f, "label": lbl})
+        train.append({"file": f, "label": lbl, "w": trust.get(f, 1.0)})
         per[lbl] = per.get(lbl, 0) + 1
     return train, test
 
@@ -419,8 +512,9 @@ def evaluate(model, loader, device):
     model.eval()
     dc = dt = fc = ft = 0
     with torch.no_grad():
-        for x, y in loader:
-            x, y = x.to(device), y.to(device)
+        for batch in loader:
+            x = batch[0].to(device)
+            y = batch[1].to(device)
             pred = model(x).argmax(-1)
             dc += (pred == y).sum().item()
             dt += y.numel()
@@ -435,14 +529,15 @@ def train_challenger(train_rows, test_loader, device):
     model = MeterDigitCNN().to(device)
     opt = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS)
-    lossf = nn.CrossEntropyLoss()
+    lossf = nn.CrossEntropyLoss(reduction="none")
     best_f, best_state = -1.0, None
     for ep in range(1, EPOCHS + 1):
         model.train()
-        for x, y in train_ld:
-            x, y = x.to(device), y.to(device)
+        for x, y, w in train_ld:
+            x, y, w = x.to(device), y.to(device), w.to(device)
             logits = model(x)
-            loss = sum(lossf(logits[:, d, :], y[:, d]) for d in range(N_DIGITS))
+            loss = sum((lossf(logits[:, d, :], y[:, d]) * w).mean()
+                       for d in range(N_DIGITS))
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -481,7 +576,14 @@ def main():
                     help="train even if too few new frames")
     ap.add_argument("--dry-run", action="store_true",
                     help="train + eval but never promote")
+    ap.add_argument("--no-synth", action="store_true",
+                    help="disable synthetic digit recombination")
+    ap.add_argument("--epochs", type=int, default=0,
+                    help="override epoch count (smoke tests)")
     args = ap.parse_args()
+    if args.epochs:
+        global EPOCHS
+        EPOCHS = args.epochs
     random.seed(SEED)
     torch.manual_seed(SEED)
     np.random.seed(SEED)
@@ -493,7 +595,7 @@ def main():
 
     sync_from_acer()
     manual = load_manual()
-    clean = gather_labels(manual)
+    clean, trust = gather_labels(manual)
     n_new, max_ts = new_frame_count(clean)
     n_manual_new, manual_total = manual_new_count(manual)
     log(f"new frames since last retrain: {n_new} (threshold {MIN_NEW_FRAMES})")
@@ -507,7 +609,7 @@ def main():
                       "reason": "below MIN_NEW_FRAMES"})
         return
 
-    train_rows, test_rows = build_rows(clean)
+    train_rows, test_rows = build_rows(clean, trust)
     log(f"dataset: train {len(train_rows)}  held-out TEST {len(test_rows)} "
         f"({len({r['label'] for r in train_rows})} distinct train labels)")
     if len(test_rows) < MIN_TEST:
@@ -515,6 +617,19 @@ def main():
         write_status({"ts": time.time(), "skipped": True,
                       "reason": "test set too small"})
         return
+
+    # Synthetic recombination: teach every digit at every position (especially
+    # the leading-edge high digits real data lacks) using REAL pixels sliced
+    # from TRAIN frames only. Zero new human labels; never touches the holdout.
+    if not args.no_synth:
+        lib = build_digit_library(train_rows)
+        synth = synth_rows(lib, SYNTH_N)
+        if synth:
+            train_rows = train_rows + synth
+            log("synthetic: +%d recombined frames (digit strips %s)"
+                % (len(synth), {d: len(lib[d]) for d in range(10)}))
+        else:
+            log("synthetic: skipped (insufficient digit variety)")
 
     test_loader = DataLoader(MeterDigits(test_rows, train=False),
                              batch_size=64, shuffle=False, num_workers=0)

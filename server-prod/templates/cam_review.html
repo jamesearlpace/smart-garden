@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review queue — Smart Garden</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:16px}
+.back{display:inline-block;margin-bottom:12px;font-size:.85rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.imgwrap{background:#11181f;text-align:center}
+.imgwrap img{max-width:100%;transform:rotate(180deg);display:block;margin:0 auto}
+.body{padding:10px 12px}
+.ai{font-family:ui-monospace,monospace;font-size:1.15rem;font-weight:700;color:var(--amber)}
+.meta{color:var(--text2);font-size:.72rem;margin-top:2px}
+.fixrow{margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.fixinp{font-family:ui-monospace,monospace;font-size:.9rem;padding:5px 7px;width:120px;
+  border:1px solid var(--blue);border-radius:6px}
+.savebtn{font-size:.8rem;padding:5px 12px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
+.msg{font-size:.75rem;color:var(--text2)}
+.empty{padding:40px;text-align:center;color:var(--text2)}
+</style>
+</head>
+<body>
+<a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
+<h1>🎯 Review queue</h1>
+<div class="sub" id="sub">Loading the frames most worth correcting…</div>
+<div class="grid" id="grid"></div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
+function fmt9(s){ var d=dig(s); return d.length===9 ? d.slice(0,6)+'.'+d.slice(6) : (d||''); }
+
+function card(it){
+  return '<div class="card" data-id="'+esc(it.id)+'">'
+    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="body">'
+    + '<div class="ai" data-ai>🤖 reading…</div>'
+    + '<div class="meta">'+esc((it.ts||'').slice(11,19))+(it.note?(' · '+esc(it.note)):'')+'</div>'
+    + '<div class="fixrow" data-fix></div>'
+    + '</div></div>';
+}
+
+function wireCard(el){
+  var id = el.getAttribute('data-id');
+  var ai = el.querySelector('[data-ai]');
+  var fix = el.querySelector('[data-fix]');
+  fetch('/api/cam/reading/'+encodeURIComponent(id)+'/cnn-read')
+    .then(function(r){return r.json();})
+    .then(function(res){
+      var guess = (res.ok && res.digits) ? res.digits : '';
+      ai.innerHTML = guess
+        ? '🤖 AI reads '+fmt9(guess)
+        : '<span style="color:#94a3b8">CNN unsure — type it</span>';
+      fix.innerHTML = '<input class="fixinp" maxlength="9" inputmode="numeric" value="'+esc(guess)+'">'
+        + '<button class="savebtn">Save</button><span class="msg"></span>';
+      var inp = fix.querySelector('.fixinp'), btn = fix.querySelector('.savebtn'), msg = fix.querySelector('.msg');
+      function save(){
+        var v = (inp.value.match(/\d/g)||[]).join('');
+        if(v.length!==9){ inp.style.borderColor='var(--red)'; msg.textContent='9 digits'; return; }
+        btn.disabled=true; msg.textContent='saving…';
+        fetch('/api/cam/usage-correct',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({label:v,id:id})}).then(function(r){return r.json();}).then(function(res){
+            if(res.ok){ el.style.opacity='.45';
+              msg.innerHTML='<span style="color:var(--green);font-weight:600">✓ saved</span>'; }
+            else { btn.disabled=false; msg.textContent=res.error||'failed'; }
+          }).catch(function(){ btn.disabled=false; msg.textContent='failed'; });
+      }
+      btn.onclick=save;
+      inp.onkeydown=function(e){ if(e.key==='Enter') save(); };
+    })
+    .catch(function(){ ai.textContent='🤖 (CNN offline)'; });
+}
+
+fetch('/api/cam/review-queue?n=40').then(function(r){return r.json();}).then(function(d){
+  var q = d.queue||[];
+  if(!q.length){
+    document.getElementById('sub').textContent='Nothing to review.';
+    document.getElementById('grid').innerHTML='<div class="empty">🎉 No pending frames — the reader is keeping up. Check back later.</div>';
+    return;
+  }
+  document.getElementById('sub').innerHTML='<b>'+q.length+'</b> frame(s) the reader couldn\'t confidently read (newest first). '
+    + 'These are the highest-value corrections — the meter is usually clear, the CNN just missed. Fix what you can; each one trains the model on exactly where it fails.';
+  document.getElementById('grid').innerHTML = q.map(card).join('');
+  document.querySelectorAll('#grid .card').forEach(wireCard);
+}).catch(function(){ document.getElementById('sub').textContent='Could not load the queue.'; });
+</script>
+</body>
+</html>

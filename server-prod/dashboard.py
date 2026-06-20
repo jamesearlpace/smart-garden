@@ -2834,26 +2834,34 @@ def create_app(config, engine, weather, billing):
             #     agree are trusted (this is what lets the lock self-heal back
             #     DOWN after a local over-read, instead of being stuck high).
             commit = False
+            idle = _active_gpm() <= 0
             if lg is None:
                 commit = True
             else:
                 d = val - lg
-                if 0 <= d <= ceiling:
-                    commit = True                      # normal forward progress
+                prev = _oracle_state.get("pending_val")
+                if d == 0:
+                    commit = True                      # confirms the held value
+                elif 0 < d <= ceiling and not idle:
+                    commit = True                      # real flow — a zone is ON
+                elif prev is not None and abs(val - prev) <= (
+                        0 if idle else ORACLE_CORROB_TOL):
+                    # Corroborated by a 2nd read. When IDLE (no zone running) the
+                    # meter is physically STATIC, so a "forward" oracle read is
+                    # almost always a glare misread — require an EXACT repeat
+                    # (tol 0) before moving the lock. Random misreads (666, 667,
+                    # 668…) never repeat exactly, so the lock HOLDS instead of
+                    # ratcheting up on noise. A zone running uses the normal tol.
+                    commit = True
+                    log.info("oracle move corroborated: %09d (lock %s, prev %s, "
+                             "idle=%s)", val, lg, prev, idle)
                 else:
-                    prev = _oracle_state.get("pending_val")
-                    if prev is not None and abs(val - prev) <= ORACLE_CORROB_TOL:
-                        commit = True                  # corroborated (up or down)
-                        log.info("oracle move corroborated: %09d (lock %s, "
-                                 "prev pending %s)", val, lg, prev)
-                    else:
-                        _oracle_state["pending_val"] = val
-                        _oracle_state["pending_ts"] = now
-                        log.info("oracle %09d vs lock %s beyond physical "
-                                 "ceiling (%.0f counts, idle_gpm=%.1f) — "
-                                 "holding for 2nd confirming read",
-                                 val, lg, ceiling, _active_gpm())
-                        return
+                    _oracle_state["pending_val"] = val
+                    _oracle_state["pending_ts"] = now
+                    log.info("oracle %09d vs lock %s HELD (idle=%s, ceiling=%.0f)"
+                             " — static meter / waiting for a confirming read",
+                             val, lg, idle, ceiling)
+                    return
             if not commit:
                 return
             _oracle_state["pending_val"] = None

@@ -3309,6 +3309,55 @@ def create_app(config, engine, weather, billing):
             items.append({"file": r["file"], "label": r["label"],
                           "status": "review", "detail": detail})
 
+        # Optional: fold in BANKED capture frames (live oracle/CNN reads in
+        # BANK_DIR) so the newest captures — not yet in the curated manifest —
+        # can be reviewed and corrected. ?captures=<N> includes the newest N
+        # banked frames (status "banked" if not already in the manifest). This
+        # is the "review what's been captured / check it's reading right" view.
+        # Filename convention: <label>_<epoch_ms>[_oracle].jpg
+        cap_n = request.args.get("captures", type=int)
+        if cap_n and cap_n > 0:
+            have = {it["file"]: it for it in items}
+            cand = []
+            try:
+                for name in os.listdir(BANK_DIR):
+                    if not name.endswith(".jpg"):
+                        continue
+                    parts = name[:-4].split("_")
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        ts_ms = int(parts[1])
+                    except ValueError:
+                        continue
+                    cand.append((ts_ms, name, parts[0]))
+            except FileNotFoundError:
+                cand = []
+            cand.sort(reverse=True)            # newest first
+            for ts_ms, name, fallback_lbl in cand[:cap_n]:
+                if name in have:
+                    have[name]["recent"] = True
+                    have[name]["captured_ms"] = ts_ms
+                    continue
+                meta = {}
+                try:
+                    with open(os.path.join(BANK_DIR,
+                                           name[:-4] + ".json")) as mf:
+                        meta = _json.load(mf)
+                except Exception:
+                    pass
+                label = meta.get("label") or fallback_lbl
+                src = meta.get("source", "")
+                if src == "oracle":
+                    detail = "AI-read (oracle) — confirm or fix"
+                elif src:
+                    detail = f"banked {src} — confirm or fix"
+                else:
+                    detail = "captured — confirm or fix"
+                items.append({"file": name, "label": label,
+                              "status": "banked", "detail": detail,
+                              "recent": True, "captured_ms": ts_ms})
+
         # Apply manual overrides — a human's edit beats every automated verdict.
         manual = _load_manual()
         for it in items:
@@ -3351,8 +3400,10 @@ def create_app(config, engine, weather, billing):
         for it in items:
             counts[it["status"]] = counts.get(it["status"], 0) + 1
         n_proposed = sum(1 for it in items if it.get("proposed"))
+        n_recent = sum(1 for it in items if it.get("recent"))
         return jsonify({"items": items, "counts": counts,
-                        "proposed": n_proposed, "total": len(items)})
+                        "proposed": n_proposed, "recent": n_recent,
+                        "total": len(items)})
 
     @app.route("/api/cam/labels/update", methods=["POST"])
     def cam_labels_update():

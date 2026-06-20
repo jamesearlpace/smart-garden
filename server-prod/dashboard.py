@@ -2325,7 +2325,9 @@ def create_app(config, engine, weather, billing):
     CAM_URL = "http://192.168.0.160"
 
     # In-memory storage for latest pushed image
-    cam_state = {"image": None, "timestamp": None, "flash": False, "ocr_count": 0}
+    cam_state = {"image": None, "timestamp": None, "flash": False, "ocr_count": 0,
+                 "transfer_s": None, "last_frame_ts": None, "gap_s": None,
+                 "rssi": None, "uptime_sec": None, "reconnects": None}
     meter_reader = MeterReader()
 
     # ── OCR lag buffer + tower worker ──────────────────────────────────
@@ -3038,6 +3040,45 @@ def create_app(config, engine, weather, billing):
     except Exception as e:
         log.warning("cnn_metrics init failed: %s", e)
 
+    # ── ESP32-CAM background pinger ────────────────────────────────────
+    # Frame telemetry covers the cam while it's uploading, but if it drops off
+    # WiFi entirely the frames just stop — a ping gives an independent reachable/
+    # RTT signal even during an outage. Lightweight: one ICMP ping/60s. Also
+    # prunes the telemetry table daily so it stays bounded.
+    import subprocess as _subprocess, re as _re
+    CAM_PING_HOST = CAM_URL.replace("http://", "").replace("https://", "").split("/")[0]
+
+    def _cam_pinger():
+        _prune_at = 0.0
+        while True:
+            try:
+                r = _subprocess.run(["ping", "-c", "1", "-W", "2", CAM_PING_HOST],
+                                    capture_output=True, text=True, timeout=6)
+                ok = (r.returncode == 0)
+                ms = None
+                if ok:
+                    m = _re.search(r"time=([\d.]+)\s*ms", r.stdout)
+                    if m:
+                        ms = int(round(float(m.group(1))))
+                db.log_cam_ping(ms, ok)
+            except Exception as e:
+                try:
+                    db.log_cam_ping(None, False)
+                except Exception:
+                    pass
+                log.debug("cam pinger: %s", e)
+            # Daily prune (keep 14 days).
+            if time.time() - _prune_at > 86400:
+                try:
+                    db.prune_cam_telemetry(days=14)
+                    _prune_at = time.time()
+                except Exception as e:
+                    log.debug("cam telemetry prune failed: %s", e)
+            time.sleep(60)
+
+    _threading.Thread(target=_cam_pinger, daemon=True, name="cam-pinger").start()
+    log.info("cam pinger started -> %s", CAM_PING_HOST)
+
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
         """Receive a JPEG push from the ESP32-CAM.
@@ -3081,6 +3122,36 @@ def create_app(config, engine, weather, billing):
         cam_state["timestamp"] = capture_dt.isoformat()
         cam_state["transfer_s"] = round(transfer_s, 2)
         cam_state["ocr_count"] += 1
+        # ── Device/WiFi telemetry ──────────────────────────────────────
+        # gap = secs since the previous frame landed (~5s ideal; a big gap means
+        # the cam dropped off the WiFi). Optional X-RSSI/X-Uptime/X-Reconnects
+        # headers are sent only if the firmware was flashed with them (NULL
+        # otherwise — graceful). transfer_s itself is a no-reflash WiFi-quality
+        # proxy (a slow upload = weak signal / retransmits).
+        _now_ts = time.time()
+        _gap = (_now_ts - cam_state["last_frame_ts"]) if cam_state["last_frame_ts"] else None
+        cam_state["last_frame_ts"] = _now_ts
+        cam_state["gap_s"] = round(_gap, 2) if _gap is not None else None
+
+        def _hdr_int(name):
+            try:
+                v = request.headers.get(name)
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+        _rssi = _hdr_int("X-RSSI")
+        _uptime = _hdr_int("X-Uptime")
+        _recon = _hdr_int("X-Reconnects")
+        if _rssi is not None:
+            cam_state["rssi"] = _rssi
+        if _uptime is not None:
+            cam_state["uptime_sec"] = _uptime
+        if _recon is not None:
+            cam_state["reconnects"] = _recon
+        try:
+            db.log_cam_frame(transfer_s, len(data), _gap, _rssi, _uptime, _recon)
+        except Exception as _e:
+            log.debug("cam telemetry log failed: %s", _e)
         if transfer_s >= 2:
             log.info("cam upload slow: %.1fs transfer (%d bytes) — frame is that old",
                      transfer_s, len(data))
@@ -3119,6 +3190,14 @@ def create_app(config, engine, weather, billing):
             "has_image": cam_state["image"] is not None,
             "timestamp": cam_state["timestamp"],
             "size": len(cam_state["image"]) if cam_state["image"] else 0,
+            "wifi": {
+                "rssi": cam_state.get("rssi"),
+                "transfer_s": cam_state.get("transfer_s"),
+                "gap_s": cam_state.get("gap_s"),
+                "uptime_sec": cam_state.get("uptime_sec"),
+                "reconnects": cam_state.get("reconnects"),
+                "rssi_available": cam_state.get("rssi") is not None,
+            },
             "ocr": {
                 "enabled": OCR_ENABLED,
                 "tower": OCR_TOWER_URL,
@@ -3131,6 +3210,29 @@ def create_app(config, engine, weather, billing):
                 "last_ms": cam_ocr_stats["last_ms"],
             },
         })
+
+    @app.route("/api/cam-telemetry")
+    def cam_telemetry_api():
+        """WiFi/connectivity time-series + rolling stats for the cam-device page."""
+        hours = request.args.get("hours", 24, type=int)
+        hours = max(1, min(hours, 24 * 30))
+        return jsonify({
+            "series": db.get_cam_telemetry(hours=hours),
+            "summary": db.get_cam_telemetry_summary(hours=hours),
+            "live": {
+                "rssi": cam_state.get("rssi"),
+                "transfer_s": cam_state.get("transfer_s"),
+                "gap_s": cam_state.get("gap_s"),
+                "uptime_sec": cam_state.get("uptime_sec"),
+                "reconnects": cam_state.get("reconnects"),
+                "timestamp": cam_state.get("timestamp"),
+            },
+        })
+
+    @app.route("/cam-device")
+    def cam_device_page():
+        """Device-detail page for the ESP32-CAM: WiFi strength + history + stats."""
+        return render_template("cam_device.html")
 
     @app.route("/api/cam/readings")
     def cam_readings_api():
@@ -3219,6 +3321,8 @@ def create_app(config, engine, weather, billing):
     MANUAL_PATH = os.path.join(LABELS_DIR, "manual_labels.jsonl")
     PROPOSED_PATH = os.path.join(LABELS_DIR, "proposed_labels.jsonl")
     REPROCESS_STATUS = os.path.join(LABELS_DIR, "reprocess_status.json")
+    PROPAGATED_PATH = os.path.join(LABELS_DIR, "propagated_labels.jsonl")
+    PROPAGATE_STATUS = os.path.join(LABELS_DIR, "propagate_status.json")
 
     def _load_manual():
         """Manual corrections are the HIGHEST trust tier — a human looked at the
@@ -3261,6 +3365,24 @@ def create_app(config, engine, weather, billing):
                     out.pop(f, None)
                 else:
                     out[f] = rec
+        return out
+
+    def _load_propagated():
+        """Anchor & Propagate results — monotonic cleanup derived from human
+        anchors. {file: {label, status, was}}; status ∈ anchor|confirmed|
+        repaired|flagged|outside. Trusted = anchor+confirmed+repaired."""
+        import json as _json
+        out = {}
+        if os.path.exists(PROPAGATED_PATH):
+            for line in open(PROPAGATED_PATH):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                    out[rec["file"]] = rec
+                except Exception:
+                    pass
         return out
 
     @app.route("/api/cam/labels")
@@ -3390,6 +3512,41 @@ def create_app(config, engine, weather, billing):
             it["proposed_votes"] = pv.get("votes")
             it["proposed_reps"] = pv.get("reps")
             it["proposed_agree"] = bool(pv.get("agree"))
+
+        # Anchor & Propagate overlay (?propagated=1): show the monotonic-cleanup
+        # status + corrected label for every banked frame. Manual (your anchors)
+        # always wins. confirmed/repaired/flagged/outside become the tile status.
+        if request.args.get("propagated"):
+            prop = _load_propagated()
+            have = {it["file"]: it for it in items}
+            _pdetail = {
+                "confirmed": "confirmed by your anchors",
+                "repaired": "auto-fixed from your anchors",
+                "flagged": "couldn't auto-resolve — please check",
+                "outside": "outside your anchor range",
+            }
+            for f, pr in prop.items():
+                st = pr.get("status")
+                if st == "anchor":
+                    continue  # that's a manual frame; leave its manual status
+                disp_status = {"confirmed": "confirmed", "repaired": "repaired",
+                               "flagged": "flagged", "outside": "banked"
+                               }.get(st, "banked")
+                detail = _pdetail.get(st, "")
+                if st == "repaired" and pr.get("was") != pr.get("label"):
+                    detail = f"auto-fixed (was {pr['was']})"
+                it = have.get(f)
+                if it is not None:
+                    if manual.get(f):
+                        continue  # human decision wins
+                    it["label"] = pr.get("label", it["label"])
+                    it["status"] = disp_status
+                    it["detail"] = detail
+                    it["prop_status"] = st
+                else:
+                    items.append({"file": f, "label": pr.get("label"),
+                                  "status": disp_status, "detail": detail,
+                                  "prop_status": st})
 
         # Sort by reading value so it reads like the meter climbing.
         def keyfn(it):
@@ -3526,6 +3683,39 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             return jsonify({"error": str(e)}), 502
         return jsonify({"error": "no status"}), 404
+
+    @app.route("/api/cam/propagate", methods=["POST"])
+    def cam_propagate():
+        """Anchor & Propagate: turn your confirmed labels into clean labels for
+        the whole banked set via the meter's monotonic physics. Fast (no AI).
+        Confirms banked labels your anchors vouch for, repairs the violators,
+        flags the few it can't resolve. Returns the summary."""
+        import subprocess as _sp
+        import json as _json
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "propagate.py")
+        try:
+            r = _sp.run([sys.executable, script],
+                        capture_output=True, text=True, timeout=120)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"run: {e}"}), 500
+        if r.returncode != 0:
+            return jsonify({"ok": False,
+                            "error": (r.stderr or "propagate failed")[:400]}), 500
+        try:
+            summary = _json.load(open(PROPAGATE_STATUS))
+        except Exception:
+            summary = {}
+        return jsonify({"ok": True, "summary": summary})
+
+    @app.route("/api/cam/propagate/status")
+    def cam_propagate_status():
+        """Last Anchor & Propagate summary (counts + conflicts)."""
+        import json as _json
+        try:
+            return jsonify(_json.load(open(PROPAGATE_STATUS)))
+        except Exception:
+            return jsonify({"counts": {}, "conflicts": []})
 
     @app.route("/cam/labels")
     def cam_labels_page():

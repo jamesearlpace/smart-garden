@@ -53,6 +53,7 @@ MARKER = os.path.join(BASE, "last_retrain_maxts")  # max captured_ts trained on
 MANUAL_MARKER = os.path.join(BASE, "last_retrain_manual")  # # manual edits trained on
 CLEAN_REGIME = os.path.join(BASE, "clean_regime")  # set once the baseline is fair
 MANUAL_JSONL = os.path.join(WORK, "manual_labels.jsonl")  # human corrections (gold)
+PROPAGATED_JSONL = os.path.join(WORK, "propagated_labels.jsonl")  # monotonic cleanup
 LOG = os.path.join(BASE, "retrain.log")
 
 CROP = (0.02, 0.02, 0.92, 0.46)
@@ -220,9 +221,38 @@ def sync_from_acer():
             check=False)
     except Exception as e:
         log(f"sync: manual_labels rsync skipped ({e})")
+    # Anchor & Propagate output — monotonic cleanup of the banked set. Optional.
+    try:
+        subprocess.run(
+            ["rsync", "-az", "--timeout=60", "--ignore-missing-args",
+             f"{ACER}:cnn-dataset-oracle/propagated_labels.jsonl",
+             PROPAGATED_JSONL],
+            check=False)
+    except Exception as e:
+        log(f"sync: propagated_labels rsync skipped ({e})")
     n = len([f for f in os.listdir(FRAMES) if f.endswith(".jpg")])
     log(f"sync: {n} frames present")
     return n
+
+
+def load_propagated():
+    """Anchor & Propagate results: {file: status} for banked frames.
+    status ∈ anchor|confirmed|repaired|flagged|outside. Trusted = the first
+    three (human-anchored or monotonically validated/repaired)."""
+    out = {}
+    if os.path.exists(PROPAGATED_JSONL):
+        for line in open(PROPAGATED_JSONL):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                d = "".join(c for c in str(r.get("label", "")) if c.isdigit())
+                if len(d) == 9:
+                    out[r["file"]] = (r.get("status"), d)
+            except Exception:
+                pass
+    return out
 
 
 def load_manual():
@@ -243,14 +273,19 @@ def load_manual():
 
 
 def gather_labels(manual=None):
-    """file -> label, from the trusted baseline jsonl + oracle-banked filenames.
-    The monotonic audit drops physically-impossible AUTO labels. Human manual
-    corrections are then overlaid as the GOLD tier — authoritative OVER the
-    audit: a human-set label is never dropped, a human-confirmed label is kept,
-    a human-rejected frame is excluded."""
+    """file -> label, from the trusted baseline jsonl + (Anchor&Propagate output
+    OR raw oracle-banked filenames). The monotonic audit drops physically-
+    impossible AUTO labels. Human manual corrections are then overlaid as the
+    GOLD tier — authoritative OVER the audit.
+
+    When Anchor & Propagate has run, its CONFIRMED/REPAIRED/anchor labels are the
+    trusted training set for banked frames and raw UNCONFIRMED oracle reads are
+    NOT trained on (flagged/outside are excluded). This is what lets a handful of
+    human anchors clean the whole set instead of training on noisy auto-labels."""
     manual = manual or {}
+    prop = load_propagated()
     labels = {}
-    # baseline verified set (consensus / verified) — high trust
+    # baseline curated set (consensus / verified) — high trust, kept either way
     if os.path.exists(BASELINE_JSONL):
         for line in open(BASELINE_JSONL):
             line = line.strip()
@@ -260,11 +295,24 @@ def gather_labels(manual=None):
             d = "".join(c for c in r["label"] if c.isdigit())
             if len(d) == 9 and os.path.exists(os.path.join(FRAMES, r["file"])):
                 labels[r["file"]] = d
-    # oracle-banked frames (independent verifier) — label from filename
-    for f in os.listdir(FRAMES):
-        m = NAME_RE.match(f)
-        if m and f not in labels:
-            labels[f] = m.group(1)
+    if prop:
+        # Propagation active: trust its anchor/confirmed/repaired labels for
+        # banked frames; do NOT add raw unconfirmed oracle reads (the noisy mass
+        # the user doesn't want training the model). flagged/outside excluded.
+        n_trust = 0
+        for f, (st, d) in prop.items():
+            if st in ("anchor", "confirmed", "repaired") and \
+                    os.path.exists(os.path.join(FRAMES, f)):
+                labels[f] = d
+                n_trust += 1
+        log(f"propagation: {n_trust} trusted (anchor/confirmed/repaired) labels; "
+            f"raw unconfirmed reads excluded")
+    else:
+        # legacy: oracle-banked frames (independent verifier) — label from name
+        for f in os.listdir(FRAMES):
+            m = NAME_RE.match(f)
+            if m and f not in labels:
+                labels[f] = m.group(1)
     auto_labels = dict(labels)  # pre-audit snapshot (for confirming 'ok')
     # monotonic audit: order by capture ts, keep the non-decreasing backbone
     items = []

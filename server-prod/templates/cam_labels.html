@@ -29,6 +29,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip[data-s="proposed"].on{background:#0891b2;border-color:#0891b2}
 .chip[data-s="recent"].on{background:#0f766e;border-color:#0f766e}
 .chip[data-s="banked"].on{background:#14b8a6;border-color:#14b8a6}
+.chip[data-s="confirmed"].on{background:#16a34a;border-color:#16a34a}
+.chip[data-s="repaired"].on{background:#0d9488;border-color:#0d9488}
+.chip[data-s="flagged"].on{background:#ea580c;border-color:#ea580c}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
 .cell{border:2px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card)}
 .cell.manual{border-color:#0ea5e9}
@@ -38,6 +41,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .cell.review{border-color:var(--amber)}
 .cell.rejected{border-color:var(--red);opacity:.55}
 .cell.banked{border-color:#14b8a6}
+.cell.confirmed{border-color:#16a34a}
+.cell.repaired{border-color:#0d9488}
+.cell.flagged{border-color:#ea580c}
 .cell img{width:100%;display:block;transform:rotate(180deg);background:#11181f}
 .meta{padding:6px 8px}
 .lbl{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1rem;font-weight:700}
@@ -46,6 +52,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .st.manual{color:#0ea5e9}.st.verified{color:var(--green)}.st.promoted{color:var(--blue)}
 .st.corrected{color:var(--purple)}.st.review{color:var(--amber)}.st.rejected{color:var(--red)}
 .st.banked{color:#14b8a6}
+.st.confirmed{color:#16a34a}.st.repaired{color:#0d9488}.st.flagged{color:#ea580c}
 .dt{font-size:.66rem;color:var(--text2);margin-top:1px}
 .muted{color:var(--text2)}
 .acts{display:flex;gap:4px;margin-top:6px}
@@ -93,12 +100,14 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <b style="color:var(--amber)">Review</b> = readers still disagree.
   <b style="color:var(--red)">Rejected</b> = you excluded it.
   <br><b>To fix one:</b> click <b>Fix</b>, type the correct 9 digits, Save. <b>OK</b> confirms as-is, <b>Reject</b> drops it from training.
-  <br><b style="color:#0f766e">🆕 Review captures</b> pulls in the newest live frames the camera banked (status <b style="color:#14b8a6">Captured</b> — the AI's read, not yet confirmed) so you can OK/Fix/Reject them and check it's reading right. <b style="color:#0ea5e9">🤖 Re-read filtered with AI</b> runs GPT-4o (3× each) over the frames in the current filter and shows its read as a <b style="color:#0891b2">proposal</b> you Accept or Dismiss. <b style="color:var(--purple)">♻️ Retrain now</b> trains a challenger on your corrections — it only ships if it beats the live model.
+  <br><b style="color:#0d9488">🔗 Propagate from my fixes</b> is the fast one: confirm/fix a handful spread across the range, then click this — the meter only counts up, so your anchors pin the rest. It instantly <b style="color:#16a34a">confirms</b> the labels they vouch for, <b style="color:#0d9488">repairs</b> the violators, and <b style="color:#ea580c">flags</b> only the few it can't resolve. No AI, no waiting.
+  <br><b style="color:#0f766e">🆕 Review captures</b> pulls in the newest live frames the camera banked so you can OK/Fix/Reject them. <b style="color:#0ea5e9">🤖 Re-read filtered with AI</b> runs GPT-4o over the current filter as proposals. <b style="color:var(--purple)">♻️ Retrain now</b> trains a challenger on your cleaned labels — it only ships if it beats the live model.
 </div>
 
 <div class="bar" id="chips"></div>
 <div class="tools">
   <button class="tbtn" id="btn-recent">🆕 Review captures</button>
+  <button class="tbtn" id="btn-propagate" style="color:#0d9488;border-color:#99f6e4">🔗 Propagate from my fixes</button>
   <button class="tbtn ai" id="btn-reprocess">🤖 Re-read filtered with AI</button>
   <button class="tbtn retrain" id="btn-retrain">♻️ Retrain now</button>
   <span id="jobstatus"></span>
@@ -113,7 +122,7 @@ function fmtLabel(l){
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
-var ALL = [], filter = 'all', CAPTURES = 0;
+var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false;
 
 function filtered(){
   if (filter==='all') return ALL;
@@ -229,7 +238,10 @@ function wireActions(){
 }
 
 function loadLabels(){
-  return fetch('/api/cam/labels' + (CAPTURES ? ('?captures=' + CAPTURES) : '')).then(function(r){return r.json();}).then(function(d){
+  var _qs = [];
+  if (CAPTURES) _qs.push('captures=' + CAPTURES);
+  if (PROPAGATED) _qs.push('propagated=1');
+  return fetch('/api/cam/labels' + (_qs.length ? ('?' + _qs.join('&')) : '')).then(function(r){return r.json();}).then(function(d){
   ALL = d.items || [];
   var c = d.counts || {};
   var np = d.proposed || 0;
@@ -248,6 +260,11 @@ function loadLabels(){
                ['proposed','\ud83e\udd16 Proposed'],['manual','Manual'],
                ['verified','Verified'],['promoted','Promoted'],
                ['corrected','Corrected'],['review','Review'],['rejected','Rejected']];
+  if (PROPAGATED){
+    order = [['all','All'],['flagged','\u2691 Flagged'],['repaired','\ud83d\udd27 Repaired'],
+             ['confirmed','\u2713 Confirmed'],['manual','Manual (anchors)'],
+             ['banked','Outside'],['rejected','Rejected']];
+  }
   document.getElementById('chips').innerHTML = order.map(function(o){
     var n = o[0]==='all' ? d.total
           : o[0]==='proposed' ? np
@@ -311,6 +328,22 @@ document.getElementById('btn-recent').onclick = function(){
   if (CAPTURES){ filter = 'recent'; setJob('loading newest captures…'); }
   else { filter = 'all'; setJob(''); }
   loadLabels();
+};
+
+document.getElementById('btn-propagate').onclick = function(){
+  if (!confirm('Propagate from your confirmed labels? This uses the meter\'s monotonic physics to confirm/repair the rest — fast, no AI, no model change.')) return;
+  var b = this; b.disabled = true; setJob('\ud83d\udd17 propagating from your anchors…');
+  fetch('/api/cam/propagate',{method:'POST'}).then(function(r){return r.json();}).then(function(res){
+    b.disabled = false;
+    if(!res.ok){ setJob('⚠️ '+(res.error||'failed')); return; }
+    var cc = (res.summary && res.summary.counts) || {};
+    var conf = (res.summary && res.summary.conflicts || []).length;
+    setJob('✅ '+(cc.confirmed||0)+' confirmed, '+(cc.repaired||0)+' repaired, '
+      +(cc.flagged||0)+' flagged'+(conf?(' · ⚠️ '+conf+' anchor conflict(s)'):'')
+      +' — review the Flagged.');
+    PROPAGATED = true; CAPTURES = 0; filter = 'flagged';
+    loadLabels();
+  }).catch(function(){ b.disabled=false; setJob('⚠️ propagate failed'); });
 };
 
 document.getElementById('btn-retrain').onclick = function(){

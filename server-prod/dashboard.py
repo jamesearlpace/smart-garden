@@ -1817,9 +1817,11 @@ def create_app(config, engine, weather, billing):
                     continue
                 if ms in in_win or ms in before:
                     continue
-                entry = meter_reader.get_reading_by_id(rid)
-                rd = (entry or {}).get("reading") or ""
+                entry = meter_reader.get_reading_by_id(rid) or {}
+                rd = entry.get("reading") or ""
+                guess = entry.get("ocr_guess") or ""
                 _add(ms, {"ts": _hhmmss(ms), "ms": ms, "reading": rd,
+                          "guess": guess, "note": entry.get("note") or "",
                           "img": "/api/cam/frame/" + rid,
                           "id": rid, "source": "live"})
         except FileNotFoundError:
@@ -1830,6 +1832,43 @@ def create_app(config, engine, weather, billing):
             step = len(frames) / 60.0
             frames = [frames[int(i * step)] for i in range(60)]
         before_frame = before[max(before)] if before else None
+
+        # On-demand: for frames with no stored read (metadata lost on restart, or
+        # the live reader couldn't commit under glare), ask the CNN what it reads
+        # NOW so the user always sees the model's best guess to judge/correct.
+        # Bounded so a click doesn't fire hundreds of CNN calls.
+        def _fill_guess(fr, budget):
+            # Compute the CNN's read of THIS specific frame so the user sees what
+            # the model thinks per image (varies frame to frame), not just the
+            # repeated held lock value. Banked frames already carry their label.
+            if budget[0] <= 0 or fr.get("guess"):
+                return
+            if fr.get("source") != "live" or not fr.get("id"):
+                return
+            path = os.path.join(FRAME_DIR, f"{fr['id']}.jpg")
+            try:
+                data = open(path, "rb").read()
+            except Exception:
+                return
+            budget[0] -= 1
+            res = _read_via_cnn(data)
+            if not res:
+                return
+            g = res.get("digits")
+            if isinstance(g, list):
+                g = "".join(str(x) for x in g)
+            g = "".join(c for c in str(g or "") if c.isdigit())
+            if len(g) != 9 and res.get("value") is not None:
+                g = f"{int(res['value']):09d}"
+            if len(g) == 9:
+                fr["guess"] = g
+                fr["guess_conf"] = res.get("confidence")
+
+        budget = [24]
+        if before_frame:
+            _fill_guess(before_frame, budget)
+        for fr in frames:
+            _fill_guess(fr, budget)
         return jsonify({"frames": frames, "count": len(in_win),
                         "before": before_frame})
 

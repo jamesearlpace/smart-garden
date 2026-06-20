@@ -134,14 +134,21 @@ function render(d){
   });
 }
 
+function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
+function fmt9(s){ var d=dig(s); return d.length===9 ? d.slice(0,6)+'.'+d.slice(6) : ''; }
 function frameCell(x, tag){
-  var lbl = x.reading && x.reading.length===9
-    ? x.reading.slice(0,6)+'.'+x.reading.slice(6) : (x.reading||'');
+  var read = fmt9(x.reading), guess = fmt9(x.guess);
+  var disp;
+  if (guess){ disp = '<span style="color:#f59e0b">AI reads <b style="color:#f59e0b">'+guess+'</b></span> ft\u00b3'
+    + (read && read!==guess ? '<br><span style="color:#94a3b8;font-size:.66rem">held '+read+'</span>' : ''); }
+  else if (read){ disp = '<b>'+read+'</b> ft\u00b3'; }
+  else { disp = '<span style="color:#94a3b8">no read'+(x.note?(' \u00b7 '+esc(x.note)):'')+'</span>'; }
+  var cur = dig(x.guess) || dig(x.reading);
   var attr = x.file ? ('data-file="'+esc(x.file)+'"') : ('data-id="'+esc(x.id)+'"');
-  return '<div class="fcell" '+attr+' data-ms="'+x.ms+'">'
+  return '<div class="fcell" '+attr+' data-ms="'+x.ms+'" data-cur="'+esc(cur)+'">'
     + '<img loading="lazy" src="'+x.img+'">'
     + '<div class="cap">'+(tag?('<span style="color:#0d9488;font-weight:700">'+tag+'</span> '):'')
-    + '<b>'+(lbl||'—')+'</b> ft³<br>'+x.ts+' · '+x.source
+    + disp+'<br>'+x.ts+' \u00b7 '+x.source
     + '<div class="fixrow"><button class="fixbtn">Fix reading</button></div></div></div>';
 }
 
@@ -150,7 +157,7 @@ function wireFixes(){
     var btn = cell.querySelector('.fixbtn'); if(!btn) return;
     btn.onclick = function(){
       var row = cell.querySelector('.fixrow');
-      var cur = (cell.querySelector('b').textContent.match(/\d/g)||[]).join('');
+      var cur = cell.getAttribute('data-cur') || '';
       row.innerHTML = '<input class="fixinp" maxlength="9" value="'+cur+'"> <button class="savebtn">Save</button>';
       var inp = row.querySelector('.fixinp'); inp.focus(); inp.select();
       row.querySelector('.savebtn').onclick = function(){
@@ -161,8 +168,8 @@ function wireFixes(){
         else { body.id=cell.getAttribute('data-id'); body.ms=parseInt(cell.getAttribute('data-ms'),10); }
         fetch('/api/cam/usage-correct',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(res){
-            if(res.ok){ cell.querySelector('b').textContent=v.slice(0,6)+'.'+v.slice(6);
-              row.innerHTML='<span style="color:#16a34a;font-weight:700">✓ saved to training</span>'; }
+            if(res.ok){ cell.setAttribute('data-cur', v);
+              row.innerHTML='<span style="color:#16a34a;font-weight:700">\u2713 saved to training</span>'; }
             else { row.innerHTML='<span style="color:#ef4444">'+esc(res.error||'failed')+'</span>'; }
           }).catch(function(){ row.innerHTML='<span style="color:#ef4444">failed</span>'; });
       };

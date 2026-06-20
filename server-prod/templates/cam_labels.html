@@ -137,7 +137,7 @@ function fmtLabel(l){
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
-var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false, SORT = 'newest';
+var ALL = [], filter = 'all', CAPTURES = 500, PROPAGATED = false, SORT = 'newest';
 
 function filtered(){
   if (filter==='all') return ALL;
@@ -357,11 +357,11 @@ document.getElementById('btn-sort').onclick = function(){
 };
 
 document.getElementById('btn-recent').onclick = function(){
-  CAPTURES = CAPTURES ? 0 : 400;            // toggle the capture view on/off
-  this.classList.toggle('on');
-  if (CAPTURES){ filter = 'recent'; setJob('loading newest captures…'); }
-  else { filter = 'all'; setJob(''); }
-  loadLabels();
+  // captures are always loaded — this just jumps to them
+  filter = 'recent';
+  document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('on');});
+  var ch = document.querySelector('.chip[data-s="recent"]'); if(ch) ch.classList.add('on');
+  render();
 };
 
 document.getElementById('btn-propagate').onclick = function(){

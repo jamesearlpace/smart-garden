@@ -26,6 +26,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip[data-s="corrected"].on{background:var(--purple);border-color:var(--purple)}
 .chip[data-s="review"].on{background:var(--amber);border-color:var(--amber)}
 .chip[data-s="rejected"].on{background:var(--red);border-color:var(--red)}
+.chip[data-s="proposed"].on{background:#0891b2;border-color:#0891b2}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
 .cell{border:2px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card)}
 .cell.manual{border-color:#0ea5e9}
@@ -57,6 +58,21 @@ h1{font-size:1.35rem;margin-bottom:2px}
   background:var(--blue);color:#fff;cursor:pointer}
 .saved{color:var(--green);font-size:.66rem;margin-top:2px}
 .legend{font-size:.74rem;color:var(--text2);margin-bottom:14px;line-height:1.6}
+.tools{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.tbtn{font-size:.8rem;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid var(--border);
+  background:var(--card);cursor:pointer;color:var(--text)}
+.tbtn:hover{background:#eef2f6}
+.tbtn.ai{color:#0ea5e9;border-color:#bae6fd}
+.tbtn.retrain{color:var(--purple);border-color:#ddd6fe}
+.tbtn:disabled{opacity:.5;cursor:not-allowed}
+#jobstatus{font-size:.78rem;color:var(--text2)}
+.prop{margin-top:6px;padding:5px 7px;border-radius:7px;background:#ecfeff;border:1px solid #a5f3fc;font-size:.7rem}
+.prop.changed{background:#fff7ed;border-color:#fed7aa}
+.prop b{font-family:ui-monospace,monospace}
+.prop .pacts{display:flex;gap:4px;margin-top:4px}
+.prop .pacts button{flex:1;font-size:.66rem;padding:3px 4px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:#fff}
+.prop .pacts .acc{color:var(--green);border-color:#bbf7d0}
+.prop .pacts .dis{color:var(--red);border-color:#fecaca}
 </style>
 </head>
 <body>
@@ -73,9 +89,15 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <b style="color:var(--amber)">Review</b> = readers still disagree.
   <b style="color:var(--red)">Rejected</b> = you excluded it.
   <br><b>To fix one:</b> click <b>Fix</b>, type the correct 9 digits, Save. <b>OK</b> confirms as-is, <b>Reject</b> drops it from training.
+  <br><b style="color:#0ea5e9">🤖 Re-read filtered with AI</b> runs GPT-4o (3× each) over the frames in the current filter and shows its read as a <b style="color:#0891b2">proposal</b> you Accept or Dismiss. <b style="color:var(--purple)">♻️ Retrain now</b> trains a challenger on your corrections — it only ships if it beats the live model.
 </div>
 
 <div class="bar" id="chips"></div>
+<div class="tools">
+  <button class="tbtn ai" id="btn-reprocess">🤖 Re-read filtered with AI</button>
+  <button class="tbtn retrain" id="btn-retrain">♻️ Retrain now</button>
+  <span id="jobstatus"></span>
+</div>
 <div class="grid" id="grid"></div>
 
 <script>
@@ -88,10 +110,29 @@ function fmtLabel(l){
 }
 var ALL = [], filter = 'all';
 
+function filtered(){
+  if (filter==='all') return ALL;
+  if (filter==='proposed') return ALL.filter(function(i){return i.proposed;});
+  return ALL.filter(function(i){return i.status===filter;});
+}
+
 function render(){
-  var items = (filter==='all') ? ALL : ALL.filter(function(i){return i.status===filter;});
+  var items = filtered();
   document.getElementById('grid').innerHTML = items.map(function(i){
-    return '<div class="cell '+i.status+'" data-file="'+esc(i.file)+'">'
+    var prop = '';
+    if (i.proposed){
+      var cls = i.proposed_agree ? '' : ' changed';
+      var head = i.proposed_agree
+        ? 'AI confirms <b>'+esc(i.proposed)+'</b>'
+        : 'AI says <b>'+esc(i.proposed)+'</b> (was '+esc(i.label)+')';
+      prop = '<div class="prop'+cls+'">\ud83e\udd16 '+head
+        + ' \u00b7 '+esc(i.proposed_votes)+'/'+esc(i.proposed_reps)+' votes'
+        + '<div class="pacts">'
+        +   '<button class="acc" data-pact="accept">Accept</button>'
+        +   '<button class="dis" data-pact="dismiss">Dismiss</button>'
+        + '</div></div>';
+    }
+    return '<div class="cell '+i.status+'" data-file="'+esc(i.file)+'" data-prop="'+esc(i.proposed||'')+'">'
       + '<img loading="lazy" src="/api/cam/training/img/'+encodeURIComponent(i.file)+'">'
       + '<div class="meta">'
       + '<span class="lblwrap">'+fmtLabel(i.label)+' <span class="muted" style="font-size:.6rem">ft\u00b3</span></span>'
@@ -101,7 +142,9 @@ function render(){
       +   '<button class="fix" data-act="fix">Fix</button>'
       +   '<button class="ok" data-act="ok">OK</button>'
       +   '<button class="rej" data-act="rej">Reject</button>'
-      + '</div></div></div>';
+      + '</div>'
+      + prop
+      + '</div></div>';
   }).join('') || '<div class="muted">none in this filter</div>';
   wireActions();
 }
@@ -116,12 +159,39 @@ function post(file, action, label){
 function updateLocal(file, status, label, detail){
   for (var k=0;k<ALL.length;k++){ if(ALL[k].file===file){
     ALL[k].status=status; if(label) ALL[k].label=label;
-    ALL[k].detail=detail||''; break; } }
+    ALL[k].detail=detail||'';
+    delete ALL[k].proposed; delete ALL[k].proposed_votes;
+    delete ALL[k].proposed_reps; delete ALL[k].proposed_agree;
+    break; } }
+}
+
+function clearProposal(file){
+  for (var k=0;k<ALL.length;k++){ if(ALL[k].file===file){
+    delete ALL[k].proposed; delete ALL[k].proposed_votes;
+    delete ALL[k].proposed_reps; delete ALL[k].proposed_agree;
+    break; } }
 }
 
 function wireActions(){
   document.querySelectorAll('.cell').forEach(function(cell){
     var file = cell.getAttribute('data-file');
+    cell.querySelectorAll('.prop .pacts button').forEach(function(btn){
+      btn.onclick = function(){
+        var pact = btn.getAttribute('data-pact');
+        if (pact==='accept'){
+          var pv = cell.getAttribute('data-prop');
+          if(!pv || pv.length!==9) return;
+          post(file,'correct',pv).then(function(res){
+            if(res.ok){ updateLocal(file,'manual',pv,'accepted AI re-read'); render(); }
+          });
+        } else {
+          fetch('/api/cam/proposed/dismiss',{method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({file:file})}).then(function(){
+              clearProposal(file); render(); });
+        }
+      };
+    });
     cell.querySelectorAll('.acts button').forEach(function(btn){
       btn.onclick = function(){
         var act = btn.getAttribute('data-act');
@@ -152,9 +222,11 @@ function wireActions(){
   });
 }
 
-fetch('/api/cam/labels').then(function(r){return r.json();}).then(function(d){
+function loadLabels(){
+  return fetch('/api/cam/labels').then(function(r){return r.json();}).then(function(d){
   ALL = d.items || [];
   var c = d.counts || {};
+  var np = d.proposed || 0;
   document.getElementById('sub').innerHTML =
     '<b>'+d.total+'</b> frames · '
     + '<span style="color:#0ea5e9">'+(c.manual||0)+' manual</span>, '
@@ -162,12 +234,13 @@ fetch('/api/cam/labels').then(function(r){return r.json();}).then(function(d){
     + '<span style="color:var(--blue)">'+(c.promoted||0)+' promoted</span>, '
     + '<span style="color:var(--purple)">'+(c.corrected||0)+' corrected</span>, '
     + '<span style="color:var(--amber)">'+(c.review||0)+' review</span>, '
-    + '<span style="color:var(--red)">'+(c.rejected||0)+' rejected</span>';
-  var order = [['all','All'],['manual','Manual'],['verified','Verified'],
-               ['promoted','Promoted'],['corrected','Corrected'],
-               ['review','Review'],['rejected','Rejected']];
+    + '<span style="color:var(--red)">'+(c.rejected||0)+' rejected</span>'
+    + (np ? ' · <span style="color:#0891b2">'+np+' \ud83e\udd16 AI proposals</span>' : '');
+  var order = [['all','All'],['proposed','\ud83e\udd16 Proposed'],['manual','Manual'],
+               ['verified','Verified'],['promoted','Promoted'],
+               ['corrected','Corrected'],['review','Review'],['rejected','Rejected']];
   document.getElementById('chips').innerHTML = order.map(function(o){
-    var n = o[0]==='all' ? d.total : (c[o[0]]||0);
+    var n = o[0]==='all' ? d.total : (o[0]==='proposed' ? np : (c[o[0]]||0));
     return '<span class="chip'+(o[0]===filter?' on':'')+'" data-s="'+o[0]+'">'
       + o[1]+' ('+n+')</span>';
   }).join('');
@@ -180,9 +253,58 @@ fetch('/api/cam/labels').then(function(r){return r.json();}).then(function(d){
     };
   });
   render();
-}).catch(function(){
-  document.getElementById('sub').textContent = 'Could not load labels.';
-});
+  }).catch(function(){
+    document.getElementById('sub').textContent = 'Could not load labels.';
+  });
+}
+
+function setJob(msg){ document.getElementById('jobstatus').innerHTML = msg||''; }
+
+var pollTimer = null;
+function pollReprocess(){
+  fetch('/api/cam/reprocess/status').then(function(r){return r.json();}).then(function(s){
+    if (s.running){
+      setJob('\ud83e\udd16 Re-reading '+(s.done||0)+'/'+(s.total||0)
+        + ' — '+(s.changed||0)+' changed, '+(s.confirmed||0)+' confirmed');
+      pollTimer = setTimeout(pollReprocess, 2000);
+    } else {
+      document.getElementById('btn-reprocess').disabled = false;
+      if (s.total){
+        setJob('\u2705 Re-read done: '+(s.changed||0)+' changed, '
+          +(s.confirmed||0)+' confirmed, '+(s.unresolved||0)+' unresolved'
+          + (s.errors? ', '+s.errors+' errors':''));
+      } else { setJob(''); }
+      loadLabels();
+    }
+  }).catch(function(){ document.getElementById('btn-reprocess').disabled=false; setJob(''); });
+}
+
+document.getElementById('btn-reprocess').onclick = function(){
+  var files = filtered().map(function(i){return i.file;});
+  if (!files.length){ setJob('nothing in this filter to re-read'); return; }
+  if (files.length > 500){ setJob('too many ('+files.length+') — filter to ≤500 first'); return; }
+  if (!confirm('Re-read '+files.length+' frame(s) with GPT-4o (3× each)? Results are proposals you confirm.')) return;
+  this.disabled = true;
+  setJob('\ud83e\udd16 launching…');
+  fetch('/api/cam/reprocess',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({files:files})}).then(function(r){return r.json();}).then(function(res){
+      if(res.ok){ if(pollTimer) clearTimeout(pollTimer); pollReprocess(); }
+      else { document.getElementById('btn-reprocess').disabled=false; setJob('⚠️ '+(res.error||'failed')); }
+    }).catch(function(){ document.getElementById('btn-reprocess').disabled=false; setJob('⚠️ launch failed'); });
+};
+
+document.getElementById('btn-retrain').onclick = function(){
+  if (!confirm('Force a gated retrain on the tower now? A worse model can never ship (champion/challenger).')) return;
+  var b = this; b.disabled = true; setJob('♻️ launching retrain…');
+  fetch('/api/cam/retrain',{method:'POST'}).then(function(r){return r.json();}).then(function(res){
+    if(res.ok){ setJob('♻️ Retrain launched on the tower — runs ~30–50 min, promotes only if it beats the champion.'); }
+    else { setJob('⚠️ '+(res.error||'failed')); }
+    setTimeout(function(){ b.disabled=false; }, 4000);
+  }).catch(function(){ setJob('⚠️ retrain launch failed'); b.disabled=false; });
+};
+
+loadLabels();
+pollReprocess();
 </script>
 </body>
 </html>

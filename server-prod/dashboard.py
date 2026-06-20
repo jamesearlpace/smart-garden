@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+import sys
 from datetime import datetime, timedelta
 
 import requests as http_requests
@@ -3216,6 +3217,8 @@ def create_app(config, engine, weather, billing):
     LABELS_DIR = os.environ.get("METER_LABELS_DIR",
                                 "/home/jamesearlpace/cnn-dataset-oracle")
     MANUAL_PATH = os.path.join(LABELS_DIR, "manual_labels.jsonl")
+    PROPOSED_PATH = os.path.join(LABELS_DIR, "proposed_labels.jsonl")
+    REPROCESS_STATUS = os.path.join(LABELS_DIR, "reprocess_status.json")
 
     def _load_manual():
         """Manual corrections are the HIGHEST trust tier — a human looked at the
@@ -3232,6 +3235,32 @@ def create_app(config, engine, weather, billing):
                         out[rec["file"]] = rec
                     except Exception:
                         pass
+        return out
+
+    def _load_proposed():
+        """AI-proposed corrections from the batch reprocess (oracle 3× majority).
+        These are SUGGESTIONS awaiting human confirm — they do NOT change the
+        training label until accepted. Last write per file wins; a 'dismiss'
+        record clears a proposal. Returns {file: {proposed, votes, agree, ...}}
+        of ACTIVE (non-dismissed) proposals."""
+        import json as _json
+        out = {}
+        if os.path.exists(PROPOSED_PATH):
+            for line in open(PROPOSED_PATH):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except Exception:
+                    continue
+                f = rec.get("file")
+                if not f:
+                    continue
+                if rec.get("dismissed"):
+                    out.pop(f, None)
+                else:
+                    out[f] = rec
         return out
 
     @app.route("/api/cam/labels")
@@ -3300,6 +3329,19 @@ def create_app(config, engine, weather, billing):
                 it["detail"] = (f"manually corrected (was {prev})"
                                 if mv["label"] != prev else "manually confirmed")
 
+        # Overlay AI proposals (from batch reprocess) — a suggestion the human
+        # can Accept/Dismiss. Manual decisions win, so skip files already
+        # decided by a human.
+        proposed = _load_proposed()
+        for it in items:
+            pv = proposed.get(it["file"])
+            if not pv or manual.get(it["file"]):
+                continue
+            it["proposed"] = pv.get("proposed")
+            it["proposed_votes"] = pv.get("votes")
+            it["proposed_reps"] = pv.get("reps")
+            it["proposed_agree"] = bool(pv.get("agree"))
+
         # Sort by reading value so it reads like the meter climbing.
         def keyfn(it):
             d = "".join(c for c in it["label"] if c.isdigit())
@@ -3308,7 +3350,9 @@ def create_app(config, engine, weather, billing):
         counts = {}
         for it in items:
             counts[it["status"]] = counts.get(it["status"], 0) + 1
-        return jsonify({"items": items, "counts": counts, "total": len(items)})
+        n_proposed = sum(1 for it in items if it.get("proposed"))
+        return jsonify({"items": items, "counts": counts,
+                        "proposed": n_proposed, "total": len(items)})
 
     @app.route("/api/cam/labels/update", methods=["POST"])
     def cam_labels_update():
@@ -3335,6 +3379,102 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
         return jsonify({"ok": True, "saved": rec})
+
+    @app.route("/api/cam/reprocess", methods=["POST"])
+    def cam_reprocess():
+        """Launch a batch oracle re-read over a set of frames (detached). Each
+        frame is read 3× by GPT-4o; a majority value lands as a PROPOSED
+        correction in the gallery for human confirm. Body: {files:[basename...]}."""
+        import json as _json
+        import subprocess as _sp
+        data = request.get_json(silent=True) or {}
+        files = [os.path.basename(str(f)) for f in (data.get("files") or [])
+                 if str(f).endswith(".jpg")]
+        if not files:
+            return jsonify({"ok": False, "error": "no files"}), 400
+        if len(files) > 500:
+            return jsonify({"ok": False, "error": "max 500 frames per batch"}), 400
+        # Already running? Don't stack jobs.
+        try:
+            st = _json.load(open(REPROCESS_STATUS))
+            if st.get("running"):
+                return jsonify({"ok": False, "error": "reprocess already running",
+                                "status": st}), 409
+        except Exception:
+            pass
+        list_path = "/tmp/reprocess_list.json"
+        try:
+            _json.dump(files, open(list_path, "w"))
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"write list: {e}"}), 500
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "reprocess.py")
+        py = sys.executable
+        try:
+            _sp.Popen([py, script, "--list", list_path],
+                      stdout=open("/tmp/reprocess.log", "a"),
+                      stderr=_sp.STDOUT, start_new_session=True)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"launch: {e}"}), 500
+        return jsonify({"ok": True, "launched": True, "count": len(files)})
+
+    @app.route("/api/cam/reprocess/status")
+    def cam_reprocess_status():
+        """Progress of the running/last batch reprocess job."""
+        import json as _json
+        try:
+            return jsonify(_json.load(open(REPROCESS_STATUS)))
+        except Exception:
+            return jsonify({"running": False, "total": 0, "done": 0})
+
+    @app.route("/api/cam/proposed/dismiss", methods=["POST"])
+    def cam_proposed_dismiss():
+        """Dismiss an AI proposal without applying it. Body: {file}."""
+        import json as _json
+        data = request.get_json(silent=True) or {}
+        fname = os.path.basename(str(data.get("file", "")))
+        if not fname.endswith(".jpg"):
+            return jsonify({"ok": False, "error": "bad file"}), 400
+        try:
+            os.makedirs(LABELS_DIR, exist_ok=True)
+            with open(PROPOSED_PATH, "a") as f:
+                f.write(_json.dumps({"file": fname, "dismissed": True,
+                                     "ts": datetime.now().isoformat()}) + "\n")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True})
+
+    @app.route("/api/cam/retrain", methods=["POST"])
+    def cam_retrain():
+        """Force a gated retrain on the tower right now (champion/challenger —
+        a worse model can never ship). Launches detached over SSH."""
+        import subprocess as _sp
+        cmd = ("cd ~/meter-cnn && nohup ~/meter-ocr/.venv/bin/python retrain.py "
+               "--force > /tmp/retrain_run.log 2>&1 &")
+        try:
+            r = _sp.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                         "jack@192.168.0.120", cmd],
+                        capture_output=True, text=True, timeout=20)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"ssh: {e}"}), 502
+        if r.returncode != 0:
+            return jsonify({"ok": False, "error": r.stderr.strip() or "ssh failed"}), 502
+        return jsonify({"ok": True, "launched": True})
+
+    @app.route("/api/cam/retrain/status")
+    def cam_retrain_status():
+        """Read the tower's last retrain_status.json (gated retrain outcome)."""
+        import subprocess as _sp
+        import json as _json
+        try:
+            r = _sp.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                         "jack@192.168.0.120", "cat ~/meter-cnn/retrain_status.json"],
+                        capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and r.stdout.strip():
+                return jsonify(_json.loads(r.stdout))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+        return jsonify({"error": "no status"}), 404
 
     @app.route("/cam/labels")
     def cam_labels_page():

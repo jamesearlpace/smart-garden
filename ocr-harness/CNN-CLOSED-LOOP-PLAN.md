@@ -6,7 +6,35 @@ Phases 1–4 done + automated; Phase 5 (cost ramp-down) pending. Metrics layer
 persists improvement data. This doc is the source of truth for the self-improving
 reader. Read first when resuming.
 
-**Last updated:** 2026-06-15
+**Last updated:** 2026-06-19
+
+---
+
+## 2026-06-19 — Human-feedback loop closed (correct → reprocess → retrain)
+
+James saw wrong labels presented as "ground truth" and his gallery corrections
+weren't sticking. Root cause: the nightly retrain read a frozen `cnn_train.jsonl`
+and **never read `manual_labels.jsonl`**, and manual edits to old frames couldn't
+trip the volume gate. Fixed end-to-end:
+
+- **A — corrections train the model.** `retrain.py` now rsyncs + overlays
+  `manual_labels.jsonl` as the GOLD tier, **authoritative over the monotonic
+  audit** (a human label revives a frame the audit dropped). Verified: 86 corrected
+  / 6 confirmed / 36 rejected / 6 revived → 939 clean train labels.
+- **B — corrections trigger a retrain.** Manual edits count toward the volume gate
+  (own `last_retrain_manual` marker), and a **"♻️ Retrain now"** button
+  (`POST /api/cam/retrain` → tower `retrain.py --force`) forces a gated run.
+- **C — reprocess old wrong frames.** `reprocess.py` re-reads a batch with GPT-4o
+  3× (slow-movement hint, strict majority) and lands **proposals** in
+  `proposed_labels.jsonl` for human confirm — never auto-applied (oracle also
+  misreads in glare). `POST /api/cam/reprocess` / `GET …/status`.
+- **D — gallery UX.** New 🤖 Proposed filter + per-tile Accept/Dismiss + a
+  "🤖 Re-read filtered with AI" toolbar button with live progress. Manual wins:
+  a proposal is suppressed on any frame the human already decided.
+
+Guardrails intact: physics monotonic veto, oracle forward-only, gated
+champion/challenger (protects against a bad batch of human typos too). Full impl
+detail in repo memory `water-meter-ocr.md` → "FEEDBACK→MODEL LOOP CLOSED".
 
 ---
 

@@ -50,7 +50,9 @@ MODEL_LIVE = os.path.join(BASE, "meter_cnn.pt")    # the champion the service ru
 VERSION_FILE = os.path.join(BASE, "VERSION")
 STATUS = os.path.join(BASE, "retrain_status.json")
 MARKER = os.path.join(BASE, "last_retrain_maxts")  # max captured_ts trained on
+MANUAL_MARKER = os.path.join(BASE, "last_retrain_manual")  # # manual edits trained on
 CLEAN_REGIME = os.path.join(BASE, "clean_regime")  # set once the baseline is fair
+MANUAL_JSONL = os.path.join(WORK, "manual_labels.jsonl")  # human corrections (gold)
 LOG = os.path.join(BASE, "retrain.log")
 
 CROP = (0.02, 0.02, 0.92, 0.46)
@@ -209,16 +211,46 @@ def sync_from_acer():
         ["rsync", "-az", "--timeout=60",
          f"{ACER}:cnn-dataset-oracle/cnn_train.jsonl", BASELINE_JSONL],
         check=True)
+    # Human corrections from the label-review gallery — the GOLD tier. Optional
+    # (may not exist yet); never fail the retrain if it's absent.
+    try:
+        subprocess.run(
+            ["rsync", "-az", "--timeout=60", "--ignore-missing-args",
+             f"{ACER}:cnn-dataset-oracle/manual_labels.jsonl", MANUAL_JSONL],
+            check=False)
+    except Exception as e:
+        log(f"sync: manual_labels rsync skipped ({e})")
     n = len([f for f in os.listdir(FRAMES) if f.endswith(".jpg")])
     log(f"sync: {n} frames present")
     return n
 
 
-def gather_labels():
+def load_manual():
+    """Human corrections from the gallery — last write per file wins.
+    Returns {file: {action, label?}}; action in correct|ok|reject."""
+    out = {}
+    if os.path.exists(MANUAL_JSONL):
+        for line in open(MANUAL_JSONL):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                out[r["file"]] = r
+            except Exception:
+                pass
+    return out
+
+
+def gather_labels(manual=None):
     """file -> label, from the trusted baseline jsonl + oracle-banked filenames.
-    Then drop physically-impossible labels via the monotonic audit."""
+    The monotonic audit drops physically-impossible AUTO labels. Human manual
+    corrections are then overlaid as the GOLD tier — authoritative OVER the
+    audit: a human-set label is never dropped, a human-confirmed label is kept,
+    a human-rejected frame is excluded."""
+    manual = manual or {}
     labels = {}
-    # baseline verified set (manual / consensus / verified) — highest trust
+    # baseline verified set (consensus / verified) — high trust
     if os.path.exists(BASELINE_JSONL):
         for line in open(BASELINE_JSONL):
             line = line.strip()
@@ -233,6 +265,7 @@ def gather_labels():
         m = NAME_RE.match(f)
         if m and f not in labels:
             labels[f] = m.group(1)
+    auto_labels = dict(labels)  # pre-audit snapshot (for confirming 'ok')
     # monotonic audit: order by capture ts, keep the non-decreasing backbone
     items = []
     for f, lbl in labels.items():
@@ -244,7 +277,33 @@ def gather_labels():
     keep = lnds_keep_mask([v for _, v, _ in items])
     clean = {f: f"{lbl:09d}" for (ts, lbl, f), k in zip(items, keep) if k}
     dropped = len(items) - len(clean)
-    log(f"audit: {len(clean)} clean, {dropped} impossible labels dropped")
+    log(f"audit: {len(clean)} clean, {dropped} impossible AUTO labels dropped")
+    # ---- GOLD overlay: human edits win over everything, incl. the audit ----
+    n_correct = n_ok = n_reject = n_revive = 0
+    for f, mv in manual.items():
+        act = mv.get("action")
+        if not os.path.exists(os.path.join(FRAMES, f)):
+            continue  # frame quarantined/gone — can't train on it
+        if act == "reject":
+            if clean.pop(f, None) is not None:
+                n_reject += 1
+        elif act == "correct":
+            d = "".join(c for c in str(mv.get("label", "")) if c.isdigit())
+            if len(d) == 9:
+                if f not in clean:
+                    n_revive += 1   # audit had dropped it; human revives+fixes
+                clean[f] = d
+                n_correct += 1
+        elif act == "ok":
+            d = clean.get(f) or auto_labels.get(f)
+            if d and len(d) == 9:
+                if f not in clean:
+                    n_revive += 1
+                clean[f] = d
+                n_ok += 1
+    if manual:
+        log(f"manual overlay: {n_correct} corrected, {n_ok} confirmed, "
+            f"{n_reject} rejected, {n_revive} revived past audit")
     return clean
 
 
@@ -285,6 +344,21 @@ def new_frame_count(clean):
             n += 1
         mx = max(mx, ts)
     return n, mx
+
+
+def manual_new_count(manual):
+    """How many human corrections accrued since the last successful retrain.
+    Manual edits to OLD frames don't advance the capture-ts marker, so they get
+    their own marker. Each new correction is high-value and counts toward the
+    volume gate."""
+    last = 0
+    if os.path.exists(MANUAL_MARKER):
+        try:
+            last = int(open(MANUAL_MARKER).read().strip())
+        except Exception:
+            last = 0
+    total = len(manual)
+    return max(0, total - last), total
 
 
 def evaluate(model, loader, device):
@@ -364,12 +438,18 @@ def main():
     log("nightly retrain start")
 
     sync_from_acer()
-    clean = gather_labels()
+    manual = load_manual()
+    clean = gather_labels(manual)
     n_new, max_ts = new_frame_count(clean)
+    n_manual_new, manual_total = manual_new_count(manual)
     log(f"new frames since last retrain: {n_new} (threshold {MIN_NEW_FRAMES})")
-    if n_new < MIN_NEW_FRAMES and not args.force:
-        log("SKIP: too few new frames — not worth a retrain tonight")
+    if n_manual_new:
+        log(f"new human corrections since last retrain: {n_manual_new} "
+            f"(total {manual_total}) — counts toward the gate")
+    if (n_new + n_manual_new) < MIN_NEW_FRAMES and not args.force:
+        log("SKIP: too few new frames/corrections — not worth a retrain tonight")
         write_status({"ts": time.time(), "skipped": True, "new_frames": n_new,
+                      "new_manual": n_manual_new,
                       "reason": "below MIN_NEW_FRAMES"})
         return
 
@@ -424,6 +504,7 @@ def main():
         os.replace(tmp, MODEL_LIVE)
         open(VERSION_FILE, "w").write(nxt_ver + "\n")
         open(MARKER, "w").write(str(max_ts))
+        open(MANUAL_MARKER, "w").write(str(manual_total))
         open(CLEAN_REGIME, "w").write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
         subprocess.run(["sudo", "systemctl", "restart", "meter-cnn"], check=False)
         promoted = True
@@ -432,8 +513,10 @@ def main():
     elif args.dry_run:
         log(f"DRY-RUN: would {'PROMOTE' if win else 'KEEP'} ({reason})")
     else:
-        # still advance the marker so we don't re-evaluate the same frames nightly
+        # still advance the markers so we don't re-evaluate the same frames /
+        # corrections nightly (they remain in the training baseline regardless)
         open(MARKER, "w").write(str(max_ts))
+        open(MANUAL_MARKER, "w").write(str(manual_total))
         log(f"KEEP {cur_ver}: {reason}")
 
     write_status({
@@ -443,7 +526,8 @@ def main():
         "champion_full9": round(c_f, 4), "challenger_full9": round(h_f, 4),
         "champion_perdigit": round(c_d, 4), "challenger_perdigit": round(h_d, 4),
         "train_n": len(train_rows), "test_n": len(test_rows),
-        "new_frames": n_new, "secs": int(time.time() - t0),
+        "new_frames": n_new, "new_manual": n_manual_new,
+        "secs": int(time.time() - t0),
     })
     log(f"done in {int(time.time() - t0)}s")
 

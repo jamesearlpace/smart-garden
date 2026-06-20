@@ -74,6 +74,15 @@ a { color: var(--blue); text-decoration: none; }
 .zone-name { font-weight: 600; font-size: .95rem; }
 .zone-detail { font-size: .8rem; color: var(--text2); }
 .zone-forecast { text-align: right; }
+.dry-row { margin-top: 5px; }
+.dry-btn { font-size: .72rem; padding: 3px 9px; border: 1px solid var(--border);
+           border-radius: 6px; background: var(--card); color: #b45309; cursor: pointer;
+           font-weight: 600; }
+.dry-btn:hover { background: #fff7ed; border-color: #fdba74; }
+.dry-btn:disabled { opacity: .7; cursor: default; }
+.dry-badge { font-size: .68rem; color: #b45309; background: #fff7ed; border: 1px solid #fed7aa;
+             border-radius: 6px; padding: 2px 6px; margin-left: 4px; }
+.dry-badge a { color: var(--text2); margin-left: 4px; }
 .days { font-size: 1.2rem; font-weight: 700; }
 .days.soon { color: var(--amber); }
 .days.now { color: var(--red); }
@@ -265,6 +274,7 @@ function renderForecast(d) {
   html += '</div></div>';
 
   html += '<div class="card"><h2>Zone Forecast</h2>';
+  html += '<div style="font-size:.78rem;color:var(--text2);margin:-4px 0 8px">See a zone that looks dry in real life? Tap <b>\uD83C\uDF35 Looks dry</b> — it waters that zone sooner and teaches the model it runs drier than predicted (fades over ~2 weeks unless you tap again).</div>';
   if (!d.zones || d.zones.length === 0) {
     html += '<div style="color:var(--text2);padding:12px">No zone data available</div>';
   } else {
@@ -289,6 +299,13 @@ function renderForecast(d) {
       html += '</div><div class="zone-forecast">';
       html += '<div class="days ' + daysClass + '">' + daysText + '</div>';
       html += (!isManual && z.next_water_date) ? '<div class="next-date">' + z.next_water_date + '</div>' : '';
+      if (!isManual) {
+        const bias = z.dry_bias_mm || 0;
+        html += '<div class="dry-row">';
+        html += '<button class="dry-btn" onclick="looksDry(' + z.id + ',this)">\uD83C\uDF35 Looks dry</button>';
+        if (bias > 0) html += '<span class="dry-badge" title="learned dryness — fades over ~2 weeks">running dry −' + bias.toFixed(1) + 'mm<a href="#" onclick="resetDry(' + z.id + ',event)">reset</a></span>';
+        html += '</div>';
+      }
       html += '</div></div>';
     });
   }
@@ -300,6 +317,30 @@ function renderForecast(d) {
 
 function fstat(val, label) {
   return '<div class="stat"><div class="val">' + val + '</div><div class="lbl">' + label + '</div></div>';
+}
+
+async function looksDry(zoneId, btn) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '…';
+  try {
+    const r = await fetch('/api/zone/' + zoneId + '/looks-dry', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      btn.textContent = d.sooner_days ? ('✓ ~' + d.sooner_days + 'd sooner') : '✓ noted';
+      setTimeout(loadForecast, 1300);
+    } else {
+      btn.textContent = orig; btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = orig; btn.disabled = false;
+  }
+}
+
+async function resetDry(zoneId, ev) {
+  ev.preventDefault();
+  try { await fetch('/api/zone/' + zoneId + '/dryness-reset', { method: 'POST' }); } catch (e) {}
+  loadForecast();
 }
 
 /* ═══ TAB 2: Forecast vs Actual ═══ */

@@ -121,6 +121,18 @@ def init_db():
             PRIMARY KEY (zone_id, date)
         );
 
+        -- Human "looks dry" feedback per zone. A decaying mm offset subtracted
+        -- from the zone's effective water balance, so a zone the user reports
+        -- as dry waters sooner — and, with repeated reports, the model learns
+        -- that zone runs drier than its physics predict. Decays to zero over
+        -- DRY_BIAS_DECAY_DAYS so stale one-off observations fade on their own.
+        CREATE TABLE IF NOT EXISTS zone_feedback (
+            zone_id      INTEGER PRIMARY KEY,
+            dry_bias_mm  REAL NOT NULL DEFAULT 0,
+            observations INTEGER NOT NULL DEFAULT 0,
+            updated_ts   TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS connectivity_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             ts          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
@@ -220,6 +232,31 @@ def init_db():
             source      TEXT                -- 'capture' (live) | 'manual'
         );
         CREATE INDEX IF NOT EXISTS idx_calib_sensor ON calibration_log(sensor_idx, point, ts);
+
+        -- ESP32-CAM (water-meter cam, .160) device/WiFi telemetry timeline.
+        -- Two row sources share one timeline:
+        --   source='frame' : recorded on every JPEG upload — transfer_s (upload
+        --                    time = a WiFi-quality proxy), size_bytes, gap_s
+        --                    (secs since previous frame; ~5 ideal, big = drop),
+        --                    and rssi/uptime/reconnects IF the firmware sends the
+        --                    optional X-RSSI / X-Uptime / X-Reconnects headers
+        --                    (NULL until a reflash adds them).
+        --   source='ping'  : a background ICMP pinger — ping_ms (RTT) + reachable.
+        CREATE TABLE IF NOT EXISTS cam_telemetry (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now','localtime')),
+            source      TEXT NOT NULL,      -- 'frame' | 'ping'
+            transfer_s  REAL,
+            size_bytes  INTEGER,
+            gap_s       REAL,
+            ping_ms     INTEGER,
+            reachable   INTEGER,
+            rssi        INTEGER,
+            uptime_sec  INTEGER,
+            reconnects  INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_camtel_ts ON cam_telemetry(ts);
+        CREATE INDEX IF NOT EXISTS idx_camtel_src ON cam_telemetry(source, ts);
     """)
     # ── Column migrations (ALTER TABLE is no-op if column exists) ──
     for col, coltype in [("wifi_reconnects", "INTEGER"), ("crash_count", "INTEGER"),
@@ -319,6 +356,113 @@ def get_calibration_history(sensor_idx: int = None, limit: int = 50) -> list[dic
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── ESP32-CAM telemetry helpers (WiFi/connectivity history) ──
+
+def log_cam_frame(transfer_s: float, size_bytes: int, gap_s: float | None,
+                  rssi: int | None = None, uptime_sec: int | None = None,
+                  reconnects: int | None = None):
+    """Record one frame-upload telemetry sample (called per cam upload)."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO cam_telemetry (source, transfer_s, size_bytes, gap_s, "
+        "rssi, uptime_sec, reconnects) VALUES ('frame', ?, ?, ?, ?, ?, ?)",
+        (round(float(transfer_s), 3), int(size_bytes),
+         (round(float(gap_s), 2) if gap_s is not None else None),
+         rssi, uptime_sec, reconnects),
+    )
+    conn.commit()
+    conn.close()
+
+
+def log_cam_ping(ping_ms: int | None, reachable: bool):
+    """Record one background ICMP ping sample. ping_ms NULL when unreachable."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO cam_telemetry (source, ping_ms, reachable) "
+        "VALUES ('ping', ?, ?)",
+        (ping_ms, 1 if reachable else 0),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_cam_telemetry(hours: int = 24, max_points: int = 1500) -> dict:
+    """Time-series for the cam-device page: frame rows (transfer/gap/size/rssi)
+    and ping rows (rtt/reachable), newest-last for charting. Caps the number of
+    returned points by striding so long windows stay light."""
+    conn = get_conn()
+    frames = conn.execute(
+        "SELECT ts, transfer_s, size_bytes, gap_s, rssi, uptime_sec, reconnects "
+        "FROM cam_telemetry WHERE source='frame' AND ts >= datetime('now','localtime',?) "
+        "ORDER BY ts ASC", (f"-{hours} hours",)).fetchall()
+    pings = conn.execute(
+        "SELECT ts, ping_ms, reachable FROM cam_telemetry "
+        "WHERE source='ping' AND ts >= datetime('now','localtime',?) "
+        "ORDER BY ts ASC", (f"-{hours} hours",)).fetchall()
+    conn.close()
+
+    def _stride(rows):
+        n = len(rows)
+        if n <= max_points:
+            return [dict(r) for r in rows]
+        step = (n // max_points) + 1
+        return [dict(rows[i]) for i in range(0, n, step)]
+
+    return {"frames": _stride(frames), "pings": _stride(pings)}
+
+
+def get_cam_telemetry_summary(hours: int = 24) -> dict:
+    """Rolling stats for the cam device: avg/max transfer, frame count, gap-based
+    drop rate, ping avg/max + loss %, and the latest RSSI/uptime/reconnects."""
+    conn = get_conn()
+    win = (f"-{hours} hours",)
+    f = conn.execute(
+        "SELECT COUNT(*) n, AVG(transfer_s) avg_t, MAX(transfer_s) max_t, "
+        "AVG(size_bytes) avg_sz, "
+        "SUM(CASE WHEN gap_s > 10 THEN 1 ELSE 0 END) gaps "
+        "FROM cam_telemetry WHERE source='frame' AND ts >= datetime('now','localtime',?)",
+        win).fetchone()
+    p = conn.execute(
+        "SELECT COUNT(*) n, AVG(ping_ms) avg_p, MAX(ping_ms) max_p, "
+        "SUM(CASE WHEN reachable=0 THEN 1 ELSE 0 END) lost "
+        "FROM cam_telemetry WHERE source='ping' AND ts >= datetime('now','localtime',?)",
+        win).fetchone()
+    latest = conn.execute(
+        "SELECT ts, rssi, uptime_sec, reconnects FROM cam_telemetry "
+        "WHERE source='frame' AND rssi IS NOT NULL ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    fn = f["n"] or 0
+    pn = p["n"] or 0
+    return {
+        "hours": hours,
+        "frame_count": fn,
+        "avg_transfer_s": round(f["avg_t"], 2) if f["avg_t"] is not None else None,
+        "max_transfer_s": round(f["max_t"], 2) if f["max_t"] is not None else None,
+        "avg_size_kb": round((f["avg_sz"] or 0) / 1024, 1),
+        "frame_gaps": f["gaps"] or 0,
+        "frame_drop_pct": round(100 * (f["gaps"] or 0) / fn, 1) if fn else None,
+        "ping_count": pn,
+        "avg_ping_ms": round(p["avg_p"], 1) if p["avg_p"] is not None else None,
+        "max_ping_ms": p["max_p"],
+        "ping_loss_pct": round(100 * (p["lost"] or 0) / pn, 1) if pn else None,
+        "latest_rssi": (latest["rssi"] if latest else None),
+        "latest_uptime_sec": (latest["uptime_sec"] if latest else None),
+        "latest_reconnects": (latest["reconnects"] if latest else None),
+        "rssi_available": latest is not None,
+    }
+
+
+def prune_cam_telemetry(days: int = 14):
+    """Delete cam telemetry older than N days to keep the table bounded."""
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM cam_telemetry WHERE ts < datetime('now','localtime',?)",
+        (f"-{days} days",))
+    conn.commit()
+    conn.close()
 
 
 def get_calibration_drift() -> list[dict]:
@@ -1103,6 +1247,95 @@ def get_soil_balance_history(zone_id: int, days: int = 30) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── "Looks dry" human feedback ───────────────────────────────────────────────
+# A zone the user eyeballs as dry gets a decaying mm offset subtracted from its
+# effective water balance, so it waters sooner. Repeated reports stack (capped),
+# and the bias fades over DRY_BIAS_DECAY_DAYS so a one-off observation self-heals.
+DRY_BIAS_STEP_MM = 4.0       # how much drier one "looks dry" tap makes a zone
+DRY_BIAS_MAX_MM = 12.0       # cap so a zone never thinks it's bone-dry from taps
+DRY_BIAS_DECAY_DAYS = 14.0   # a single observation fully fades after ~2 weeks
+
+
+def _decay_bias(bias: float, updated_ts: str | None,
+                decay_days: float = DRY_BIAS_DECAY_DAYS,
+                now: "datetime | None" = None) -> float:
+    """Linearly decay a stored bias to zero over decay_days from updated_ts."""
+    if not bias or not updated_ts:
+        return 0.0
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    try:
+        t0 = _dt.fromisoformat(updated_ts)
+    except Exception:
+        return float(bias)
+    days = max(0.0, (now - t0).total_seconds() / 86400.0)
+    frac = max(0.0, 1.0 - days / decay_days)
+    return float(bias) * frac
+
+
+def get_zone_feedback(zone_id: int) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM zone_feedback WHERE zone_id = ?", (zone_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_zone_feedback() -> dict:
+    """{zone_id: {dry_bias_mm, observations, updated_ts, effective_mm}}."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM zone_feedback").fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        d = dict(r)
+        d["effective_mm"] = round(_decay_bias(d["dry_bias_mm"], d["updated_ts"]), 2)
+        out[d["zone_id"]] = d
+    return out
+
+
+def effective_zone_dry_bias(zone_id: int,
+                            decay_days: float = DRY_BIAS_DECAY_DAYS) -> float:
+    """Current (decayed) dry-bias mm to subtract from this zone's balance."""
+    row = get_zone_feedback(zone_id)
+    if not row:
+        return 0.0
+    return _decay_bias(row["dry_bias_mm"], row["updated_ts"], decay_days)
+
+
+def bump_zone_dryness(zone_id: int, step_mm: float = DRY_BIAS_STEP_MM,
+                      max_mm: float = DRY_BIAS_MAX_MM,
+                      decay_days: float = DRY_BIAS_DECAY_DAYS) -> dict:
+    """Record a 'looks dry' observation: decay the existing bias to now, add a
+    step (capped), refresh the timestamp. Returns the new feedback row."""
+    from datetime import datetime as _dt
+    now = _dt.now()
+    row = get_zone_feedback(zone_id)
+    cur = _decay_bias(row["dry_bias_mm"], row["updated_ts"], decay_days, now) if row else 0.0
+    new_bias = round(min(max_mm, cur + step_mm), 3)
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO zone_feedback (zone_id, dry_bias_mm, observations, updated_ts) "
+        "VALUES (?, ?, 1, ?) ON CONFLICT(zone_id) DO UPDATE SET "
+        "dry_bias_mm = excluded.dry_bias_mm, "
+        "observations = zone_feedback.observations + 1, "
+        "updated_ts = excluded.updated_ts",
+        (zone_id, new_bias, now.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return get_zone_feedback(zone_id)
+
+
+def reset_zone_feedback(zone_id: int):
+    conn = get_conn()
+    conn.execute("DELETE FROM zone_feedback WHERE zone_id = ?", (zone_id,))
+    conn.commit()
+    conn.close()
+
 
 
 def get_all_balances() -> list[dict]:

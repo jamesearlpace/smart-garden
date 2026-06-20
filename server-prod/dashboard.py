@@ -389,6 +389,10 @@ def create_app(config, engine, weather, billing):
             # Current balance
             bal = db.get_soil_balance(zid)
             balance_mm = bal["balance_mm"] if bal else taw_mm
+            # "Looks dry" feedback lowers the effective balance (waters sooner).
+            dry_bias = db.effective_zone_dry_bias(zid)
+            if dry_bias > 0:
+                balance_mm = max(0.0, balance_mm - dry_bias)
             balance_pct = (balance_mm / taw_mm * 100) if taw_mm > 0 else 100
 
             # Forecast: days until balance drops below MAD threshold
@@ -418,6 +422,7 @@ def create_app(config, engine, weather, billing):
                 "etc_mm": round(etc_mm, 2),
                 "days_until_water": round(days_until, 1) if days_until is not None else None,
                 "next_water_date": next_date,
+                "dry_bias_mm": round(dry_bias, 1) if dry_bias > 0 else 0,
             })
 
         return jsonify({
@@ -494,6 +499,7 @@ def create_app(config, engine, weather, billing):
             bal = db.get_soil_balance(zid)
             balance_mm = (bal["balance_mm"] if bal
                           and bal.get("balance_mm") is not None else taw)
+            balance_mm = max(0.0, float(balance_mm) - db.effective_zone_dry_bias(zid))
             zstate[zid] = {
                 "taw": taw, "mad": mad, "bal": float(balance_mm),
                 "kc": z.get("kc", [0.9, 0.9, 0.9, 0.9]),
@@ -914,6 +920,51 @@ def create_app(config, engine, weather, billing):
         write_config_atomic(config)
 
         return jsonify({"ok": True, "changes": changes})
+
+    @app.route("/api/zone/<int:zone_id>/looks-dry", methods=["POST"])
+    def api_zone_looks_dry(zone_id):
+        """Human 'looks dry' feedback. Nudges this zone to water sooner AND
+        teaches the model it runs drier than its physics predict. The effect
+        decays over ~2 weeks unless reinforced by more taps. Returns the new
+        effective bias plus a plain-language 'waters ~N days sooner'."""
+        if not (0 <= zone_id < len(config["zones"])):
+            return jsonify({"ok": False, "error": "bad zone"}), 400
+        row = db.bump_zone_dryness(zone_id)
+        eff = db.effective_zone_dry_bias(zone_id)
+        # Reflect it in the forecast/schedule tab right away.
+        try:
+            engine_command("save_daily_forecast_snapshot")
+        except Exception:
+            pass
+        # mm → "~N days sooner" using this zone's daily ET demand.
+        sooner_days = None
+        try:
+            season_idx = engine.weather.get_season_index()
+            et0 = engine.weather.get_today_et0(allow_fetch=False) or 0.0
+            zcfg = config["zones"][zone_id]
+            kc = (zcfg["kc"][season_idx]
+                  if 0 <= season_idx < len(zcfg.get("kc", [])) else 0.9)
+            etc = et0 * kc
+            if etc > 0:
+                sooner_days = round(eff / etc, 1)
+        except Exception:
+            pass
+        return jsonify({"ok": True, "zone_id": zone_id,
+                        "dry_bias_mm": round(eff, 2),
+                        "observations": (row or {}).get("observations", 1),
+                        "sooner_days": sooner_days})
+
+    @app.route("/api/zone/<int:zone_id>/dryness-reset", methods=["POST"])
+    def api_zone_dryness_reset(zone_id):
+        """Clear all 'looks dry' feedback for a zone (back to pure physics)."""
+        if not (0 <= zone_id < len(config["zones"])):
+            return jsonify({"ok": False, "error": "bad zone"}), 400
+        db.reset_zone_feedback(zone_id)
+        try:
+            engine_command("save_daily_forecast_snapshot")
+        except Exception:
+            pass
+        return jsonify({"ok": True, "zone_id": zone_id, "dry_bias_mm": 0})
 
     # ── Pages ──
 

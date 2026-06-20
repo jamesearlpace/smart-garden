@@ -11,6 +11,7 @@ Determines whether to water, skip, or delay each zone based on:
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -545,11 +546,19 @@ class IrrigationEngine:
         # 1. Water balance check (ET0-based, replaces soil sensor)
         balance = db.get_soil_balance(zone_id)
         balance_mm = balance["balance_mm"] if balance else None
+        # "Looks dry" feedback: treat the zone as drier than its physics balance,
+        # so a zone the user reported as dry waters sooner. Decays over time, so
+        # a one-off observation fades on its own. See db.effective_zone_dry_bias.
+        dry_bias = db.effective_zone_dry_bias(zone_id)
+        if balance_mm is not None and dry_bias > 0:
+            balance_mm = max(0.0, balance_mm - dry_bias)
         taw_mm = self.get_zone_taw_mm(zone_id)
         mad_mm = self.get_zone_mad_mm(zone_id)
         conditions["balance_mm"] = balance_mm
         conditions["taw_mm"] = taw_mm
         conditions["mad_mm"] = mad_mm
+        if dry_bias > 0:
+            conditions["dry_bias_mm"] = round(dry_bias, 2)
 
         if balance_mm is not None and balance_mm > mad_mm:
             # Group sync: if a sibling zone in this zone's group triggered the
@@ -1239,6 +1248,25 @@ class IrrigationEngine:
         mad_pct = zone.get("mad_pct", self._default_mad_pct) / 100.0
         return self.get_zone_taw_mm(zone_id) * mad_pct
 
+    @staticmethod
+    def _et_fraction(now: datetime | None = None) -> float:
+        """Cumulative fraction [0,1] of the day's ET consumed by `now`.
+
+        Mirrors the dashboard's getEtFraction(): a cosine ramp over the
+        06:00-20:00 daylight window (most evapotranspiration happens midday).
+        Used so an intra-day balance refresh subtracts only the ET that has
+        actually occurred so far, instead of the full day's demand (which would
+        make a lunchtime reading look pessimistically dry). At/after 20:00 it
+        returns 1.0, so the 11 PM authoritative close is identical to before.
+        """
+        now = now or datetime.now()
+        h = now.hour + now.minute / 60.0
+        if h >= 20:
+            return 1.0
+        if h < 6:
+            return 0.0
+        return max(0.0, min(1.0, (1 - math.cos((h - 6) / 14 * math.pi)) / 2))
+
     def update_zone_balance(self, zone_id: int):
         """Recompute today's soil-water balance for ONE zone, immediately.
 
@@ -1292,6 +1320,63 @@ class IrrigationEngine:
                  "(irrig=%.1fmm, MAD=%.1fmm)",
                  self._zone_label(zone_id), balance, taw_mm, irrig_mm, mad_mm)
 
+    def reconcile_balances(self, days_back: int = 3):
+        """Re-credit the last `days_back` days of soil balance using the Archive
+        API's observation-corrected rainfall.
+
+        The forecast endpoint under-reports rain the model missed, so a closed
+        balance row can carry a stale rain=0 forward forever. This recomputes
+        each recent day's balance forward from a seed close, overriding only the
+        rain term (ET0 and irrigation for those days are already stored). Safe
+        to run nightly (days_back=3) or once for a historical backfill
+        (days_back=7). Only touches existing rows; never re-walks anything.
+        """
+        rain_hist = self.weather.get_daily_rain_history()  # {iso: mm} actuals
+        if not rain_hist:
+            log.warning("Reconcile skipped: no archive rain data available")
+            return 0
+        today = date.today()
+        window = [(today - timedelta(days=k)).isoformat()
+                  for k in range(days_back, -1, -1)]  # oldest -> today
+        seed_day = (date.fromisoformat(window[0]) - timedelta(days=1)).isoformat()
+        corrected = 0
+
+        for zone in self.config["zones"]:
+            if not zone.get("installed", False):
+                continue
+            zid = zone["id"]
+            taw_mm = self.get_zone_taw_mm(zid)
+            mad_mm = self.get_zone_mad_mm(zid)
+            precip_rate = zone.get("precip_rate_iph", 1.0)
+            hist = {h["date"]: h for h in
+                    db.get_soil_balance_history(zid, days=days_back + 3)}
+            seed = hist.get(seed_day)
+            prev_close = seed["balance_mm"] if seed else taw_mm
+
+            for day in window:
+                row = hist.get(day)
+                if not row:
+                    continue  # nightly job will create it; nothing to correct
+                etc_mm = row["etc_mm"] or 0.0
+                old_rain = row["rain_mm"] or 0.0
+                actual_rain = rain_hist.get(day, old_rain)
+                irrig_mm = db.get_daily_irrigation_mm(zid, day, precip_rate)
+                balance = max(0, min(prev_close - etc_mm + actual_rain + irrig_mm,
+                                     taw_mm))
+                if (abs(actual_rain - old_rain) > 0.5
+                        or abs(balance - (row["balance_mm"] or 0)) > 0.5):
+                    corrected += 1
+                db.upsert_soil_balance(
+                    zone_id=zid, day=day, et0_mm=row["et0_mm"], kc=row["kc"],
+                    etc_mm=etc_mm, rain_mm=actual_rain, irrigation_mm=irrig_mm,
+                    balance_mm=balance, taw_mm=taw_mm, mad_mm=mad_mm,
+                )
+                prev_close = balance
+
+        log.info("Reconciled soil balances over last %d days (%d rows corrected)",
+                 days_back, corrected)
+        return corrected
+
     def update_daily_balances(self):
         """Update soil water balance for all zones (called daily by scheduler).
 
@@ -1301,13 +1386,25 @@ class IrrigationEngine:
                   balance += irrigation_mm (credit, from watering events ├ù precip rate)
         Balance is clamped to [0, TAW_mm].
         """
+        # First reconcile recent days against observation-corrected actuals so a
+        # forecast miss (rain the model didn't predict) doesn't carry forward.
+        self.reconcile_balances(days_back=3)
+
         today = date.today().isoformat()
         et0 = self.weather.get_today_et0()
-        rain_last_24h = self.weather.get_rain_last_24h()
+        # Use the observation-corrected daily total for TODAY when available;
+        # fall back to the rolling-24h figure if the archive has no row yet.
+        rain_today = self.weather.get_rain_for_date(today)
+        rain_last_24h = (rain_today if rain_today is not None
+                         else self.weather.get_rain_last_24h())
         season_idx = self.weather.get_season_index()
+        # Fraction of today's ET consumed so far (1.0 at/after 20:00). Lets the
+        # mid-day / evening reruns bank rain into the visible balance without
+        # over-subtracting ET that hasn't evaporated yet.
+        et_frac = self._et_fraction()
 
-        log.info("Updating soil water balances for %s (ETΓéÇ=%.2fmm, rain=%.1fmm)",
-                 today, et0, rain_last_24h)
+        log.info("Updating soil water balances for %s (ETΓéÇ=%.2fmm, rain=%.1fmm, et_frac=%.2f)",
+                 today, et0, rain_last_24h, et_frac)
 
         for zone in self.config["zones"]:
             zid = zone["id"]
@@ -1350,8 +1447,14 @@ class IrrigationEngine:
             precip_rate = zone.get("precip_rate_iph", 1.0)
             irrig_mm = db.get_daily_irrigation_mm(zid, today, precip_rate)
 
-            # Update balance
-            balance = balance - etc_mm + rain_last_24h + irrig_mm
+            # Update balance. Subtract only the ET consumed SO FAR (time-pro-rated
+            # via the daylight cosine curve) so an intra-day refresh isn't
+            # pessimistically dry. The stored etc_mm is still the FULL day's
+            # demand (the chart + reconciliation depend on that); only the
+            # balance reflects partial ET. At/after 20:00 et_frac == 1.0, so the
+            # 11 PM authoritative close is byte-identical to the prior behavior.
+            etc_so_far = etc_mm * et_frac
+            balance = balance - etc_so_far + rain_last_24h + irrig_mm
             balance = max(0, min(balance, taw_mm))  # clamp to [0, TAW]
 
             db.upsert_soil_balance(
@@ -1405,6 +1508,10 @@ class IrrigationEngine:
             # Current balance
             bal = db.get_soil_balance(zid)
             balance_mm = bal["balance_mm"] if bal else taw_mm
+            # "Looks dry" feedback lowers the effective balance so the forecast
+            # reflects the user's observation (waters sooner), matching the
+            # decision engine above.
+            balance_mm = max(0.0, balance_mm - db.effective_zone_dry_bias(zid))
 
             # Forecast: days until balance drops below MAD threshold
             threshold_mm = taw_mm - mad_mm

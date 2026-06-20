@@ -1716,12 +1716,18 @@ def create_app(config, engine, weather, billing):
                 (f"-{minutes} minutes",)).fetchall()
         finally:
             conn.close()
-        buckets, order, base, line = {}, [], None, []
+        buckets, order, line = {}, [], []
         step = max(1, len(rows) // 400)
+        cum = 0.0
+        prev_cf = None
         for i, r in enumerate(rows):
             cf = r["reading_cf"]
-            if base is None:
-                base = cf
+            # Cumulative USAGE only ever increases — count positive deltas and
+            # ignore downward jumps (a meter re-anchor/correction is not negative
+            # water). Keeps the line monotonic through re-anchors.
+            if prev_cf is not None and cf > prev_cf:
+                cum += (cf - prev_cf) * GAL
+            prev_cf = cf
             try:
                 ep = _dt.fromisoformat(r["ts"]).timestamp()
             except Exception:
@@ -1737,7 +1743,7 @@ def create_app(config, engine, weather, billing):
             b["gpm_sum"] += float(r["gpm"] or 0)
             b["gpm_n"] += 1
             if i % step == 0:
-                line.append({"t": r["ts"], "gal": round((cf - base) * GAL, 2)})
+                line.append({"t": r["ts"], "gal": round(cum, 2)})
         usage, prev = [], None
         for k in order:
             b = buckets[k]

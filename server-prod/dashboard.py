@@ -1687,6 +1687,59 @@ def create_app(config, engine, weather, billing):
     def flow_page():
         return render_template("flow.html")
 
+    @app.route("/water-usage")
+    def water_usage_page():
+        return render_template("water_usage.html")
+
+    @app.route("/api/water-usage")
+    def api_water_usage():
+        """Water usage over time for leak-spotting. Buckets the meter reading
+        (flow_sample.reading_cf, cumulative ft³) into per-hour deltas → gallons
+        used each hour. Flat overnight = no leak; a steady small bar every hour
+        = a slow leak. Returns hourly points + a downsampled reading line."""
+        GAL = 7.48052
+        hours = query_int("hours", 48, min_value=2, max_value=336)
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT ts, reading_cf FROM flow_sample "
+                "WHERE ts >= datetime('now','localtime',?) "
+                "AND reading_cf IS NOT NULL ORDER BY ts",
+                (f"-{hours} hours",)).fetchall()
+        finally:
+            conn.close()
+        # last reading in each hour bucket (reading is cumulative)
+        per_hour = {}          # 'YYYY-MM-DDTHH' -> last reading_cf
+        line = []              # downsampled (ts, gallons-from-start) for the line
+        base = None
+        for i, r in enumerate(rows):
+            ts = r["ts"]
+            cf = r["reading_cf"]
+            if base is None:
+                base = cf
+            per_hour[ts[:13]] = cf      # 'YYYY-MM-DDTHH'
+            if i % 20 == 0:             # ~ every 5 min
+                line.append({"t": ts, "gal": round((cf - base) * GAL, 1)})
+        hrs = sorted(per_hour)
+        usage = []
+        prev = None
+        for h in hrs:
+            cur = per_hour[h]
+            if prev is not None:
+                g = (cur - prev) * GAL
+                if g < 0:
+                    g = 0.0          # meter is monotonic; clip read jitter
+                usage.append({"hour": h, "gallons": round(g, 1)})
+            prev = cur
+        # simple leak heuristic: overnight (00:00–05:00 local) hours that all
+        # show some usage with nothing scheduled → possible slow leak.
+        night = [u for u in usage if 0 <= int(u["hour"][11:13]) <= 5]
+        night_min = min((u["gallons"] for u in night), default=0.0)
+        leak_hint = (len(night) >= 3 and night_min > 0.5)
+        return jsonify({"hours": hours, "usage": usage, "line": line,
+                        "leak_hint": leak_hint,
+                        "night_min_gph": round(night_min, 1)})
+
     @app.route("/api/water-cost")
     def api_water_cost():
         _ensure_water_cost()

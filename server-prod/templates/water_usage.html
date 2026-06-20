@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Water Usage — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --blue:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.45;padding:16px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
+  background:var(--card);cursor:pointer;font-weight:600}
+.chip.on{background:var(--text);color:#fff;border-color:var(--text)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+.card h2{font-size:.95rem;margin-bottom:2px}
+.card .hint{font-size:.78rem;color:var(--text2);margin-bottom:10px}
+.banner{padding:10px 14px;border-radius:10px;font-size:.85rem;font-weight:600;margin-bottom:16px}
+.banner.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+.banner.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
+.banner.muted{background:#f1f5f9;border:1px solid var(--border);color:var(--text2)}
+.wrap{position:relative;height:300px}
+</style>
+</head>
+<body>
+<a href="/#cam" style="font-size:.85rem">&larr; Back to dashboard</a>
+<h1>💧 Water Usage Over Time</h1>
+<div class="sub" id="sub">Loading…</div>
+
+<div id="banner" class="banner muted">Checking for a slow leak…</div>
+
+<div class="bar" id="chips"></div>
+
+<div class="card">
+  <h2>Gallons used per hour</h2>
+  <div class="hint">Each bar = water used that hour. Overnight bars near zero = no leak. A small bar <b>every</b> hour (incl. 1–5 AM with nothing scheduled) suggests a slow leak.</div>
+  <div class="wrap"><canvas id="barChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>Cumulative usage</h2>
+  <div class="hint">Total gallons since the start of the window. A flat line = no water moving. A steady upward slope overnight = a leak.</div>
+  <div class="wrap"><canvas id="lineChart"></canvas></div>
+</div>
+
+<script>
+var RANGES = [[24,'24 h'],[48,'48 h'],[72,'3 days'],[168,'7 days']];
+var hours = 48, barC = null, lineC = null;
+
+function render(d){
+  var usage = d.usage || [], line = d.line || [];
+  document.getElementById('sub').innerHTML =
+    '<b>'+usage.length+'</b> hours · meter sampled every 15s';
+  var b = document.getElementById('banner');
+  if (!usage.length){ b.className='banner muted'; b.textContent='No data in this window yet.'; }
+  else if (d.leak_hint){ b.className='banner warn';
+    b.textContent='⚠️ Possible slow leak — every overnight hour used at least '+d.night_min_gph+' gal (nothing scheduled then).'; }
+  else { b.className='banner ok';
+    b.textContent='✅ No leak signature — at least one quiet overnight hour with ~0 usage.'; }
+
+  var labels = usage.map(function(u){
+    var h = u.hour.slice(11,13), day = u.hour.slice(5,10);
+    return day+' '+h+':00';
+  });
+  var gph = usage.map(function(u){ return u.gallons; });
+  var colors = usage.map(function(u){
+    var h = parseInt(u.hour.slice(11,13),10);
+    return (h>=0&&h<=5) ? '#8b5cf6' : '#3b82f6';   // overnight = purple
+  });
+  if (barC) barC.destroy();
+  barC = new Chart(document.getElementById('barChart'), {
+    type:'bar',
+    data:{labels:labels, datasets:[{label:'gal/hour', data:gph,
+      backgroundColor:colors, borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{ticks:{maxRotation:90,minRotation:45,autoSkip:true,maxTicksLimit:24,font:{size:9}}},
+        y:{beginAtZero:true,title:{display:true,text:'gallons'}}}}
+  });
+
+  if (lineC) lineC.destroy();
+  lineC = new Chart(document.getElementById('lineChart'), {
+    type:'line',
+    data:{labels:line.map(function(p){return p.t.slice(5,16).replace('T',' ');}),
+      datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
+        borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
+        fill:true, pointRadius:0, borderWidth:2, tension:.2}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{ticks:{maxTicksLimit:12,font:{size:9}}},
+        y:{title:{display:true,text:'gallons'}}}}
+  });
+}
+
+function load(){
+  document.getElementById('chips').innerHTML = RANGES.map(function(r){
+    return '<span class="chip'+(r[0]===hours?' on':'')+'" data-h="'+r[0]+'">'+r[1]+'</span>';
+  }).join('');
+  document.querySelectorAll('.chip').forEach(function(ch){
+    ch.onclick = function(){ hours = parseInt(ch.getAttribute('data-h'),10); load(); };
+  });
+  fetch('/api/water-usage?hours='+hours).then(function(r){return r.json();})
+    .then(render)
+    .catch(function(){ document.getElementById('sub').textContent='Could not load usage.'; });
+}
+load();
+</script>
+</body>
+</html>

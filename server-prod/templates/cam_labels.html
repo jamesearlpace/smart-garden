@@ -109,7 +109,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="bar" id="chips"></div>
 <div class="tools">
   <button class="tbtn" id="btn-recent">🆕 Review captures</button>
-  <button class="tbtn" id="btn-sort">🕒 Sort: Value</button>
+  <button class="tbtn on" id="btn-sort">🕒 Sort: Newest</button>
   <button class="tbtn" id="btn-propagate" style="color:#0d9488;border-color:#99f6e4">🔗 Propagate from my fixes</button>
   <button class="tbtn ai" id="btn-reprocess">🤖 Re-read filtered with AI</button>
   <button class="tbtn retrain" id="btn-retrain">♻️ Retrain now</button>
@@ -137,7 +137,7 @@ function fmtLabel(l){
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
-var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false, SORT = 'value';
+var ALL = [], filter = 'all', CAPTURES = 0, PROPAGATED = false, SORT = 'newest';
 
 function filtered(){
   if (filter==='all') return ALL;

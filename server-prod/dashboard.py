@@ -2866,7 +2866,14 @@ def create_app(config, engine, weather, billing):
                 # read THIS frame, so it shows its number (fresh_read) instead of
                 # the local OCR's "reading pending" for the same glared frame.
                 try:
-                    meter_reader.record_oracle_reading(val, captured_ts=captured_ts)
+                    oentry = meter_reader.record_oracle_reading(
+                        val, captured_ts=captured_ts)
+                    # Save the frame the oracle actually read under the new row's
+                    # id so the reading-detail page can show its image (the local
+                    # OCR worker only saves frames for ITS own rows, so oracle
+                    # rows had no inspectable frame).
+                    if oentry and oentry.get("id"):
+                        _save_frame(oentry["id"], frame)
                 except Exception as e:
                     log.debug("record_oracle_reading failed: %s", e)
             # Remember the confirmed value so we don't re-send the SAME number.

@@ -54,6 +54,8 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .st.banked{color:#14b8a6}
 .st.confirmed{color:#16a34a}.st.repaired{color:#0d9488}.st.flagged{color:#ea580c}
 .dt{font-size:.66rem;color:var(--text2);margin-top:1px}
+.ts{font-size:.64rem;color:var(--text2);margin-top:2px;font-variant-numeric:tabular-nums}
+.ts.fresh{color:#0d9488;font-weight:600}
 .muted{color:var(--text2)}
 .acts{display:flex;gap:4px;margin-top:6px}
 .acts button{flex:1;font-size:.66rem;padding:3px 4px;border:1px solid var(--border);
@@ -117,6 +119,18 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmtTime(ms){
+  if(!ms) return '';
+  var diff = (Date.now() - ms)/1000;
+  var rel;
+  if (diff < 90) rel = 'just now';
+  else if (diff < 3600) rel = Math.round(diff/60)+'m ago';
+  else if (diff < 86400) rel = Math.round(diff/3600)+'h ago';
+  else rel = Math.round(diff/86400)+'d ago';
+  var abs = new Date(ms).toLocaleString(undefined,
+    {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  return {abs:abs, rel:rel, fresh:(diff < 86400)};
+}
 function fmtLabel(l){
   l = String(l||'');
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
@@ -153,6 +167,7 @@ function render(){
       + '<span class="lblwrap">'+fmtLabel(i.label)+' <span class="muted" style="font-size:.6rem">ft\u00b3</span></span>'
       + '<div class="st '+i.status+'">'+i.status+'</div>'
       + (i.detail ? '<div class="dt">'+esc(i.detail)+'</div>' : '')
+      + (function(){ var t=fmtTime(i.captured_ms); return t ? '<div class="ts'+(t.fresh?' fresh':'')+'">\ud83d\udd52 '+esc(t.abs)+' \u00b7 '+esc(t.rel)+'</div>' : ''; })()
       + '<div class="acts">'
       +   '<button class="fix" data-act="fix">Fix</button>'
       +   '<button class="ok" data-act="ok">OK</button>'

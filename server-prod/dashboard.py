@@ -3562,6 +3562,17 @@ def create_app(config, engine, weather, billing):
             d = "".join(c for c in it["label"] if c.isdigit())
             return int(d) if d else 0
         items.sort(key=keyfn)
+        # Every banked frame's filename embeds its capture time
+        # (<label>_<epoch_ms>[_oracle].jpg) — surface it so the reviewer can see
+        # how recent each tile is.
+        import re as _re
+        _ts_re = _re.compile(r"_(\d{10,})")
+        for it in items:
+            if "captured_ms" not in it:
+                m = _ts_re.search(it["file"])
+                if m:
+                    it["captured_ms"] = int(m.group(1))
+
         counts = {}
         for it in items:
             counts[it["status"]] = counts.get(it["status"], 0) + 1

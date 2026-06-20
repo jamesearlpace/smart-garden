@@ -3690,6 +3690,33 @@ def create_app(config, engine, weather, billing):
         has_frame = os.path.exists(os.path.join(FRAME_DIR, f"{os.path.basename(rid)}.jpg"))
         return jsonify({"found": True, "entry": entry, "has_frame": has_frame})
 
+    @app.route("/api/cam/reading/<rid>/cnn-read")
+    def cam_reading_cnn(rid):
+        """On-demand: ask the CURRENT (retrained) CNN to read THIS frame right
+        now. Lets the reading-detail page turn a stale 'Reading pending' frame
+        into the model's best guess + a one-tap correction into training,
+        instead of a dead end. Only called when the live pipeline didn't commit
+        a confident read, so the CNN call cost is paid only when it's useful."""
+        rid = os.path.basename(rid)
+        path = os.path.join(FRAME_DIR, f"{rid}.jpg")
+        try:
+            data = open(path, "rb").read()
+        except Exception:
+            return jsonify({"ok": False, "error": "frame not found"}), 404
+        res = _read_via_cnn(data)
+        if not res:
+            return jsonify({"ok": False, "error": "cnn unavailable"}), 502
+        g = res.get("digits")
+        if isinstance(g, list):
+            g = "".join(str(x) for x in g)
+        g = "".join(c for c in str(g or "") if c.isdigit())
+        if len(g) != 9 and res.get("value") is not None:
+            g = f"{int(res['value']):09d}"
+        if len(g) != 9:
+            return jsonify({"ok": False, "error": "no confident 9-digit read"})
+        return jsonify({"ok": True, "digits": g,
+                        "confidence": res.get("confidence")})
+
     @app.route("/cam/reading/<rid>")
     def cam_reading_page(rid):
         """Per-reading detail page: the captured image + every table field."""

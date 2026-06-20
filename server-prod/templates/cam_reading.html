@@ -50,6 +50,63 @@ var RID = {{ rid|tojson }};
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 
+// On-demand: ask the CURRENT (retrained) CNN to read a 'Reading pending' frame
+// right now, and offer a one-tap correction into training. Turns these stale
+// frames from dead ends into the easiest gold labels (the meter is usually
+// crystal clear in them).
+function fixControl(prefill){
+  return '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    + '<input id="fixInp" maxlength="9" inputmode="numeric" value="' + esc(prefill) + '" '
+    + 'style="font-family:ui-monospace,monospace;font-size:1rem;padding:6px 8px;width:130px;border:1px solid var(--blue);border-radius:7px">'
+    + '<button id="fixSave" style="font-size:.85rem;padding:6px 14px;border:none;border-radius:7px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600">Save to training</button>'
+    + '<span id="fixMsg" class="muted" style="font-size:.8rem"></span></div>';
+}
+
+function wireFix(){
+  var btn = document.getElementById('fixSave');
+  var inp = document.getElementById('fixInp');
+  if (!btn || !inp) return;
+  function save(){
+    var msg = document.getElementById('fixMsg');
+    var v = (inp.value.match(/\d/g) || []).join('');
+    if (v.length !== 9){ inp.style.borderColor = 'var(--red)'; if(msg) msg.textContent = 'need 9 digits'; return; }
+    btn.disabled = true; if(msg) msg.textContent = 'saving\u2026';
+    fetch('/api/cam/usage-correct', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({label: v, id: RID})})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok){ if(msg) msg.innerHTML = '<span style="color:var(--green);font-weight:600">\u2713 saved to training</span>'; }
+        else { btn.disabled = false; if(msg) msg.textContent = res.error || 'failed'; }
+      })
+      .catch(function(){ btn.disabled = false; if(msg) msg.textContent = 'failed'; });
+  }
+  btn.onclick = save;
+  inp.onkeydown = function(ev){ if(ev.key === 'Enter') save(); };
+}
+
+function loadCnnRead(){
+  var area = document.getElementById('cnnArea');
+  if (!area) return;
+  fetch('/api/cam/reading/' + encodeURIComponent(RID) + '/cnn-read')
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if (!res.ok || !res.digits){
+        area.innerHTML = '<span class="muted">The CNN couldn\u2019t confidently read this frame either \u2014 you can still set the value below.</span>'
+          + fixControl('');
+        wireFix();
+        return;
+      }
+      var conf = res.confidence ? (' \u00b7 ' + esc(res.confidence) + ' confidence') : '';
+      area.innerHTML = '<div style="font-size:1.4rem;font-weight:700;font-family:ui-monospace,monospace;color:var(--amber)">'
+        + '\uD83E\uDD16 AI reads ' + esc(res.digits) + '</div>'
+        + '<div class="muted" style="font-size:.78rem">on-demand read by the current CNN' + conf
+        + ' \u2014 confirm or fix to add it to training</div>'
+        + fixControl(res.digits);
+      wireFix();
+    })
+    .catch(function(){ if(area) area.innerHTML = '<span class="muted">Couldn\u2019t reach the CNN right now.</span>'; });
+}
+
 // Human labels + order for the field dump (mirrors the live table columns).
 var FIELDS = [
   ['ts','Processed (server time)'],
@@ -121,18 +178,26 @@ fetch('/api/cam/reading/' + encodeURIComponent(RID))
         + '<div class="muted">' + esc(e.reading_gal) + ' gallons · raw OCR “' + esc(e.reading) + '”</div></div>';
     } else {
       var why = e.note ? esc(e.note) : 'this frame could not be read with confidence';
+      var cnnSlot = d.has_frame
+        ? '<div id="cnnArea" class="muted" style="margin-top:10px">\uD83E\uDD16 Asking the current CNN to read this frame\u2026</div>'
+        : '';
       readingCard = '<div class="card"><h2>Reading</h2>'
         + '<div class="big" style="color:var(--text2)">Reading pending</div>'
         + '<div class="warn" style="margin-top:8px">The system did not produce a confident reading from THIS frame ('
         + why + '), so no number is shown for it. The cam\u2019s best-known running'
         + ' total is tracked separately on the Cost page. The OCR\u2019s raw per-frame'
-        + ' guess was \u201c' + esc(e.ocr_guess || '\u2014') + '\u201d (not trusted).</div></div>';
+        + ' guess was \u201c' + esc(e.ocr_guess || '\u2014') + '\u201d (not trusted).</div>'
+        + cnnSlot + '</div>';
     }
 
     document.getElementById('content').innerHTML =
       '<div class="card"><h2>Captured image</h2>' + imgHtml + '</div>'
       + readingCard
       + '<div class="card"><h2>All fields</h2><table>' + rows + '</table></div>';
+
+    // If this frame had no confident live read, ask the current CNN now so the
+    // user always sees the model's best guess + a one-tap correction.
+    if (!fresh && d.has_frame) loadCnnRead();
 
     // Resizable captured image — width as a % of the card, persisted so the
     // choice sticks across readings (shared key with the same control idea on

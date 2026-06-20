@@ -73,6 +73,15 @@ h1{font-size:1.35rem;margin-bottom:2px}
     <h3 id="modal-title">Captured frames</h3>
     <div class="hint" id="modal-sub"></div>
     <div class="fgrid" id="modal-grid"></div>
+    <div id="modal-foot" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);
+      display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:.8rem">
+      <button id="teachBtn" style="font-size:.78rem;padding:6px 12px;border:none;border-radius:7px;
+        background:#8b5cf6;color:#fff;cursor:pointer;font-weight:600">🧠 Teach the CNN from my fixes</button>
+      <span id="teachMsg" style="color:var(--text2)"></span>
+      <div id="teachBar" style="display:none;flex:1;min-width:140px;height:8px;background:var(--border);
+        border-radius:6px;overflow:hidden"><div id="teachFill" style="height:100%;width:0;
+        background:#8b5cf6;transition:width .8s linear"></div></div>
+    </div>
   </div>
 </div>
 
@@ -138,17 +147,23 @@ function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
 function fmt9(s){ var d=dig(s); return d.length===9 ? d.slice(0,6)+'.'+d.slice(6) : ''; }
 function frameCell(x, tag){
   var read = fmt9(x.reading), guess = fmt9(x.guess);
-  var disp;
-  if (guess){ disp = '<span style="color:#f59e0b">AI reads <b style="color:#f59e0b">'+guess+'</b></span> ft\u00b3'
+  var disp, badge='';
+  if (x.corrected){
+    disp = '<b style="color:#16a34a">'+read+'</b> ft\u00b3';
+    badge = '<span style="color:#16a34a;font-weight:700">\u2713 your fix</span> ';
+  } else if (x.propagated){
+    disp = '<b style="color:#0d9488">'+read+'</b> ft\u00b3';
+    badge = '<span style="color:#0d9488;font-weight:700">\u2197 from your fixes</span> ';
+  } else if (guess){ disp = '<span style="color:#f59e0b">AI reads <b style="color:#f59e0b">'+guess+'</b></span> ft\u00b3'
     + (read && read!==guess ? '<br><span style="color:#94a3b8;font-size:.66rem">held '+read+'</span>' : ''); }
   else if (read){ disp = '<b>'+read+'</b> ft\u00b3'; }
   else { disp = '<span style="color:#94a3b8">no read'+(x.note?(' \u00b7 '+esc(x.note)):'')+'</span>'; }
-  var cur = dig(x.guess) || dig(x.reading);
+  var cur = dig(x.reading) || dig(x.guess);
   var attr = x.file ? ('data-file="'+esc(x.file)+'"') : ('data-id="'+esc(x.id)+'"');
   return '<div class="fcell" '+attr+' data-ms="'+x.ms+'" data-cur="'+esc(cur)+'">'
     + '<img loading="lazy" src="'+x.img+'">'
     + '<div class="cap">'+(tag?('<span style="color:#0d9488;font-weight:700">'+tag+'</span> '):'')
-    + disp+'<br>'+x.ts+' \u00b7 '+x.source
+    + badge+disp+'<br>'+x.ts+' \u00b7 '+x.source
     + '<div class="fixrow"><button class="fixbtn">Fix reading</button></div></div></div>';
 }
 
@@ -169,7 +184,12 @@ function wireFixes(){
         fetch('/api/cam/usage-correct',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(res){
             if(res.ok){ cell.setAttribute('data-cur', v);
-              row.innerHTML='<span style="color:#16a34a;font-weight:700">\u2713 saved to training</span>'; }
+              var p = res.propagated||{}, n = (p.confirmed||0)+(p.repaired||0);
+              row.innerHTML='<span style="color:#16a34a;font-weight:700">\u2713 saved'
+                + (n?(' \u00b7 updated '+n+' nearby'):'')+'</span>';
+              // Reload the window so this frame + the propagated neighbours show
+              // the corrected values instead of the stale read.
+              if (window.__curUsage) setTimeout(function(){ showFrames(window.__curUsage); }, 500); }
             else { row.innerHTML='<span style="color:#ef4444">'+esc(res.error||'failed')+'</span>'; }
           }).catch(function(){ row.innerHTML='<span style="color:#ef4444">failed</span>'; });
       };
@@ -179,6 +199,7 @@ function wireFixes(){
 }
 
 function showFrames(u){
+  window.__curUsage = u;
   var m = document.getElementById('modal');
   document.getElementById('modal-title').textContent =
     u.gallons + ' gal · ' + (u.t ? u.t.slice(11,19) : '');
@@ -203,6 +224,56 @@ function showFrames(u){
 }
 document.getElementById('modal-x').onclick = function(){ document.getElementById('modal').classList.remove('on'); };
 document.getElementById('modal').onclick = function(e){ if(e.target===this) this.classList.remove('on'); };
+
+// Teach the CNN: force a gated retrain on the CNN box from the user's
+// corrections, with a live progress bar + ETA (the slow "learn" step — the
+// quick "update surrounding values" already happens instantly on each save).
+(function(){
+  var btn=document.getElementById('teachBtn'), msg=document.getElementById('teachMsg');
+  var bar=document.getElementById('teachBar'), fill=document.getElementById('teachFill');
+  if(!btn) return;
+  var busy=false;
+  function reset(){ busy=false; btn.disabled=false; btn.style.opacity=1; }
+  function done(st){
+    if(st.skipped){ msg.style.color='#9a3412';
+      msg.textContent='\u23f9 No retrain: '+(st.reason||'not enough new training data'); }
+    else if(st.promoted){ msg.style.color='#16a34a';
+      msg.innerHTML='\u2705 Smarter CNN shipped \u00b7 reads '
+        +(Math.round((st.challenger_full9||0)*1000)/10)+'% of meters perfectly'
+        +(st.secs?(' \u00b7 '+st.secs+'s'):''); }
+    else { msg.style.color='#5f7082';
+      msg.innerHTML='\u2713 Trained \u00b7 kept current model (champion '
+        +(Math.round((st.champion_full9||0)*1000)/10)+'% vs new '
+        +(Math.round((st.challenger_full9||0)*1000)/10)+'%)'+(st.secs?(' \u00b7 '+st.secs+'s'):''); }
+    setTimeout(function(){ bar.style.display='none'; fill.style.width='0'; }, 3000);
+    reset();
+  }
+  btn.onclick=function(){
+    if(busy) return;
+    busy=true; btn.disabled=true; btn.style.opacity=.6; msg.style.color='#5f7082';
+    msg.textContent='Checking last run\u2026';
+    fetch('/api/cam/retrain/status').then(function(r){return r.json();}).then(function(prev){
+      var baseTs=(prev&&prev.ts)?prev.ts:0, eta=(prev&&prev.secs)?prev.secs:120;
+      msg.textContent='Starting training on the CNN box\u2026';
+      return fetch('/api/cam/retrain',{method:'POST'}).then(function(r){return r.json();})
+        .then(function(res){ if(!res.ok) throw new Error(res.error||'launch failed');
+          return {baseTs:baseTs, eta:eta}; });
+    }).then(function(ctx){
+      var start=Date.now(); bar.style.display='block';
+      function tick(){ var el=Math.round((Date.now()-start)/1000);
+        fill.style.width=Math.min(96,Math.round(el/ctx.eta*100))+'%';
+        msg.innerHTML='\u23f3 Training the CNN on your corrections\u2026 <b>'+el+'s</b>'
+          +' <span style="color:#94a3b8">/ ~'+ctx.eta+'s est</span>'; }
+      tick(); var iv=setInterval(tick,1000);
+      function poll(){ fetch('/api/cam/retrain/status').then(function(r){return r.json();})
+        .then(function(st){ if(st&&st.ts&&st.ts>ctx.baseTs+1){ clearInterval(iv);
+            fill.style.width='100%'; done(st); } else { setTimeout(poll,4000); } })
+        .catch(function(){ setTimeout(poll,5000); }); }
+      setTimeout(poll,4000);
+    }).catch(function(e){ msg.style.color='#ef4444';
+      msg.textContent=String(e.message||e); bar.style.display='none'; reset(); });
+  };
+})();
 
 function load(){
   document.getElementById('chips').innerHTML = RANGES.map(function(r){

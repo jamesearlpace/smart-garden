@@ -1834,6 +1834,48 @@ def create_app(config, engine, weather, billing):
         except FileNotFoundError:
             pass
 
+        # Human truth + Anchor&Propagate overlay: a frame the user has corrected
+        # (or that Propagate resolved from the user's anchors) must show THAT
+        # value here too — not the filename's stale read or a fresh CNN guess.
+        # Keyed by capture-ms so it lands on the live ring frame, the banked
+        # oracle frame, and the corrected copy that all share one timestamp.
+        import re as _re_ms
+        _ms_re = _re_ms.compile(r"_(\d{10,})")
+
+        def _ms_of(fname):
+            m = _ms_re.search(fname or "")
+            return int(m.group(1)) if m else None
+
+        manual_by_file, manual_by_ms = {}, {}
+        for fname, mv in _load_manual().items():
+            lbl = mv.get("label")
+            if not lbl or mv.get("action") == "reject":
+                continue
+            manual_by_file[fname] = lbl
+            ms = _ms_of(fname)
+            if ms is not None:
+                manual_by_ms[ms] = lbl
+        prop_by_ms = {}
+        for fname, pr in _load_propagated().items():
+            if pr.get("status") not in ("anchor", "confirmed", "repaired"):
+                continue
+            lbl, ms = pr.get("label"), _ms_of(fname)
+            if lbl and ms is not None:
+                prop_by_ms.setdefault(ms, lbl)
+
+        def _truth(fr):
+            lbl = manual_by_file.get(fr.get("file")) or manual_by_ms.get(fr.get("ms"))
+            if lbl:
+                fr["reading"], fr["guess"], fr["corrected"] = lbl, "", True
+                return
+            lbl = prop_by_ms.get(fr.get("ms"))
+            if lbl:
+                fr["reading"], fr["guess"], fr["propagated"] = lbl, "", True
+
+        for _bucket in (in_win, before):
+            for _fr in _bucket.values():
+                _truth(_fr)
+
         frames = [in_win[k] for k in sorted(in_win)]
         if len(frames) > 60:
             step = len(frames) / 60.0
@@ -1848,7 +1890,10 @@ def create_app(config, engine, weather, billing):
             # Compute the CNN's read of THIS specific frame so the user sees what
             # the model thinks per image (varies frame to frame), not just the
             # repeated held lock value. Banked frames already carry their label.
-            if budget[0] <= 0 or fr.get("guess"):
+            # Skip frames the user already corrected / Propagate resolved — we
+            # know the truth, so don't ask the CNN (and don't overwrite it).
+            if (budget[0] <= 0 or fr.get("guess")
+                    or fr.get("corrected") or fr.get("propagated")):
                 return
             if fr.get("source") != "live" or not fr.get("id"):
                 return
@@ -1916,7 +1961,21 @@ def create_app(config, engine, weather, billing):
                 f.write(_json.dumps(rec) + "\n")
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
-        return jsonify({"ok": True, "saved": rec})
+        # Smart-update the surrounding frames: re-run Anchor & Propagate so every
+        # banked frame between the user's anchors snaps to the corrected
+        # monotonic value. No AI, ~0.05s, so it's safe inline on each save — the
+        # correction is already persisted regardless of whether this succeeds.
+        prop = {}
+        try:
+            import subprocess as _sp
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "propagate.py")
+            _sp.run([sys.executable, script], capture_output=True,
+                    text=True, timeout=60)
+            prop = _json.load(open(PROPAGATE_STATUS)).get("counts", {})
+        except Exception as e:
+            log.debug("auto-propagate after correction skipped: %s", e)
+        return jsonify({"ok": True, "saved": rec, "propagated": prop})
 
     @app.route("/api/water-cost")
     def api_water_cost():

@@ -256,8 +256,9 @@ def load_propagated():
 
 
 def load_manual():
-    """Human corrections from the gallery — last write per file wins.
-    Returns {file: {action, label?}}; action in correct|ok|reject."""
+    """Human corrections from the gallery — last action per file wins, with the
+    last EXPLICIT label carried forward (a label-less 'ok' after a 'Fix' still
+    confirms the fixed value). Returns {file: {action, label?}}."""
     out = {}
     if os.path.exists(MANUAL_JSONL):
         for line in open(MANUAL_JSONL):
@@ -266,9 +267,13 @@ def load_manual():
                 continue
             try:
                 r = json.loads(line)
-                out[r["file"]] = r
             except Exception:
-                pass
+                continue
+            f = r.get("file")
+            if not f:
+                continue
+            r["label"] = r.get("label") or out.get(f, {}).get("label")
+            out[f] = r
     return out
 
 
@@ -343,7 +348,8 @@ def gather_labels(manual=None):
                 clean[f] = d
                 n_correct += 1
         elif act == "ok":
-            d = clean.get(f) or auto_labels.get(f)
+            d = ("".join(c for c in str(mv.get("label", "")) if c.isdigit())
+                 or clean.get(f) or auto_labels.get(f))
             if d and len(d) == 9:
                 if f not in clean:
                     n_revive += 1

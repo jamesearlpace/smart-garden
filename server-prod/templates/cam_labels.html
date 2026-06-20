@@ -211,7 +211,10 @@ function wireActions(){
       btn.onclick = function(){
         var act = btn.getAttribute('data-act');
         if (act==='ok'){
-          post(file,'ok').then(function(){ updateLocal(file,'manual',null,'manually confirmed'); render(); });
+          var _lw = cell.querySelector('.lblwrap');
+          var _cur = _lw ? (_lw.textContent.match(/\d/g)||[]).join('') : '';
+          var _lbl = (_cur.length===9) ? _cur : null;
+          post(file,'ok',_lbl).then(function(){ updateLocal(file,'manual',_lbl,'manually confirmed'); render(); });
         } else if (act==='rej'){
           post(file,'reject').then(function(){ updateLocal(file,'rejected',null,'manually excluded'); render(); });
         } else if (act==='fix'){

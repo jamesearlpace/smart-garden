@@ -49,7 +49,8 @@ def _hamming(a, b):
 
 
 def _load_manual():
-    """file -> {'action','label'} (last write per file wins)."""
+    """file -> {'action','label'} (last action per file wins; last explicit
+    label carried forward so a label-less 'ok' after a 'Fix' keeps the fix)."""
     out = {}
     if os.path.exists(MANUAL_PATH):
         for line in open(MANUAL_PATH):
@@ -58,9 +59,13 @@ def _load_manual():
                 continue
             try:
                 r = json.loads(line)
-                out[r["file"]] = r
             except Exception:
-                pass
+                continue
+            f = r.get("file")
+            if not f:
+                continue
+            r["label"] = r.get("label") or out.get(f, {}).get("label")
+            out[f] = r
     return out
 
 
@@ -138,7 +143,8 @@ def propagate(snap_max=None):
             if len(d) == 9:
                 anchors[f] = int(d)
         elif act == "ok":
-            anchors[f] = None               # confirm the banked value (filled below)
+            d = "".join(c for c in str(mv.get("label", "")) if c.isdigit())
+            anchors[f] = int(d) if len(d) == 9 else None  # confirm shown value
 
     frames = [f for f in frames if f["file"] not in rejects]
     frames.sort(key=lambda f: f["ts"])

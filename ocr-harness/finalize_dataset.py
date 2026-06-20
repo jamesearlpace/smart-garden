@@ -40,10 +40,15 @@ def main():
     manifest = load_jsonl(os.path.join(args.dir, "manifest.jsonl"))
     review = load_jsonl(os.path.join(args.dir, "needs_review.jsonl"))
 
-    # Manual = last write per file wins.
+    # Manual = last action per file wins, with the last explicit label carried
+    # forward (a label-less 'ok' after a 'Fix' still confirms the fixed value).
     manual = {}
     for r in load_jsonl(os.path.join(args.dir, "manual_labels.jsonl")):
-        manual[r["file"]] = r
+        f = r.get("file")
+        if not f:
+            continue
+        r["label"] = r.get("label") or manual.get(f, {}).get("label")
+        manual[f] = r
 
     final = {}          # file -> {file, label, source}
     rejected = set()
@@ -60,9 +65,10 @@ def main():
             rejected.add(f)
             final.pop(f, None)
         elif act == "ok":
-            # Confirm current label (from manifest, or from review if it wasn't
-            # in the manifest). Pull the label from whichever source has it.
-            lbl = (final.get(f, {}).get("label")
+            # Confirm the value the human was looking at: a prior Fix is carried
+            # on the 'ok' record now, so prefer it over the automated label.
+            lbl = (mv.get("label")
+                   or final.get(f, {}).get("label")
                    or next((r["label"] for r in review if r["file"] == f), None))
             if lbl:
                 final[f] = {"file": f, "label": lbl, "source": "manual-ok"}

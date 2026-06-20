@@ -3326,19 +3326,26 @@ def create_app(config, engine, weather, billing):
 
     def _load_manual():
         """Manual corrections are the HIGHEST trust tier — a human looked at the
-        image and fixed/confirmed/rejected the label. Last write per file wins.
+        image and fixed/confirmed/rejected the label. Last action per file wins,
+        but the last EXPLICIT label is carried forward so a label-less 'ok'
+        after a 'Fix' still confirms the fixed value (not the old auto read).
         Returns {file: {label, action, ts}}; action ∈ correct|reject|ok."""
         import json as _json
         out = {}
         if os.path.exists(MANUAL_PATH):
             for line in open(MANUAL_PATH):
                 line = line.strip()
-                if line:
-                    try:
-                        rec = _json.loads(line)
-                        out[rec["file"]] = rec
-                    except Exception:
-                        pass
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except Exception:
+                    continue
+                f = rec.get("file")
+                if not f:
+                    continue
+                rec["label"] = rec.get("label") or out.get(f, {}).get("label")
+                out[f] = rec
         return out
 
     def _load_proposed():
@@ -3491,6 +3498,8 @@ def create_app(config, engine, weather, billing):
                 it["status"] = "rejected"
                 it["detail"] = "manually excluded from training"
             elif act == "ok":
+                if mv.get("label"):
+                    it["label"] = mv["label"]   # confirm the value shown, not the old one
                 it["status"] = "manual"
                 it["detail"] = "manually confirmed"
             elif act == "correct":
@@ -3580,6 +3589,13 @@ def create_app(config, engine, weather, billing):
             if len(lbl) != 9:
                 return jsonify({"ok": False, "error": "label must be 9 digits"}), 400
             rec["label"] = lbl
+        elif action == "ok":
+            # 'OK' confirms the CURRENTLY-shown label. Store it so a prior Fix
+            # isn't lost — last-write-wins would otherwise drop the corrected
+            # value (the label-less 'ok' record would override the 'correct').
+            lbl = "".join(c for c in str(data.get("label", "")) if c.isdigit())
+            if len(lbl) == 9:
+                rec["label"] = lbl
         try:
             os.makedirs(LABELS_DIR, exist_ok=True)
             with open(MANUAL_PATH, "a") as f:

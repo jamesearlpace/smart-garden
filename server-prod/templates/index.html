@@ -5973,9 +5973,18 @@ function camLoadReadings() {
       // what each per-frame row claims to have read.
       var fresh = r.fresh_read === true;
       var pendCell = '<span style="color:var(--text3);font-style:italic">reading pending</span>';
-      var readingDisp = fresh ? esc(r.reading) : pendCell;
-      var ft3Disp = fresh ? esc(r.reading_ft3 || '\u2014') : '\u2014';
-      var galDisp = fresh ? esc(r.reading_gal || '\u2014') : '\u2014';
+      // Stale rows DO know a value (the held lock) — the meter has at least
+      // climbed to there, we just couldn't freshly read THIS frame. Show it as a
+      // "≥" lower bound (dim + amber conf already flag it as not a fresh read)
+      // instead of a useless "reading pending". Only truly-no-value rows pend.
+      var readingDisp = fresh ? esc(r.reading)
+        : (isStale && r.reading ? '≥ ' + esc(r.reading) : pendCell);
+      var _hasFt3 = r.reading_ft3 && r.reading_ft3 !== '\u2014';
+      var _hasGal = r.reading_gal && r.reading_gal !== '\u2014';
+      var ft3Disp = fresh ? esc(r.reading_ft3 || '\u2014')
+        : (isStale && _hasFt3 ? '≥ ' + esc(r.reading_ft3) : '\u2014');
+      var galDisp = fresh ? esc(r.reading_gal || '\u2014')
+        : (isStale && _hasGal ? '≥ ' + esc(r.reading_gal) : '\u2014');
       if (!fresh) { showDeltaFt3 = '\u2014'; showDeltaGal = '\u2014'; dColor = 'var(--text2)'; }
       var confColor = isStale ? 'var(--amber)' : c;
       var ridAttr = r.id ? ' onclick="location.href=\'/cam/reading/' + encodeURIComponent(r.id) + '\'" title="Click to inspect this reading + its captured image"' : '';

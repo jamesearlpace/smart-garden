@@ -1707,27 +1707,29 @@ def create_app(config, engine, weather, billing):
         conn = db.get_conn()
         try:
             rows = conn.execute(
-                "SELECT ts, reading_cf, gpm FROM flow_sample "
+                "SELECT ts, delta_cf, gpm FROM flow_sample "
                 # flow_sample.ts is T-separated; datetime() returns SPACE-
                 # separated, so a plain >= datetime(...) compares wrong and never
                 # bounds the window. Use strftime to build a T-separated bound.
                 "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
-                "AND reading_cf IS NOT NULL ORDER BY ts",
+                "ORDER BY ts",
                 (f"-{minutes} minutes",)).fetchall()
         finally:
             conn.close()
+        # METHODOLOGY: usage = the flow monitor's VALIDATED per-sample flow, NOT a
+        # re-diff of the raw lock value. flow_monitor.record() already nulls gpm
+        # for rejected samples — register went DOWN (a re-anchor/operator
+        # correction), an impossible over-ceiling jump, or a blind gap — so
+        # summing only accepted positive deltas counts real water. Re-anchors and
+        # bad reads can never become "usage", and this stays consistent with the
+        # leak monitor (one source of truth) instead of clamping the display.
         buckets, order, line = {}, [], []
         step = max(1, len(rows) // 400)
         cum = 0.0
-        prev_cf = None
         for i, r in enumerate(rows):
-            cf = r["reading_cf"]
-            # Cumulative USAGE only ever increases — count positive deltas and
-            # ignore downward jumps (a meter re-anchor/correction is not negative
-            # water). Keeps the line monotonic through re-anchors.
-            if prev_cf is not None and cf > prev_cf:
-                cum += (cf - prev_cf) * GAL
-            prev_cf = cf
+            accepted = r["gpm"] is not None
+            dgal = (max(0.0, r["delta_cf"] or 0.0) * GAL) if accepted else 0.0
+            cum += dgal
             try:
                 ep = _dt.fromisoformat(r["ts"]).timestamp()
             except Exception:
@@ -1735,34 +1737,33 @@ def create_app(config, engine, weather, billing):
             key = int(ep // bucket_s)
             b = buckets.get(key)
             if b is None:
-                b = {"ts": r["ts"], "last": cf, "gpm_sum": 0.0, "gpm_n": 0}
+                b = {"ts": r["ts"], "gal": 0.0, "gpm_sum": 0.0, "gpm_n": 0}
                 buckets[key] = b
                 order.append(key)
-            b["last"] = cf
             b["ts"] = r["ts"]
-            b["gpm_sum"] += float(r["gpm"] or 0)
-            b["gpm_n"] += 1
+            b["gal"] += dgal
+            if accepted:
+                b["gpm_sum"] += r["gpm"]
+                b["gpm_n"] += 1
             if i % step == 0:
                 line.append({"t": r["ts"], "gal": round(cum, 2)})
-        usage, prev = [], None
+        usage = []
         for k in order:
             b = buckets[k]
-            g = 0.0 if prev is None else max(0.0, (b["last"] - prev) * GAL)
             gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
-            usage.append({"t": b["ts"], "gallons": round(g, 2),
+            usage.append({"t": b["ts"], "gallons": round(b["gal"], 2),
                           "gpm": round(gpm, 2),
                           "start_ms": int(k * bucket_s * 1000),
                           "end_ms": int((k + 1) * bucket_s * 1000)})
-            prev = b["last"]
         if bucket_s < 60:
             blabel = f"{bucket_s}s"
         elif bucket_s < 3600:
             blabel = f"{bucket_s // 60} min"
         else:
             blabel = f"{bucket_s // 3600} hr"
-        # flat if every bucket after the first used ~nothing
-        steps = [u["gallons"] for u in usage[1:]]
-        total = round(sum(steps), 2)
+        # flat if every bucket used ~nothing
+        steps = [u["gallons"] for u in usage]
+        total = round(cum, 2)
         flat = bool(steps) and max(steps) < 0.3
         leak_hint = bool(steps) and len(steps) >= 5 and min(steps) > 0.3
         return jsonify({"minutes": minutes, "bucket_s": bucket_s,

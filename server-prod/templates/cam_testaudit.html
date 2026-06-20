@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Benchmark audit — Smart Garden</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
+.back{display:inline-block;margin-bottom:12px;font-size:.85rem}
+.bar{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:10px;
+  padding:10px 14px;font-size:.85rem;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.imgwrap{background:#11181f;text-align:center}
+.imgwrap img{max-width:100%;transform:rotate(180deg);display:block;margin:0 auto}
+.body{padding:10px 12px}
+.lbl{font-family:ui-monospace,monospace;font-size:1.1rem;font-weight:700}
+.lbl .dot{color:var(--text2)}
+.ai{font-size:.74rem;color:var(--text2);margin-top:3px;min-height:1em}
+.ai b{color:var(--amber)}
+.row{margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.inp{font-family:ui-monospace,monospace;font-size:.9rem;padding:5px 7px;width:120px;
+  border:1px solid var(--blue);border-radius:6px}
+.ok{font-size:.78rem;padding:5px 10px;border:1px solid var(--green);border-radius:6px;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600}
+.fix{font-size:.78rem;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:#8b5cf6;cursor:pointer;font-weight:600}
+.save{font-size:.78rem;padding:5px 12px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
+.msg{font-size:.74rem}
+.tag{font-size:.66rem;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:1px 6px}
+</style>
+</head>
+<body>
+<a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
+<h1>🔬 Benchmark audit</h1>
+<div class="sub" id="sub">Loading the held-out test frames…</div>
+<div class="bar">These are the <b>exact frames the model is graded on</b> (the permanent held-out set). If a <b>label here is wrong</b>, it caps the measured accuracy no matter how good the model is — so a wrong label looks like a model error. Confirm the ones that are right (✓), fix the ones that are wrong. A clean benchmark gives the true score and lets better models actually ship.</div>
+<div class="grid" id="grid"></div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmt9(s){ var d=(String(s||'').match(/\d/g)||[]).join(''); return d.length===9?d.slice(0,6)+'.'+d.slice(6):(d||''); }
+
+function card(it){
+  return '<div class="card" data-file="'+esc(it.file)+'" data-label="'+esc(it.label)+'">'
+    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="body">'
+    + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft³</span>'
+    + (it.corrected?' <span class="tag">✓ yours</span>':'')+'</div>'
+    + '<div class="ai" data-ai></div>'
+    + '<div class="row" data-row>'
+    + '<button class="ok">✓ Correct</button><button class="fix">Fix</button>'
+    + '<span class="msg"></span></div>'
+    + '</div></div>';
+}
+
+function wire(el){
+  var file = el.getAttribute('data-file');
+  var label = el.getAttribute('data-label');
+  var ai = el.querySelector('[data-ai]');
+  var row = el.querySelector('[data-row]');
+  var msg = row.querySelector('.msg');
+  // lazily ask the CNN what it reads, to flag likely-wrong labels
+  fetch('/api/cam/training/img/'+encodeURIComponent(file)); // warm
+  el.querySelector('.ok').onclick = function(){ commit(label); };
+  el.querySelector('.fix').onclick = function(){
+    row.innerHTML = '<input class="inp" maxlength="9" inputmode="numeric" value="'+esc(label)+'">'
+      + '<button class="save">Save</button><span class="msg"></span>';
+    var inp = row.querySelector('.inp'); inp.focus(); inp.select();
+    row.querySelector('.save').onclick = function(){ commit((inp.value.match(/\d/g)||[]).join('')); };
+    inp.onkeydown = function(e){ if(e.key==='Enter') row.querySelector('.save').click(); };
+  };
+  function commit(v){
+    var m = row.querySelector('.msg') || msg;
+    if(v.length!==9){ m.textContent='9 digits'; return; }
+    row.querySelectorAll('button').forEach(function(b){ b.disabled=true; });
+    fetch('/api/cam/usage-correct',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({label:v,file:file})}).then(function(r){return r.json();}).then(function(res){
+        if(res.ok){ el.style.opacity='.5';
+          m.innerHTML='<span style="color:var(--green);font-weight:700">✓ '+(v===label?'confirmed':'fixed')+'</span>'; }
+        else { row.querySelectorAll('button').forEach(function(b){ b.disabled=false; }); m.textContent=res.error||'failed'; }
+      }).catch(function(){ m.textContent='failed'; });
+  }
+}
+
+fetch('/api/cam/test-set?n=200').then(function(r){return r.json();}).then(function(d){
+  var f = d.frames||[];
+  document.getElementById('sub').innerHTML='<b>'+f.length+'</b> held-out benchmark frames. Each ✓ or fix makes the score honest.';
+  document.getElementById('grid').innerHTML = f.map(card).join('');
+  document.querySelectorAll('#grid .card').forEach(wire);
+}).catch(function(){ document.getElementById('sub').textContent='Could not load the test set.'; });
+</script>
+</body>
+</html>

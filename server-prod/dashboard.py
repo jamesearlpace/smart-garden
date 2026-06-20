@@ -3752,6 +3752,41 @@ def create_app(config, engine, weather, billing):
         """Active-learning review queue page."""
         return render_template("cam_review.html")
 
+    @app.route("/api/cam/test-set")
+    def cam_test_set():
+        """The PERMANENT held-out benchmark frames (same hash holdout the trainer
+        uses: sha1(name)%100 < 12). Surfacing them lets the user verify/fix their
+        LABELS, so the accuracy number AND the promotion gate reflect truth — not
+        oracle mislabels baked into the test set itself. A wrong test label caps
+        measured accuracy no matter how good the model is."""
+        import hashlib as _hl
+        n = query_int("n", 200, min_value=1, max_value=500)
+        manual = _load_manual()
+        out = []
+        try:
+            names = [f for f in os.listdir(BANK_DIR) if f.endswith(".jpg")]
+        except FileNotFoundError:
+            names = []
+        for name in names:
+            if (int(_hl.sha1(name.encode()).hexdigest(), 16) % 100) >= 12:
+                continue
+            mv = manual.get(name) or {}
+            lbl = mv.get("label") or name.split("_")[0]
+            if not (lbl and lbl.isdigit() and len(lbl) == 9):
+                continue
+            out.append({"file": name, "label": lbl,
+                        "img": "/api/cam/training/img/" + name,
+                        "corrected": bool(mv.get("action") == "correct")})
+            if len(out) >= n:
+                break
+        out.sort(key=lambda r: r["file"])
+        return jsonify({"frames": out, "count": len(out)})
+
+    @app.route("/cam/test-audit")
+    def cam_test_audit_page():
+        """Verify/fix the held-out benchmark labels so the accuracy is honest."""
+        return render_template("cam_testaudit.html")
+
     # Dir holding the verified-dataset manifests (cnn-dataset builder output).
     LABELS_DIR = os.environ.get("METER_LABELS_DIR",
                                 "/home/jamesearlpace/cnn-dataset-oracle")

@@ -1765,19 +1765,28 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/water-usage/frames")
     def api_water_usage_frames():
-        """Captured meter frames within a time window [start_ms, end_ms] so a
-        usage bar can be clicked to CONFIRM the reading actually happened. Pulls
-        from the per-reading frame ring (recent ~1h) and the banked gold frames
-        (sparse but longer history). Each frame has its timestamp + reading."""
+        """Captured meter frames that JUSTIFY a usage bar: the reading just
+        BEFORE the bucket plus the frames within it, so the climb (before →
+        after) can be seen. Each frame carries an id/file so a misread can be
+        corrected into training. Pulls from the per-reading frame ring (recent
+        ~1h) and the banked gold frames (sparse but longer history)."""
         start_ms = query_int("start_ms", 0, min_value=0, max_value=4102444800000)
         end_ms = query_int("end_ms", 0, min_value=0, max_value=4102444800000)
         if end_ms <= start_ms:
-            return jsonify({"frames": []})
+            return jsonify({"frames": [], "before": None})
         from datetime import datetime as _dt
-        found = {}            # ms -> frame dict (dedup by timestamp)
 
         def _hhmmss(ms):
             return _dt.fromtimestamp(ms / 1000.0).strftime("%H:%M:%S")
+
+        in_win = {}          # ms -> frame dict (in [start,end))
+        before = {}          # ms -> frame dict (up to 1h before start)
+
+        def _add(ms, rec):
+            if start_ms <= ms < end_ms:
+                in_win[ms] = rec
+            elif start_ms - 3600000 <= ms < start_ms:
+                before[ms] = rec
 
         # banked gold frames: <reading>_<epoch_ms>[_oracle].jpg
         try:
@@ -1791,11 +1800,9 @@ def create_app(config, engine, weather, billing):
                     ms = int(parts[1])
                 except ValueError:
                     continue
-                if start_ms <= ms < end_ms:
-                    found[ms] = {"ts": _hhmmss(ms), "ms": ms,
-                                 "reading": parts[0],
-                                 "img": "/api/cam/training/img/" + name,
-                                 "source": "banked"}
+                _add(ms, {"ts": _hhmmss(ms), "ms": ms, "reading": parts[0],
+                          "img": "/api/cam/training/img/" + name,
+                          "file": name, "source": "banked"})
         except FileNotFoundError:
             pass
         # per-reading frame ring: <epoch_ms>-<seq>.jpg
@@ -1808,21 +1815,62 @@ def create_app(config, engine, weather, billing):
                     ms = int(rid.split("-")[0])
                 except (ValueError, IndexError):
                     continue
-                if start_ms <= ms < end_ms and ms not in found:
-                    entry = meter_reader.get_reading_by_id(rid)
-                    rd = (entry or {}).get("reading") or ""
-                    found[ms] = {"ts": _hhmmss(ms), "ms": ms,
-                                 "reading": rd,
-                                 "img": "/api/cam/frame/" + rid,
-                                 "source": "live"}
+                if ms in in_win or ms in before:
+                    continue
+                entry = meter_reader.get_reading_by_id(rid)
+                rd = (entry or {}).get("reading") or ""
+                _add(ms, {"ts": _hhmmss(ms), "ms": ms, "reading": rd,
+                          "img": "/api/cam/frame/" + rid,
+                          "id": rid, "source": "live"})
         except FileNotFoundError:
             pass
-        frames = [found[k] for k in sorted(found)]
-        # cap so a wide bucket doesn't return thousands
+
+        frames = [in_win[k] for k in sorted(in_win)]
         if len(frames) > 60:
             step = len(frames) / 60.0
             frames = [frames[int(i * step)] for i in range(60)]
-        return jsonify({"frames": frames, "count": len(found)})
+        before_frame = before[max(before)] if before else None
+        return jsonify({"frames": frames, "count": len(in_win),
+                        "before": before_frame})
+
+    @app.route("/api/cam/usage-correct", methods=["POST"])
+    def api_usage_correct():
+        """Human correction of a captured frame's reading, from the usage view.
+        Works for BOTH banked frames (have a training file) and live ring frames
+        (materialized into the training set on correction). Body: {label, file?,
+        id?, ms?}. Writes manual_labels.jsonl so it trains like a gallery fix."""
+        import json as _json
+        import shutil as _shutil
+        data = request.get_json(silent=True) or {}
+        lbl = "".join(c for c in str(data.get("label", "")) if c.isdigit())
+        if len(lbl) != 9:
+            return jsonify({"ok": False, "error": "label must be 9 digits"}), 400
+        fname = os.path.basename(str(data.get("file", "")))
+        if not (fname and fname.endswith(".jpg")):
+            # live ring frame → copy it into the training set under a gold name
+            rid = os.path.basename(str(data.get("id", "")))
+            try:
+                ms = int(data.get("ms") or rid.split("-")[0])
+            except Exception:
+                ms = 0
+            src = os.path.join(FRAME_DIR, f"{rid}.jpg")
+            if not rid or not os.path.exists(src):
+                return jsonify({"ok": False, "error": "frame not found"}), 404
+            fname = f"{lbl}_{ms}_manual.jpg"
+            try:
+                os.makedirs(BANK_DIR, exist_ok=True)
+                _shutil.copy2(src, os.path.join(BANK_DIR, fname))
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"bank: {e}"}), 500
+        rec = {"file": fname, "action": "correct", "label": lbl,
+               "ts": datetime.now().isoformat()}
+        try:
+            os.makedirs(LABELS_DIR, exist_ok=True)
+            with open(MANUAL_PATH, "a") as f:
+                f.write(_json.dumps(rec) + "\n")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "saved": rec})
 
     @app.route("/api/water-cost")
     def api_water_cost():

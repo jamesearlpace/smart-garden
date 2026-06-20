@@ -38,6 +38,12 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .fcell .cap{padding:5px 7px;background:var(--card);font-size:.72rem;color:var(--text2);
   font-family:ui-monospace,monospace}
 .fcell .cap b{color:var(--text);font-size:.82rem}
+.fixrow{margin-top:4px}
+.fixbtn{font-size:.66rem;padding:2px 6px;border:1px solid var(--border);border-radius:5px;
+  background:var(--bg);cursor:pointer;color:#8b5cf6}
+.fixinp{font-family:ui-monospace,monospace;font-size:.78rem;padding:2px 5px;width:88px;
+  border:1px solid var(--blue);border-radius:5px}
+.savebtn{font-size:.66rem;padding:2px 8px;border:none;border-radius:5px;background:var(--blue);color:#fff;cursor:pointer}
 </style>
 </head>
 <body>
@@ -74,6 +80,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
               [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
 var minutes = 60, barC = null, lineC = null, LAST_USAGE = [];
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
 function tlabel(ts, fine){
   // ts = 'YYYY-MM-DDTHH:MM:SS' (local). Show HH:MM:SS for fine, HH:MM else.
@@ -125,6 +134,43 @@ function render(d){
   });
 }
 
+function frameCell(x, tag){
+  var lbl = x.reading && x.reading.length===9
+    ? x.reading.slice(0,6)+'.'+x.reading.slice(6) : (x.reading||'');
+  var attr = x.file ? ('data-file="'+esc(x.file)+'"') : ('data-id="'+esc(x.id)+'"');
+  return '<div class="fcell" '+attr+' data-ms="'+x.ms+'">'
+    + '<img loading="lazy" src="'+x.img+'">'
+    + '<div class="cap">'+(tag?('<span style="color:#0d9488;font-weight:700">'+tag+'</span> '):'')
+    + '<b>'+(lbl||'—')+'</b> ft³<br>'+x.ts+' · '+x.source
+    + '<div class="fixrow"><button class="fixbtn">Fix reading</button></div></div></div>';
+}
+
+function wireFixes(){
+  document.querySelectorAll('#modal-grid .fcell').forEach(function(cell){
+    var btn = cell.querySelector('.fixbtn'); if(!btn) return;
+    btn.onclick = function(){
+      var row = cell.querySelector('.fixrow');
+      var cur = (cell.querySelector('b').textContent.match(/\d/g)||[]).join('');
+      row.innerHTML = '<input class="fixinp" maxlength="9" value="'+cur+'"> <button class="savebtn">Save</button>';
+      var inp = row.querySelector('.fixinp'); inp.focus(); inp.select();
+      row.querySelector('.savebtn').onclick = function(){
+        var v=(inp.value.match(/\d/g)||[]).join('');
+        if(v.length!==9){ inp.style.borderColor='#ef4444'; return; }
+        var body={label:v};
+        if(cell.getAttribute('data-file')) body.file=cell.getAttribute('data-file');
+        else { body.id=cell.getAttribute('data-id'); body.ms=parseInt(cell.getAttribute('data-ms'),10); }
+        fetch('/api/cam/usage-correct',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(res){
+            if(res.ok){ cell.querySelector('b').textContent=v.slice(0,6)+'.'+v.slice(6);
+              row.innerHTML='<span style="color:#16a34a;font-weight:700">✓ saved to training</span>'; }
+            else { row.innerHTML='<span style="color:#ef4444">'+esc(res.error||'failed')+'</span>'; }
+          }).catch(function(){ row.innerHTML='<span style="color:#ef4444">failed</span>'; });
+      };
+      inp.onkeydown=function(e){ if(e.key==='Enter') row.querySelector('.savebtn').click(); };
+    };
+  });
+}
+
 function showFrames(u){
   var m = document.getElementById('modal');
   document.getElementById('modal-title').textContent =
@@ -134,16 +180,18 @@ function showFrames(u){
   m.classList.add('on');
   fetch('/api/water-usage/frames?start_ms='+u.start_ms+'&end_ms='+u.end_ms)
     .then(function(r){return r.json();}).then(function(d){
-      var f = d.frames || [];
-      document.getElementById('modal-sub').textContent =
-        f.length ? (d.count+' frame(s) captured this window'+(d.count>f.length?' (showing '+f.length+')':''))
-        : 'No saved photos for this window (frames are kept ~1h live + a sample of banked readings; older windows are pruned).';
-      document.getElementById('modal-grid').innerHTML = f.map(function(x){
-        var lbl = x.reading && x.reading.length===9
-          ? x.reading.slice(0,6)+'.'+x.reading.slice(6) : (x.reading||'');
-        return '<div class="fcell"><img loading="lazy" src="'+x.img+'">'
-          + '<div class="cap"><b>'+(lbl||'—')+'</b> ft³<br>'+x.ts+' · '+x.source+'</div></div>';
-      }).join('');
+      var f = d.frames || [], html = '';
+      if (d.before){
+        html += '<div style="grid-column:1/-1;font-weight:700;color:#5f7082;font-size:.8rem">⬅ Before this window (last reading prior):</div>';
+        html += frameCell(d.before, 'BEFORE');
+        html += '<div style="grid-column:1/-1;font-weight:700;color:#5f7082;font-size:.8rem;margin-top:6px">During this window'+(u.gallons?(' — should climb by ~'+u.gallons+' gal'):'')+':</div>';
+      }
+      document.getElementById('modal-sub').innerHTML = f.length
+        ? (d.count+' frame(s) in this window. If a reading looks wrong, click <b>Fix reading</b> — your correction goes straight into training.')
+        : 'No saved photos for this window (frames kept ~1h live + a sample of banked readings; older windows pruned).';
+      html += f.map(function(x){ return frameCell(x, ''); }).join('');
+      document.getElementById('modal-grid').innerHTML = html;
+      wireFixes();
     }).catch(function(){ document.getElementById('modal-sub').textContent='Could not load frames.'; });
 }
 document.getElementById('modal-x').onclick = function(){ document.getElementById('modal').classList.remove('on'); };

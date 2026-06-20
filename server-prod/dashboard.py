@@ -2512,9 +2512,18 @@ def create_app(config, engine, weather, billing):
     # and must be corroborated before it moves the lock. 200 counts = 0.2 ft³.
     ORACLE_IDLE_JITTER = float(os.environ.get("METER_ORACLE_IDLE_JITTER", "200"))
     # Two oracle reads within this many counts of each other are reading the
-    # same physical state — used to corroborate a big jump or a downward
-    # correction before committing it (one-off garbage never repeats).
-    ORACLE_CORROB_TOL = float(os.environ.get("METER_ORACLE_CORROB_TOL", "300"))
+    # same physical state — used to corroborate a meaningful move (real
+    # household use, a downward correction, or stale catch-up) before committing
+    # it. Kept TIGHT: under glare the oracle scatters wildly (e.g. 634 then 911
+    # for a 620 meter), and a loose tol would let two unrelated garbles "agree".
+    # A readable meter (real use or static) reads consistently within a few
+    # counts, so a tight tol commits only genuinely readable states.
+    ORACLE_CORROB_TOL = float(os.environ.get("METER_ORACLE_CORROB_TOL", "40"))
+    # A forward step this small (counts) with no sprinkler running is in the
+    # last-digit GLARE-NOISE range — real household water use (shower/toilet/tap)
+    # moves the register far more. Tiny steps need an exact-repeat to commit, so
+    # noise can't ratchet the lock upward. 20 counts ≈ 0.02 ft³ ≈ 0.15 gal.
+    ORACLE_NOISE_BAND = int(os.environ.get("METER_ORACLE_NOISE_BAND", "20"))
     # Max gold-dataset images to keep PER DISTINCT reading. One clean image per
     # number is enough to train a per-digit model (a model learns nothing extra
     # from 3 copies of the same digits), and it keeps the set lean. Raise via env
@@ -2833,8 +2842,14 @@ def create_app(config, engine, weather, billing):
             #     repeats, so it's held as "pending"; two independent reads that
             #     agree are trusted (this is what lets the lock self-heal back
             #     DOWN after a local over-read, instead of being stuck high).
+            # A water meter moves with ALL household use (showers, toilets,
+            # taps) — not just sprinklers — so "no zone running" does NOT mean
+            # the meter is static. But under glare the oracle's last-digit
+            # guesses jitter by a few counts, and a forward-only lock would
+            # ratchet on that noise. Discriminate by MAGNITUDE instead: real
+            # water use moves the register far more than the last-digit noise.
             commit = False
-            idle = _active_gpm() <= 0
+            zone_on = _active_gpm() > 0
             if lg is None:
                 commit = True
             else:
@@ -2842,25 +2857,34 @@ def create_app(config, engine, weather, billing):
                 prev = _oracle_state.get("pending_val")
                 if d == 0:
                     commit = True                      # confirms the held value
-                elif 0 < d <= ceiling and not idle:
-                    commit = True                      # real flow — a zone is ON
-                elif prev is not None and abs(val - prev) <= (
-                        0 if idle else ORACLE_CORROB_TOL):
-                    # Corroborated by a 2nd read. When IDLE (no zone running) the
-                    # meter is physically STATIC, so a "forward" oracle read is
-                    # almost always a glare misread — require an EXACT repeat
-                    # (tol 0) before moving the lock. Random misreads (666, 667,
-                    # 668…) never repeat exactly, so the lock HOLDS instead of
-                    # ratcheting up on noise. A zone running uses the normal tol.
+                elif zone_on and 0 < d <= ceiling:
+                    commit = True                      # sprinklers on — real flow
+                elif 0 < d <= ORACLE_NOISE_BAND:
+                    # tiny forward step, no sprinkler running: almost certainly
+                    # last-digit GLARE NOISE (a shower/toilet/tap moves the meter
+                    # far more). Commit only if a 2nd read EXACTLY repeats it —
+                    # random noise never does, so the lock holds (no ratchet).
+                    if prev is not None and val == prev:
+                        commit = True
+                    else:
+                        _oracle_state["pending_val"] = val
+                        _oracle_state["pending_ts"] = now
+                        log.info("oracle %09d vs lock %s held — last-digit noise "
+                                 "guard (no sprinkler flow)", val, lg)
+                        return
+                elif prev is not None and abs(val - prev) <= ORACLE_CORROB_TOL:
+                    # A MEANINGFUL move — real household use (shower/toilet/tap),
+                    # or stale catch-up — confirmed by a 2nd agreeing read. This
+                    # is what lets non-sprinkler usage register while one-off
+                    # garbage (which never repeats) is rejected.
                     commit = True
-                    log.info("oracle move corroborated: %09d (lock %s, prev %s, "
-                             "idle=%s)", val, lg, prev, idle)
+                    log.info("oracle move corroborated: %09d (lock %s, prev %s)",
+                             val, lg, prev)
                 else:
                     _oracle_state["pending_val"] = val
                     _oracle_state["pending_ts"] = now
-                    log.info("oracle %09d vs lock %s HELD (idle=%s, ceiling=%.0f)"
-                             " — static meter / waiting for a confirming read",
-                             val, lg, idle, ceiling)
+                    log.info("oracle %09d vs lock %s held for a confirming read",
+                             val, lg)
                     return
             if not commit:
                 return

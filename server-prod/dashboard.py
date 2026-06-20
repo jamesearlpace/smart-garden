@@ -1693,52 +1693,136 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/api/water-usage")
     def api_water_usage():
-        """Water usage over time for leak-spotting. Buckets the meter reading
-        (flow_sample.reading_cf, cumulative ft³) into per-hour deltas → gallons
-        used each hour. Flat overnight = no leak; a steady small bar every hour
-        = a slow leak. Returns hourly points + a downsampled reading line."""
+        """Water usage over time for leak-spotting, at any zoom. Buckets the
+        meter reading (flow_sample.reading_cf, cumulative ft³) into deltas →
+        gallons used per bucket. Bucket size auto-scales to the window
+        (?minutes=N) so 1 min shows 15s buckets and 12 h shows ~20 min buckets.
+        Flat = no water moving; a steady small step every bucket = a slow leak."""
+        from datetime import datetime as _dt
         GAL = 7.48052
-        hours = query_int("hours", 48, min_value=2, max_value=336)
+        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
+        win_s = minutes * 60
+        # aim for ~40 buckets, snapped to the 15s sample cadence
+        bucket_s = max(15, int(round(win_s / 40 / 15)) * 15)
         conn = db.get_conn()
         try:
             rows = conn.execute(
-                "SELECT ts, reading_cf FROM flow_sample "
-                "WHERE ts >= datetime('now','localtime',?) "
+                "SELECT ts, reading_cf, gpm FROM flow_sample "
+                # flow_sample.ts is T-separated; datetime() returns SPACE-
+                # separated, so a plain >= datetime(...) compares wrong and never
+                # bounds the window. Use strftime to build a T-separated bound.
+                "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
                 "AND reading_cf IS NOT NULL ORDER BY ts",
-                (f"-{hours} hours",)).fetchall()
+                (f"-{minutes} minutes",)).fetchall()
         finally:
             conn.close()
-        # last reading in each hour bucket (reading is cumulative)
-        per_hour = {}          # 'YYYY-MM-DDTHH' -> last reading_cf
-        line = []              # downsampled (ts, gallons-from-start) for the line
-        base = None
+        buckets, order, base, line = {}, [], None, []
+        step = max(1, len(rows) // 400)
         for i, r in enumerate(rows):
-            ts = r["ts"]
             cf = r["reading_cf"]
             if base is None:
                 base = cf
-            per_hour[ts[:13]] = cf      # 'YYYY-MM-DDTHH'
-            if i % 20 == 0:             # ~ every 5 min
-                line.append({"t": ts, "gal": round((cf - base) * GAL, 1)})
-        hrs = sorted(per_hour)
-        usage = []
-        prev = None
-        for h in hrs:
-            cur = per_hour[h]
-            if prev is not None:
-                g = (cur - prev) * GAL
-                if g < 0:
-                    g = 0.0          # meter is monotonic; clip read jitter
-                usage.append({"hour": h, "gallons": round(g, 1)})
-            prev = cur
-        # simple leak heuristic: overnight (00:00–05:00 local) hours that all
-        # show some usage with nothing scheduled → possible slow leak.
-        night = [u for u in usage if 0 <= int(u["hour"][11:13]) <= 5]
-        night_min = min((u["gallons"] for u in night), default=0.0)
-        leak_hint = (len(night) >= 3 and night_min > 0.5)
-        return jsonify({"hours": hours, "usage": usage, "line": line,
-                        "leak_hint": leak_hint,
-                        "night_min_gph": round(night_min, 1)})
+            try:
+                ep = _dt.fromisoformat(r["ts"]).timestamp()
+            except Exception:
+                continue
+            key = int(ep // bucket_s)
+            b = buckets.get(key)
+            if b is None:
+                b = {"ts": r["ts"], "last": cf, "gpm_sum": 0.0, "gpm_n": 0}
+                buckets[key] = b
+                order.append(key)
+            b["last"] = cf
+            b["ts"] = r["ts"]
+            b["gpm_sum"] += float(r["gpm"] or 0)
+            b["gpm_n"] += 1
+            if i % step == 0:
+                line.append({"t": r["ts"], "gal": round((cf - base) * GAL, 2)})
+        usage, prev = [], None
+        for k in order:
+            b = buckets[k]
+            g = 0.0 if prev is None else max(0.0, (b["last"] - prev) * GAL)
+            gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
+            usage.append({"t": b["ts"], "gallons": round(g, 2),
+                          "gpm": round(gpm, 2),
+                          "start_ms": int(k * bucket_s * 1000),
+                          "end_ms": int((k + 1) * bucket_s * 1000)})
+            prev = b["last"]
+        if bucket_s < 60:
+            blabel = f"{bucket_s}s"
+        elif bucket_s < 3600:
+            blabel = f"{bucket_s // 60} min"
+        else:
+            blabel = f"{bucket_s // 3600} hr"
+        # flat if every bucket after the first used ~nothing
+        steps = [u["gallons"] for u in usage[1:]]
+        total = round(sum(steps), 2)
+        flat = bool(steps) and max(steps) < 0.3
+        leak_hint = bool(steps) and len(steps) >= 5 and min(steps) > 0.3
+        return jsonify({"minutes": minutes, "bucket_s": bucket_s,
+                        "bucket_label": blabel, "usage": usage, "line": line,
+                        "total_gal": total, "flat": flat, "leak_hint": leak_hint})
+
+    @app.route("/api/water-usage/frames")
+    def api_water_usage_frames():
+        """Captured meter frames within a time window [start_ms, end_ms] so a
+        usage bar can be clicked to CONFIRM the reading actually happened. Pulls
+        from the per-reading frame ring (recent ~1h) and the banked gold frames
+        (sparse but longer history). Each frame has its timestamp + reading."""
+        start_ms = query_int("start_ms", 0, min_value=0, max_value=4102444800000)
+        end_ms = query_int("end_ms", 0, min_value=0, max_value=4102444800000)
+        if end_ms <= start_ms:
+            return jsonify({"frames": []})
+        from datetime import datetime as _dt
+        found = {}            # ms -> frame dict (dedup by timestamp)
+
+        def _hhmmss(ms):
+            return _dt.fromtimestamp(ms / 1000.0).strftime("%H:%M:%S")
+
+        # banked gold frames: <reading>_<epoch_ms>[_oracle].jpg
+        try:
+            for name in os.listdir(BANK_DIR):
+                if not name.endswith(".jpg"):
+                    continue
+                parts = name[:-4].split("_")
+                if len(parts) < 2:
+                    continue
+                try:
+                    ms = int(parts[1])
+                except ValueError:
+                    continue
+                if start_ms <= ms < end_ms:
+                    found[ms] = {"ts": _hhmmss(ms), "ms": ms,
+                                 "reading": parts[0],
+                                 "img": "/api/cam/training/img/" + name,
+                                 "source": "banked"}
+        except FileNotFoundError:
+            pass
+        # per-reading frame ring: <epoch_ms>-<seq>.jpg
+        try:
+            for name in os.listdir(FRAME_DIR):
+                if not name.endswith(".jpg"):
+                    continue
+                rid = name[:-4]
+                try:
+                    ms = int(rid.split("-")[0])
+                except (ValueError, IndexError):
+                    continue
+                if start_ms <= ms < end_ms and ms not in found:
+                    entry = meter_reader.get_reading_by_id(rid)
+                    rd = (entry or {}).get("reading") or ""
+                    found[ms] = {"ts": _hhmmss(ms), "ms": ms,
+                                 "reading": rd,
+                                 "img": "/api/cam/frame/" + rid,
+                                 "source": "live"}
+        except FileNotFoundError:
+            pass
+        frames = [found[k] for k in sorted(found)]
+        # cap so a wide bucket doesn't return thousands
+        if len(frames) > 60:
+            step = len(frames) / 60.0
+            frames = [frames[int(i * step)] for i in range(60)]
+        return jsonify({"frames": frames, "count": len(found)})
 
     @app.route("/api/water-cost")
     def api_water_cost():

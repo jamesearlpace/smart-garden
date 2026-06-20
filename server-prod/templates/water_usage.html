@@ -26,6 +26,18 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .banner.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
 .banner.muted{background:#f1f5f9;border:1px solid var(--border);color:var(--text2)}
 .wrap{position:relative;height:300px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
+  padding:24px;overflow:auto}
+.modal.on{display:block}
+.modal-card{background:var(--card);border-radius:12px;max-width:1000px;margin:0 auto;padding:16px 18px}
+.modal-card h3{font-size:1.05rem;margin-bottom:2px}
+.modal-card .x{float:right;cursor:pointer;font-size:1.3rem;color:var(--text2);line-height:1}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
+.fcell{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0b1117}
+.fcell img{width:100%;display:block;transform:rotate(180deg);background:#11181f}
+.fcell .cap{padding:5px 7px;background:var(--card);font-size:.72rem;color:var(--text2);
+  font-family:ui-monospace,monospace}
+.fcell .cap b{color:var(--text);font-size:.82rem}
 </style>
 </head>
 <body>
@@ -38,47 +50,62 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="bar" id="chips"></div>
 
 <div class="card">
-  <h2>Gallons used per hour</h2>
-  <div class="hint">Each bar = water used that hour. Overnight bars near zero = no leak. A small bar <b>every</b> hour (incl. 1–5 AM with nothing scheduled) suggests a slow leak.</div>
+  <h2 id="bar-title">Gallons used per bucket</h2>
+  <div class="hint">Each bar = water used in that time bucket. <b>Click a bar</b> to see the captured meter photos from that window and confirm it really happened. All bars near zero = no water moving.</div>
   <div class="wrap"><canvas id="barChart"></canvas></div>
 </div>
 
 <div class="card">
   <h2>Cumulative usage</h2>
-  <div class="hint">Total gallons since the start of the window. A flat line = no water moving. A steady upward slope overnight = a leak.</div>
+  <div class="hint">Total gallons since the start of the window. A flat line = no water moving. A steady upward slope = continuous flow (a leak, if nothing's running).</div>
   <div class="wrap"><canvas id="lineChart"></canvas></div>
 </div>
 
+<div class="modal" id="modal">
+  <div class="modal-card">
+    <span class="x" id="modal-x">&times;</span>
+    <h3 id="modal-title">Captured frames</h3>
+    <div class="hint" id="modal-sub"></div>
+    <div class="fgrid" id="modal-grid"></div>
+  </div>
+</div>
+
 <script>
-var RANGES = [[24,'24 h'],[48,'48 h'],[72,'3 days'],[168,'7 days']];
-var hours = 48, barC = null, lineC = null;
+var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
+              [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
+var minutes = 60, barC = null, lineC = null, LAST_USAGE = [];
+
+function tlabel(ts, fine){
+  // ts = 'YYYY-MM-DDTHH:MM:SS' (local). Show HH:MM:SS for fine, HH:MM else.
+  return fine ? ts.slice(11,19) : ts.slice(11,16);
+}
 
 function render(d){
   var usage = d.usage || [], line = d.line || [];
+  LAST_USAGE = usage;
+  var fine = d.bucket_s < 60;
+  document.getElementById('bar-title').textContent = 'Gallons used per ' + (d.bucket_label||'bucket');
   document.getElementById('sub').innerHTML =
-    '<b>'+usage.length+'</b> hours · meter sampled every 15s';
+    '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
+    + (d.total_gal||0)+' gal total this window · meter sampled every 15s';
   var b = document.getElementById('banner');
   if (!usage.length){ b.className='banner muted'; b.textContent='No data in this window yet.'; }
   else if (d.leak_hint){ b.className='banner warn';
-    b.textContent='⚠️ Possible slow leak — every overnight hour used at least '+d.night_min_gph+' gal (nothing scheduled then).'; }
-  else { b.className='banner ok';
-    b.textContent='✅ No leak signature — at least one quiet overnight hour with ~0 usage.'; }
+    b.textContent='⚠️ Continuous flow — every bucket used water. If nothing is running, that points to a leak.'; }
+  else if (d.flat){ b.className='banner ok';
+    b.textContent='✅ Flat — no measurable water use across this window.'; }
+  else { b.className='banner muted';
+    b.textContent='Some water use this window ('+(d.total_gal||0)+' gal) with quiet buckets in between — normal on/off usage.'; }
 
-  var labels = usage.map(function(u){
-    var h = u.hour.slice(11,13), day = u.hour.slice(5,10);
-    return day+' '+h+':00';
-  });
+  var labels = usage.map(function(u){ return tlabel(u.t, fine); });
   var gph = usage.map(function(u){ return u.gallons; });
-  var colors = usage.map(function(u){
-    var h = parseInt(u.hour.slice(11,13),10);
-    return (h>=0&&h<=5) ? '#8b5cf6' : '#3b82f6';   // overnight = purple
-  });
   if (barC) barC.destroy();
   barC = new Chart(document.getElementById('barChart'), {
     type:'bar',
-    data:{labels:labels, datasets:[{label:'gal/hour', data:gph,
-      backgroundColor:colors, borderRadius:3}]},
+    data:{labels:labels, datasets:[{label:'gal', data:gph,
+      backgroundColor:'#3b82f6', borderRadius:3}]},
     options:{responsive:true,maintainAspectRatio:false,
+      onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u) showFrames(u); } },
       plugins:{legend:{display:false}},
       scales:{x:{ticks:{maxRotation:90,minRotation:45,autoSkip:true,maxTicksLimit:24,font:{size:9}}},
         y:{beginAtZero:true,title:{display:true,text:'gallons'}}}}
@@ -87,7 +114,7 @@ function render(d){
   if (lineC) lineC.destroy();
   lineC = new Chart(document.getElementById('lineChart'), {
     type:'line',
-    data:{labels:line.map(function(p){return p.t.slice(5,16).replace('T',' ');}),
+    data:{labels:line.map(function(p){return tlabel(p.t, fine);}),
       datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
         borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
         fill:true, pointRadius:0, borderWidth:2, tension:.2}]},
@@ -98,14 +125,38 @@ function render(d){
   });
 }
 
+function showFrames(u){
+  var m = document.getElementById('modal');
+  document.getElementById('modal-title').textContent =
+    u.gallons + ' gal · ' + (u.t ? u.t.slice(11,19) : '');
+  document.getElementById('modal-sub').textContent = 'Loading captured frames…';
+  document.getElementById('modal-grid').innerHTML = '';
+  m.classList.add('on');
+  fetch('/api/water-usage/frames?start_ms='+u.start_ms+'&end_ms='+u.end_ms)
+    .then(function(r){return r.json();}).then(function(d){
+      var f = d.frames || [];
+      document.getElementById('modal-sub').textContent =
+        f.length ? (d.count+' frame(s) captured this window'+(d.count>f.length?' (showing '+f.length+')':''))
+        : 'No saved photos for this window (frames are kept ~1h live + a sample of banked readings; older windows are pruned).';
+      document.getElementById('modal-grid').innerHTML = f.map(function(x){
+        var lbl = x.reading && x.reading.length===9
+          ? x.reading.slice(0,6)+'.'+x.reading.slice(6) : (x.reading||'');
+        return '<div class="fcell"><img loading="lazy" src="'+x.img+'">'
+          + '<div class="cap"><b>'+(lbl||'—')+'</b> ft³<br>'+x.ts+' · '+x.source+'</div></div>';
+      }).join('');
+    }).catch(function(){ document.getElementById('modal-sub').textContent='Could not load frames.'; });
+}
+document.getElementById('modal-x').onclick = function(){ document.getElementById('modal').classList.remove('on'); };
+document.getElementById('modal').onclick = function(e){ if(e.target===this) this.classList.remove('on'); };
+
 function load(){
   document.getElementById('chips').innerHTML = RANGES.map(function(r){
-    return '<span class="chip'+(r[0]===hours?' on':'')+'" data-h="'+r[0]+'">'+r[1]+'</span>';
+    return '<span class="chip'+(r[0]===minutes?' on':'')+'" data-m="'+r[0]+'">'+r[1]+'</span>';
   }).join('');
   document.querySelectorAll('.chip').forEach(function(ch){
-    ch.onclick = function(){ hours = parseInt(ch.getAttribute('data-h'),10); load(); };
+    ch.onclick = function(){ minutes = parseInt(ch.getAttribute('data-m'),10); load(); };
   });
-  fetch('/api/water-usage?hours='+hours).then(function(r){return r.json();})
+  fetch('/api/water-usage?minutes='+minutes).then(function(r){return r.json();})
     .then(render)
     .catch(function(){ document.getElementById('sub').textContent='Could not load usage.'; });
 }

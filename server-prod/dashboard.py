@@ -2012,6 +2012,21 @@ def create_app(config, engine, weather, billing):
                 f.write(_json.dumps(rec) + "\n")
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
+        # If this correction is for a RECENT frame, it's the current ground truth
+        # — re-anchor the live lock to it too, so fixing a record also un-sticks a
+        # stale displayed reading (not just trains the model). OLD frames only
+        # train: the lock has legitimately advanced past them, so re-anchoring
+        # backward to a historical value would be wrong.
+        reanchored = False
+        try:
+            import re as _re
+            fm = _re.search(r"_(\d{10,})", fname)
+            frame_ms = int(fm.group(1)) if fm else 0
+            if frame_ms and (int(time.time() * 1000) - frame_ms) <= 15 * 60 * 1000:
+                reanchored = bool(
+                    meter_reader.reanchor(int(lbl), source="manual-correction"))
+        except Exception as e:
+            log.debug("correction re-anchor skipped: %s", e)
         # Smart-update the surrounding frames: re-run Anchor & Propagate so every
         # banked frame between the user's anchors snaps to the corrected
         # monotonic value. No AI, ~0.05s, so it's safe inline on each save — the
@@ -2026,7 +2041,8 @@ def create_app(config, engine, weather, billing):
             prop = _json.load(open(PROPAGATE_STATUS)).get("counts", {})
         except Exception as e:
             log.debug("auto-propagate after correction skipped: %s", e)
-        return jsonify({"ok": True, "saved": rec, "propagated": prop})
+        return jsonify({"ok": True, "saved": rec, "propagated": prop,
+                        "reanchored": reanchored})
 
     @app.route("/api/water-cost")
     def api_water_cost():

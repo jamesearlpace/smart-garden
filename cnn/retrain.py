@@ -621,6 +621,12 @@ def train_challenger(train_rows, test_loader, device):
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS)
     lossf = nn.CrossEntropyLoss(reduction="none")
     best_f, best_state = -1.0, None
+    # Early stop: eval every few epochs, keep the BEST model seen, and stop once
+    # full-9 has plateaued for PATIENCE evals. Safe — we always return best_state,
+    # so stopping early can only save time, never lower quality. (v2 plateaus ~ep50.)
+    EVAL_EVERY = 5
+    PATIENCE = 3            # stop after this many evals with no full-9 gain
+    stale = 0
     for ep in range(1, EPOCHS + 1):
         model.train()
         for x, y, w in train_ld:
@@ -632,14 +638,20 @@ def train_challenger(train_rows, test_loader, device):
             loss.backward()
             opt.step()
         sched.step()
-        if ep % 10 == 0 or ep == EPOCHS:
+        if ep % EVAL_EVERY == 0 or ep == EPOCHS:
             d, f = evaluate(model, test_loader, device)
+            improved = f > best_f + 1e-3
             if f > best_f:
                 best_f = f
                 best_state = {k: v.cpu().clone()
                               for k, v in model.state_dict().items()}
             log(f"  ep {ep:3d}  test digit {d:.3f}  full {f:.3f}"
-                + ("  *" if f >= best_f else ""))
+                + ("  *" if improved else ""))
+            stale = 0 if improved else stale + 1
+            if stale >= PATIENCE:
+                log(f"  early stop at ep {ep}: no full-9 gain in "
+                    f"{PATIENCE * EVAL_EVERY} epochs (best {best_f:.3f})")
+                break
     model.load_state_dict(best_state)
     return model
 

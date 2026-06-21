@@ -28,6 +28,7 @@
 | Champion | Per-digit | Full-9 | Date | What it beat / note |
 |----------|-----------|--------|------|---------------------|
 | v5 | 0.9518 | 0.6726 | 2026-06-20 | current champion; synth+weighting and glare-aug both TIED, not promoted |
+| v5 (re-measured) | **0.9601** | **0.8203** | 2026-06-21 | SAME model, scored on CLEANED benchmark — 0.673 was a wrong-label artifact. first-7=0.9141, first-6=0.9453. |
 
 **Failed experiments (do NOT re-propose without new evidence):**
 1. **Naive multi-frame fusion** — glare is systematic (constant over seconds); fusing correlated-wrong reads = confidently wrong. Offline-proven.
@@ -44,6 +45,12 @@ Read-only analysis of the 128 held-out benchmark frames (during James's `/cam/te
 - **Cleaning is visibly working:** champion–label disagreements dropped **52 → 25** as James fixed wrong labels. Champion now agrees with the cleaned label on **103/128 = 80%** — i.e. the frozen 0.673 was **depressed by wrong TEST labels, not a weak model.** True full-9 is climbing toward ~80%+.
 - **Errors are concentrated in the LAST 2 digits.** Per-position mismatch (pos0=leftmost): `0,0,0,5,6,5,7,11,20`. pos7–8 = 31 of all mismatches; pos8 (ones-of-cf) alone = 20. High-order digits (pos0–6, which drive the usage total) are near-perfect; the wobble is the fast-spinning, mid-roll, **low-impact** last digit.
 - **Reframe the metric:** full-9 over-penalizes the one digit that's hardest *and* least important. **First-7-digits accuracy** reflects real-world correctness and is likely >95%. Consider scoring/gating on first-7 (or weighting pos8 down) so real gains aren't masked by an unwinnable last-digit fight.
+
+### Honest re-measure after cleaning (2026-06-21, 128 frames)
+- **full-9 0.8203, first-7 0.9141, first-6 0.9453, per-digit 0.9601.** The frozen 0.6726 was a wrong-label artifact — the model never changed.
+- Per-digit: pos0-2 100%, pos3-6 ~96%, pos7 93.8%, pos8 85.2%.
+- 23 remaining full-9 misses = ~18 pos8 last-digit wobble (low-impact, mid-roll, ~unwinnable) + **5 glare-collapse on the CURRENT leading edge** (094530-094546 read as 094000xxx). The 5 collapse frames are the ONE real lever: bank+retrain on corrected current-glare frames.
+- **GATE CAVEAT:** this eval used the Acer's cleaned labels (manual_labels overlay) via the live `/cnn`. The TOWER trainer's champion/challenger gate must use the SAME cleaned labels or it still measures 0.673 and won't see real gains. Verify label sync Acer->tower before next retrain.
 
 ---
 

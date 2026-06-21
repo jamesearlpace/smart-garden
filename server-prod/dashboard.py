@@ -3774,9 +3774,15 @@ def create_app(config, engine, weather, billing):
         uses: sha1(name)%100 < 12). Surfacing them lets the user verify/fix their
         LABELS, so the accuracy number AND the promotion gate reflect truth — not
         oracle mislabels baked into the test set itself. A wrong test label caps
-        measured accuracy no matter how good the model is."""
+        measured accuracy no matter how good the model is.
+
+        ?flag=1 also runs the CURRENT CNN on each frame and flags where it
+        DISAGREES with the stored label — those are the SUSPICIOUS ones (the label
+        may be wrong, or the model is). Disagreements sort FIRST so the user only
+        reviews the handful that matter, not all ~130."""
         import hashlib as _hl
         n = query_int("n", 200, min_value=1, max_value=500)
+        flag = request.args.get("flag")
         manual = _load_manual()
         out = []
         try:
@@ -3795,8 +3801,27 @@ def create_app(config, engine, weather, billing):
                         "corrected": bool(mv.get("action") == "correct")})
             if len(out) >= n:
                 break
-        out.sort(key=lambda r: r["file"])
-        return jsonify({"frames": out, "count": len(out)})
+        if flag:
+            for it in out:
+                try:
+                    data = open(os.path.join(BANK_DIR, it["file"]), "rb").read()
+                    res = _read_via_cnn(data)
+                except Exception:
+                    res = None
+                if res:
+                    g = res.get("digits")
+                    if isinstance(g, list):
+                        g = "".join(str(x) for x in g)
+                    g = "".join(c for c in str(g or "") if c.isdigit())
+                    if len(g) != 9 and res.get("value") is not None:
+                        g = f"{int(res['value']):09d}"
+                    it["cnn"] = g if len(g) == 9 else None
+                    it["cnn_conf"] = res.get("confidence")
+                    it["disagree"] = bool(it["cnn"] and it["cnn"] != it["label"])
+        out.sort(key=lambda r: (not r.get("disagree", False), r["file"]))
+        n_dis = sum(1 for r in out if r.get("disagree"))
+        return jsonify({"frames": out, "count": len(out),
+                        "disagree": n_dis, "flagged": bool(flag)})
 
     @app.route("/cam/test-audit")
     def cam_test_audit_page():

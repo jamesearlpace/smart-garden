@@ -33,13 +33,20 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .save{font-size:.78rem;padding:5px 12px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
 .msg{font-size:.74rem}
 .tag{font-size:.66rem;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:1px 6px}
+.card.susp{border-color:#fca5a5;box-shadow:0 0 0 2px #fee2e2}
+.controls{display:none;gap:14px;align-items:center;margin-bottom:14px;font-size:.85rem}
+.controls label{display:flex;gap:6px;align-items:center;cursor:pointer}
 </style>
 </head>
 <body>
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
 <h1>🔬 Benchmark audit</h1>
 <div class="sub" id="sub">Loading the held-out test frames…</div>
-<div class="bar">These are the <b>exact frames the model is graded on</b> (the permanent held-out set). If a <b>label here is wrong</b>, it caps the measured accuracy no matter how good the model is — so a wrong label looks like a model error. Confirm the ones that are right (✓), fix the ones that are wrong. A clean benchmark gives the true score and lets better models actually ship.</div>
+<div class="bar">These are the <b>exact frames the model is graded on</b> (the permanent held-out set). If a <b>label here is wrong</b>, it caps the measured accuracy no matter how good the model is — so a wrong label looks like a model error. The page runs the model on each frame and <b>shows you only the ones where it disagrees with the stored label</b> — those are the suspicious labels. If the meter image matches the label, hit ✓; if the label is wrong, Fix it.</div>
+<div class="controls" id="controls">
+  <label><input type="checkbox" id="suspToggle" checked> Suspicious only (model disagrees)</label>
+  <span id="cnt" style="color:var(--text2)"></span>
+</div>
 <div class="grid" id="grid"></div>
 
 <script>
@@ -48,14 +55,21 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
 function fmt9(s){ var d=(String(s||'').match(/\d/g)||[]).join(''); return d.length===9?d.slice(0,6)+'.'+d.slice(6):(d||''); }
 
 function card(it){
-  return '<div class="card" data-file="'+esc(it.file)+'" data-label="'+esc(it.label)+'">'
+  var cnnLine = '';
+  if (it.cnn){
+    cnnLine = it.disagree
+      ? '<div class="ai"><b style="color:var(--red)">\u26a0 model reads '+fmt9(it.cnn)+'</b>'
+        + (it.cnn_conf?(' \u00b7 '+esc(it.cnn_conf)):'')+'</div>'
+      : '<div class="ai" style="color:var(--green)">\ud83e\udd16 model agrees</div>';
+  }
+  return '<div class="card'+(it.disagree?' susp':'')+'" data-file="'+esc(it.file)+'" data-label="'+esc(it.label)+'">'
     + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
     + '<div class="body">'
-    + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft³</span>'
-    + (it.corrected?' <span class="tag">✓ yours</span>':'')+'</div>'
-    + '<div class="ai" data-ai></div>'
+    + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span>'
+    + (it.corrected?' <span class="tag">\u2713 yours</span>':'')+'</div>'
+    + cnnLine
     + '<div class="row" data-row>'
-    + '<button class="ok">✓ Correct</button><button class="fix">Fix</button>'
+    + '<button class="ok">\u2713 Label is right</button><button class="fix">Fix</button>'
     + '<span class="msg"></span></div>'
     + '</div></div>';
 }
@@ -89,11 +103,23 @@ function wire(el){
   }
 }
 
-fetch('/api/cam/test-set?n=200').then(function(r){return r.json();}).then(function(d){
-  var f = d.frames||[];
-  document.getElementById('sub').innerHTML='<b>'+f.length+'</b> held-out benchmark frames. Each ✓ or fix makes the score honest.';
+var ALL = [];
+function render(){
+  var suspOnly = document.getElementById('suspToggle').checked;
+  var f = suspOnly ? ALL.filter(function(x){return x.disagree;}) : ALL;
+  document.getElementById('cnt').textContent = 'showing ' + f.length + ' of ' + ALL.length;
   document.getElementById('grid').innerHTML = f.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wire);
+}
+document.getElementById('sub').textContent = 'Running the model on each held-out frame\u2026 (a few seconds)';
+fetch('/api/cam/test-set?n=300&flag=1').then(function(r){return r.json();}).then(function(d){
+  ALL = d.frames||[];
+  var nd = d.disagree||0;
+  document.getElementById('sub').innerHTML = '<b>'+nd+'</b> of '+ALL.length
+    + ' benchmark frames \u2014 the model disagrees with the stored label. Review just these: \u2713 if the label matches the meter, Fix if the label is wrong.';
+  document.getElementById('controls').style.display = 'flex';
+  document.getElementById('suspToggle').onchange = render;
+  render();
 }).catch(function(){ document.getElementById('sub').textContent='Could not load the test set.'; });
 </script>
 </body>

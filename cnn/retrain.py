@@ -116,7 +116,16 @@ class MeterDigitCNN(nn.Module):
 
 
 # ---------------------------------------------------------------- data
+# Per-frame base preprocessing (decode -> rotate -> crop -> gray -> CLAHE ->
+# resize) is DETERMINISTIC, but __getitem__ runs it every epoch (~60x/frame).
+# Cache the decoded base once; only the random _augment() needs to re-run per
+# epoch. Pure speedup — bit-identical results (same seed, same augmentation).
+_GRAY_CACHE = {}
+
 def load_crop_gray(path):
+    cached = _GRAY_CACHE.get(path)
+    if cached is not None:
+        return cached.copy()
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(path)
@@ -128,7 +137,9 @@ def load_crop_gray(path):
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     gray = _clahe.apply(gray)
     gray = cv2.resize(gray, (IN_W, IN_H), interpolation=cv2.INTER_AREA)
-    return gray.astype(np.float32) / 255.0
+    out = gray.astype(np.float32) / 255.0
+    _GRAY_CACHE[path] = out
+    return out.copy()
 
 
 def _glare(gray):

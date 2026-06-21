@@ -29,6 +29,7 @@
 |----------|-----------|--------|------|---------------------|
 | v5 | 0.9518 | 0.6726 | 2026-06-20 | current champion; synth+weighting and glare-aug both TIED, not promoted |
 | v5 (re-measured) | **0.9601** | **0.8203** | 2026-06-21 | SAME model, scored on CLEANED benchmark — 0.673 was a wrong-label artifact. first-7=0.9141, first-6=0.9453. |
+| v6 (NOT promoted) | 0.969 | 0.784 | 2026-06-21 | Trained on 52 new gold corrections. Better per-digit (0.969>0.958) but full-9 0.784<0.808 AND hard-frame net −3 (fixed 6, broke 9). Lateral/worse → KEEP v5. Gate worked. ~38min run (cache+early-stop). |
 
 **Failed experiments (do NOT re-propose without new evidence):**
 1. **Naive multi-frame fusion** — glare is systematic (constant over seconds); fusing correlated-wrong reads = confidently wrong. Offline-proven.

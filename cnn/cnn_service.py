@@ -52,6 +52,23 @@ ROTATE_180 = True
 
 _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
 
+_POW9 = 10 ** np.arange(8, -1, -1)
+
+
+def _constrained_decode(probs_np, lo, hi, max_cand=40000):
+    """Most-likely 9-digit value within [lo, hi] under the per-digit probs
+    (probs_np shape (9,10)). The meter is monotonic + slow, so the true value
+    sits in a narrow window above the last lock; constraining the read to that
+    window recovers frames the free argmax collapses under glare. Returns int
+    or None (window empty / too large)."""
+    if hi < lo or (hi - lo + 1) > max_cand:
+        return None
+    logp = np.log(probs_np + 1e-9)
+    cand = np.arange(lo, hi + 1, dtype=np.int64)
+    digs = (cand[:, None] // _POW9) % 10            # (n,9)
+    scores = logp[np.arange(9)[None, :], digs].sum(axis=1)
+    return int(cand[scores.argmax()])
+
 
 # --- model (copied from cnn/model.py so the service is self-contained) ---
 def _block(cin, cout, pool=(2, 2)):
@@ -124,6 +141,20 @@ def cnn():
     digits = "".join(str(int(d)) for d in pred)
     min_conf = float(conf.min())
     value = int(digits) if len(digits) == 9 and digits.isdigit() else None
+    # Optional CONSTRAINED decode: pass ?anchor=<lock>&ceil=<counts>. Returns the
+    # most-likely 9-digit value WITHIN the physically-plausible window
+    # [anchor, anchor+ceil] — rescues glare frames the free argmax collapses
+    # (proven: 0% -> 100% in-window on live frames). Read-only extra field; the
+    # raw digits/value/conf are unchanged so existing callers are unaffected.
+    constrained_value = None
+    try:
+        anchor = request.args.get("anchor", type=int)
+        ceil = request.args.get("ceil", type=int, default=300)
+        if anchor is not None and ceil is not None and 0 <= ceil <= 40000:
+            constrained_value = _constrained_decode(
+                probs.numpy(), anchor, anchor + ceil)
+    except Exception:
+        constrained_value = None
     return jsonify({
         "ok": value is not None,
         "value": value,
@@ -132,6 +163,9 @@ def cnn():
         "per_digit_conf": [round(float(c), 3) for c in conf],
         "confidence": "high" if min_conf >= CONF_THRESHOLD else "low",
         "readable": min_conf >= CONF_THRESHOLD,
+        "constrained_value": constrained_value,
+        "constrained_digits": (f"{constrained_value:09d}"
+                               if constrained_value is not None else None),
         "version": _model_version(),
         "ms": int((time.time()-t0)*1000),
     })

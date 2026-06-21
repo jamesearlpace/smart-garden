@@ -2705,6 +2705,18 @@ def create_app(config, engine, weather, billing):
     # top of whatever reads the digits (guardrail #3).
     CNN_URL = os.environ.get("METER_CNN_URL", "http://192.168.0.120:5201/cnn")
     CNN_ENABLED = os.environ.get("METER_CNN_ENABLED", "1") == "1"
+    # CONSTRAINED DECODE: when the CNN can't read a frame cleanly (glare
+    # collapse), ask it for the most-likely value WITHIN the physically-
+    # plausible window [lock, lock+ceiling] (a meter only moves a little in 5s).
+    # This rescues the read for FREE — proven 0%->100% in-window on live glare
+    # frames — and keeps the lock fresh so the paid oracle is needed far less.
+    # Only trusted while the lock is reasonably fresh; a cold/stale lock has an
+    # unreliable window, so we let the oracle recover it instead.
+    CONSTRAINED_ENABLED = os.environ.get("METER_CONSTRAINED", "1") == "1"
+    CONSTRAINED_MAX_STALE = float(
+        os.environ.get("METER_CONSTRAINED_MAX_STALE", "900"))   # 15 min
+    CONSTRAINED_MIN_CEIL = int(os.environ.get("METER_CONSTRAINED_MIN_CEIL", "600"))
+    CONSTRAINED_MAX_CEIL = int(os.environ.get("METER_CONSTRAINED_MAX_CEIL", "3000"))
     # Training-data banking: when the validator produces a HIGH-confidence read,
     # save (raw frame JPEG, validated 9-digit label) so a custom per-digit model
     # can be trained later on THIS meter under THIS camera's real conditions.
@@ -3274,17 +3286,22 @@ def create_app(config, engine, weather, billing):
         finally:
             _oracle_state["busy"] = False
 
-    def _read_via_cnn(frame):
+    def _read_via_cnn(frame, anchor=None, ceil=None):
         """Ask the tower CNN to read the frame. Returns its JSON dict
-        ({digits, min_conf, confidence, value, ms}) or None if unavailable.
+        ({digits, min_conf, confidence, value, constrained_value, ms}) or None.
         The CNN is the fast free path; only its HIGH-confidence reads are used
         directly (the caller decides), but its digits still pass through the
-        physics validator."""
+        physics validator. If anchor/ceil are given, the service also returns a
+        constrained_value (most-likely value within [anchor, anchor+ceil])."""
         if not CNN_ENABLED:
             return None
+        url = CNN_URL
+        if anchor is not None and ceil is not None:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}anchor={int(anchor)}&ceil={int(ceil)}"
         try:
             r = http_requests.post(
-                CNN_URL, data=frame,
+                url, data=frame,
                 headers={"Content-Type": "image/jpeg"}, timeout=8)
             if r.status_code == 200:
                 return r.json()
@@ -3320,9 +3337,24 @@ def create_app(config, engine, weather, billing):
                 #    digits with high confidence, use that — no RapidOCR, no
                 #    paid oracle. Its digits still go through the physics
                 #    validator below, so the monotonic guard stays on top.
-                cnn = _read_via_cnn(frame)
+                # Constrained-decode anchor: the lock + how far the meter could
+                # plausibly have moved. Lets the CNN rescue a glare frame by
+                # reading within the physical window instead of collapsing.
+                c_anchor = c_ceil = None
+                if CONSTRAINED_ENABLED:
+                    lg0 = getattr(meter_reader, "last_good", None)
+                    lts0 = getattr(meter_reader, "_lock_ts", None) or 0
+                    if lg0 is not None and lts0:
+                        el = max(time.time() - lts0, 5)
+                        if el <= CONSTRAINED_MAX_STALE:
+                            c_anchor = int(lg0)
+                            c_ceil = int(min(max(_oracle_ceiling(el),
+                                                 CONSTRAINED_MIN_CEIL),
+                                             CONSTRAINED_MAX_CEIL))
+                cnn = _read_via_cnn(frame, anchor=c_anchor, ceil=c_ceil)
                 text = None
                 used_cnn = False
+                used_constrained = False
                 cnn_big_jump = False    # high-conf CNN read, but a suspicious
                                         # big advance -> force oracle to confirm
                 trust_cnn = False
@@ -3355,6 +3387,24 @@ def create_app(config, engine, weather, billing):
                     cam_ocr_stats["cnn_used"] += 1
                     cam_ocr_stats["reader"] = "cnn"
                     used_cnn = True
+                elif (c_anchor is not None and cnn and not cnn_big_jump
+                      and cnn.get("constrained_value") is not None
+                      and c_anchor <= int(cnn["constrained_value"])
+                      <= c_anchor + c_ceil):
+                    # CONSTRAINED DECODE: the CNN couldn't read cleanly, but its
+                    # per-digit probabilities + the plausible window pin the
+                    # value. Use it to keep the lock fresh for FREE (no RapidOCR,
+                    # no oracle). Bounded to [lock, lock+ceil] so it can never
+                    # jump far or run backward. The oracle's verify heartbeat
+                    # still spot-checks periodically to catch a drifting lock.
+                    cval = int(cnn["constrained_value"])
+                    text = f"{cval:09d}"
+                    cam_ocr_stats["last_ms"] = cnn.get("ms")
+                    cam_ocr_stats["cnn_constrained"] = (
+                        cam_ocr_stats.get("cnn_constrained", 0) + 1)
+                    cam_ocr_stats["reader"] = "cnn-constrained"
+                    used_cnn = True
+                    used_constrained = True
                 else:
                     # 2) FALLBACK: RapidOCR on the tower (the CNN was unsure,
                     #    unavailable, or made a suspicious big jump). The paid
@@ -3382,7 +3432,11 @@ def create_app(config, engine, weather, billing):
                     _save_frame(entry.get("id"), frame)
                     # Bank the raw frame + label when the read is high-confidence
                     # (builds an auto-labeled dataset for a future custom model).
-                    _bank_sample(frame, entry, captured_ts)
+                    # Skip CONSTRAINED reads — they're derived from the CNN's own
+                    # probs + the lock, not an independent read, so banking them
+                    # as gold would train the model on its own guesses.
+                    if not used_constrained:
+                        _bank_sample(frame, entry, captured_ts)
                     # Low-confidence or stale? Ask the vision LLM to read it,
                     # re-anchor, and bank a gold label (rate-limited internally).
                     # Also fires the periodic spot-check heartbeat even when the

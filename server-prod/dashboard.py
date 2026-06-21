@@ -4049,6 +4049,60 @@ def create_app(config, engine, weather, billing):
         """View the permanent regression set + live pass/fail per frame."""
         return render_template("cam_regression.html")
 
+    @app.route("/api/cam/quality")
+    def cam_quality_api():
+        """LIVE quality + oracle health — the honest "is it working" view.
+        Pulls the oracle-graded CNN-accuracy time series (cnn_metrics) and the
+        live oracle state so a quota/429 outage is VISIBLE, not silent."""
+        out = {"oracle": {}, "daily": [], "recent": []}
+        # Oracle health from live state (last_result carries 429/quota errors).
+        try:
+            st = _oracle_state
+            last = st.get("last_result") or {}
+            err = last.get("error")
+            out["oracle"] = {
+                "enabled": ORACLE_ENABLED,
+                "busy": st.get("busy", False),
+                "day_calls": st.get("day_calls", 0),
+                "daily_cap": ORACLE_DAILY_CAP,
+                "last_value": st.get("last_value"),
+                "last_error": err,
+                # down = last call returned a quota/429/auth error
+                "down": bool(err) and ("429" in str(err) or "quota" in str(err).lower()
+                                       or "insufficient" in str(err).lower()),
+            }
+        except Exception as e:
+            out["oracle"] = {"error": str(e)}
+        # Accuracy time series + recent samples from cnn_metrics.
+        try:
+            conn = db.get_conn()
+            for r in conn.execute(
+                    "SELECT date, evals, cnn_correct, cnn_used, cnn_fellback, "
+                    "oracle_calls, model_version FROM cnn_daily "
+                    "ORDER BY date DESC LIMIT 14"):
+                date, evals, correct, used, fell, orc, ver = r
+                out["daily"].append({
+                    "date": date, "evals": evals or 0,
+                    "cnn_correct": correct or 0,
+                    "accuracy": round(100.0 * (correct or 0) / evals, 1) if evals else None,
+                    "free": used or 0, "fellback": fell or 0,
+                    "oracle_calls": orc or 0, "version": ver})
+            for r in conn.execute(
+                    "SELECT ts, cnn_value, oracle_value, cnn_correct, "
+                    "model_version FROM cnn_eval ORDER BY id DESC LIMIT 30"):
+                ts, cv, ov, cc, ver = r
+                out["recent"].append({"ts": ts, "cnn": cv, "oracle": ov,
+                                       "correct": cc, "version": ver})
+            conn.close()
+        except Exception as e:
+            out["metrics_error"] = str(e)
+        return jsonify(out)
+
+    @app.route("/cam/quality")
+    def cam_quality_page():
+        """Live CNN accuracy trend + oracle health (quota outage alert)."""
+        return render_template("cam_quality.html")
+
     @app.route("/api/cam/labels")
     def cam_labels_api():
         """Merge the verified manifest + needs-review into one status list so the

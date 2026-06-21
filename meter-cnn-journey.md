@@ -10,7 +10,14 @@
 > (192.168.0.109, `~/smart-garden-server/`).
 
 ## TL;DR
-- **The system reading (running total / cost) is already ~100% correct** — the
+- **(2026-06-21 CORRECTION) The LIVE CNN accuracy is ~0% on current frames, and has been for days** — graded by the oracle (`cnn_daily` table): 28% on 06-15 → 0% since 06-16 across v3/v4/v5. The offline benchmark (0.82) is MEANINGLESS for the live operating point.
+- **The GPT-4o vision oracle is what actually keeps the meter readable** — the CNN falls back to it thousands of times/day. When the oracle's OpenAI quota dies (HTTP 429), there is NO working reader → display goes stale → user pain. That IS the failure chain (confirmed in logs 2026-06-21).
+- **Re-anchoring manually does NOT train anything** — it only sets the lock momentarily; the next frame collapses again. Bailing water, not fixing the leak.
+- **The quality-measurement system already exists**: `cnn_metrics.py` logs every oracle-vs-CNN comparison into `cnn_eval`/`cnn_daily` (live CNN accuracy time-series per version, free). It just had no UI and no oracle-down alert.
+- **What actually fixes it:** (1) keep the OpenAI oracle funded (billing), (2) surface live accuracy + oracle health so failures aren't silent, (3) the oracle auto-banks every CNN miss as a gold correction (cnn said 094009→oracle 094596) — those current-glare frames train the CNN up from 0% over future retrains. The lock is a safety net, NOT "~100% correct."
+
+## (superseded) earlier TL;DR
+- ~~The system reading (running total / cost) is already ~100% correct~~ — the
   monotonic lock holds the true value and rejects bad per-frame reads.
 - **Per-frame CNN accuracy is 95.1% per-digit / 67.3% full-9**, capped by (a)
   glare-degraded pixels and (b) noisy, leading-edge-starved training labels.

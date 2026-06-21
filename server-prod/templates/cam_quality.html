@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live quality &amp; oracle health — Smart Garden</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:1000px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:1.35rem;margin-bottom:2px}
+h2{font-size:1rem;margin:20px 0 8px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
+.back{display:inline-block;margin-bottom:12px;font-size:.85rem}
+.banner{border-radius:12px;padding:14px 18px;font-size:.95rem;font-weight:600;margin-bottom:18px}
+.banner.up{background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d}
+.banner.down{background:#fef2f2;border:2px solid #fca5a5;color:#b91c1c}
+.banner small{display:block;font-weight:400;font-size:.8rem;margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:.85rem;background:var(--card);border-radius:10px;overflow:hidden}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:#f8fafc;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:var(--text2)}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+.acc-hi{color:var(--green);font-weight:700}.acc-lo{color:var(--red);font-weight:700}.acc-mid{color:var(--amber);font-weight:700}
+.mono{font-family:ui-monospace,monospace}
+.miss{color:var(--red)}.ok{color:var(--green)}
+.note{font-size:.8rem;color:var(--text2);margin-top:6px}
+</style>
+</head>
+<body>
+<a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
+<h1>&#128202; Live quality &amp; oracle health</h1>
+<div class="sub">The honest number: how often the CNN reads the meter right on its own, graded by the GPT-4o oracle. And whether the oracle (your safety net) is alive.</div>
+
+<div id="banner" class="banner up">Checking oracle&hellip;</div>
+
+<h2>Live CNN accuracy over time <span class="note">(oracle-graded &mdash; this is the real metric, not the offline benchmark)</span></h2>
+<table id="daily"><thead><tr><th>Date</th><th>Model</th><th class="r">CNN accuracy</th><th class="r">samples</th><th class="r">fell back to oracle</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table>
+<div class="note">"Fell back to oracle" = frames the CNN couldn't read, so the paid GPT-4o read them instead. High fallback + low accuracy = the CNN isn't carrying its weight yet; the oracle is.</div>
+
+<h2>Recent reads (CNN vs ground truth)</h2>
+<table id="recent"><thead><tr><th>Time</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table>
+
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fmt9(s){var d=(String(s||'').match(/\d/g)||[]).join('');return d.length===9?d.slice(0,6)+'.'+d.slice(6):(s||'(none)');}
+function accClass(a){return a==null?'':(a>=80?'acc-hi':(a>=40?'acc-mid':'acc-lo'));}
+
+fetch('/api/cam/quality').then(function(r){return r.json();}).then(function(d){
+  var o = d.oracle||{};
+  var b = document.getElementById('banner');
+  if(o.down){
+    b.className='banner down';
+    b.innerHTML='&#9888; AI oracle is DOWN &mdash; OpenAI quota/billing (HTTP 429)'
+      +'<small>This is the reader that keeps your display fresh. While it is down, the meter reading will go stale and lag the truth. Fix: add credit / check the OpenAI plan. Last error: '+esc(o.last_error||'').slice(0,120)+'</small>';
+  } else if(o.enabled===false){
+    b.className='banner down';
+    b.innerHTML='&#9888; AI oracle is DISABLED'+'<small>Set METER_ORACLE_ENABLED=1. Without it the CNN (currently ~0% on live frames) is the only reader.</small>';
+  } else {
+    b.className='banner up';
+    b.innerHTML='&#10003; AI oracle online'
+      +'<small>'+(o.day_calls||0)+' / '+(o.daily_cap||'?')+' calls today'
+      +(o.last_value?(' &middot; last read '+fmt9(String(o.last_value).padStart(9,'0'))):'')+'</small>';
+  }
+  var db_=d.daily||[];
+  document.querySelector('#daily tbody').innerHTML = db_.length ? db_.map(function(x){
+    var a=x.accuracy;
+    return '<tr><td>'+esc(x.date)+'</td><td>'+esc(x.version||'')+'</td>'
+      +'<td class="r '+accClass(a)+'">'+(a==null?'&mdash;':a+'%')+'</td>'
+      +'<td class="r">'+x.evals+'</td><td class="r">'+(x.fellback||0).toLocaleString()+'</td></tr>';
+  }).join('') : '<tr><td colspan="5">No data yet.</td></tr>';
+  var rc=d.recent||[];
+  document.querySelector('#recent tbody').innerHTML = rc.length ? rc.map(function(x){
+    var ok=x.correct===1;
+    return '<tr><td>'+esc((x.ts||'').slice(11,19))+'</td>'
+      +'<td class="'+(ok?'ok':'miss')+'">'+(ok?'&#10003;':'&#10007;')+'</td>'
+      +'<td class="mono">'+fmt9(x.cnn)+'</td><td class="mono">'+fmt9(x.oracle)+'</td><td>'+esc(x.version||'')+'</td></tr>';
+  }).join('') : '<tr><td colspan="5">No data yet.</td></tr>';
+}).catch(function(){ document.getElementById('banner').innerHTML='Could not load quality data.'; });
+</script>
+</body>
+</html>

@@ -3823,6 +3823,30 @@ def create_app(config, engine, weather, billing):
         return jsonify({"frames": out, "count": len(out),
                         "disagree": n_dis, "flagged": bool(flag)})
 
+    @app.route("/api/cam/test-set/remove", methods=["POST"])
+    def cam_test_set_remove():
+        """Discard a bad benchmark frame (cut-off / double-exposure / garbage
+        capture). Such frames score every model unfairly. We MOVE the jpg + any
+        sidecar to BANK_DIR/_discarded/ (reversible) so it leaves both the
+        held-out benchmark AND future training builds, without hard-deleting."""
+        import shutil as _shutil
+        body = request.get_json(silent=True) or {}
+        fname = os.path.basename(str(body.get("file") or ""))
+        if not fname.endswith(".jpg"):
+            return jsonify({"ok": False, "error": "bad file"}), 400
+        src = os.path.join(BANK_DIR, fname)
+        if not os.path.exists(src):
+            return jsonify({"ok": False, "error": "not found"}), 404
+        ddir = os.path.join(BANK_DIR, "_discarded")
+        os.makedirs(ddir, exist_ok=True)
+        moved = []
+        for ext in (".jpg", ".json"):
+            s = os.path.join(BANK_DIR, fname[:-4] + ext)
+            if os.path.exists(s):
+                _shutil.move(s, os.path.join(ddir, fname[:-4] + ext))
+                moved.append(fname[:-4] + ext)
+        return jsonify({"ok": True, "moved": moved})
+
     @app.route("/cam/test-audit")
     def cam_test_audit_page():
         """Verify/fix the held-out benchmark labels so the accuracy is honest."""

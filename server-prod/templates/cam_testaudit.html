@@ -118,17 +118,22 @@ function wire(el){
 var ALL = [];
 function render(){
   var suspOnly = document.getElementById('suspToggle').checked;
-  var f = suspOnly ? ALL.filter(function(x){return x.disagree;}) : ALL;
-  document.getElementById('cnt').textContent = 'showing ' + f.length + ' of ' + ALL.length;
+  // A frame you've already reviewed (✓/Fix → corrected) is settled — your
+  // label is ground truth, so it drops off the suspicious list even though the
+  // (un-retrained) model still disagrees. That's why a reviewed card no longer
+  // reappears on refresh.
+  var f = suspOnly ? ALL.filter(function(x){return x.disagree && !x.corrected;}) : ALL;
+  var left = ALL.filter(function(x){return x.disagree && !x.corrected;}).length;
+  document.getElementById('cnt').textContent = left + ' left to review · showing ' + f.length + ' of ' + ALL.length;
   document.getElementById('grid').innerHTML = f.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wire);
 }
 document.getElementById('sub').textContent = 'Running the model on each held-out frame\u2026 (a few seconds)';
 fetch('/api/cam/test-set?n=300&flag=1').then(function(r){return r.json();}).then(function(d){
   ALL = d.frames||[];
-  var nd = d.disagree||0;
+  var nd = ALL.filter(function(x){return x.disagree && !x.corrected;}).length;
   document.getElementById('sub').innerHTML = '<b>'+nd+'</b> of '+ALL.length
-    + ' benchmark frames \u2014 the model disagrees with the stored label. Review just these: \u2713 if the label matches the meter, Fix if the label is wrong.';
+    + ' benchmark frames still need review — the model disagrees with the stored label. ✓ if the label matches the meter, Fix if the label is wrong (reviewed ones drop off this list).';
   document.getElementById('controls').style.display = 'flex';
   document.getElementById('suspToggle').onchange = render;
   render();

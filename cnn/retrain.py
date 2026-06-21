@@ -131,23 +131,87 @@ def load_crop_gray(path):
     return gray.astype(np.float32) / 255.0
 
 
+def _glare(gray):
+    """Simulate a smooth LCD reflection that washes digits toward white — a
+    faithful model of the real glare band (unlike a hard random-erase box).
+    Either a soft elliptical hot-spot or a horizontal reflection stripe; pixels
+    blend toward white where the mask is strong, melting segment boundaries
+    together (exactly the failure where '5'/'8' read as '0')."""
+    h, w = gray.shape
+    yy, xx = np.ogrid[:h, :w]
+    if random.random() < 0.5:
+        cx, cy = random.uniform(0.15, 0.85) * w, random.uniform(0.25, 0.75) * h
+        sx, sy = random.uniform(0.12, 0.45) * w, random.uniform(0.18, 0.60) * h
+        mask = np.exp(-(((xx - cx) / sx) ** 2 + ((yy - cy) / sy) ** 2))
+    else:
+        by, bh = random.uniform(0.2, 0.8) * h, random.uniform(0.08, 0.35) * h
+        mask = np.exp(-(((yy - by) / bh) ** 2)) * np.ones((1, w))
+    a = (mask * random.uniform(0.30, 0.60)).astype(np.float32)
+    return np.clip(gray * (1 - a) + a, 0, 1).astype(np.float32)
+
+
+def _perspective(gray):
+    """Mild perspective warp — the meter is viewed at an angle."""
+    h, w = gray.shape
+    m = 0.06
+    src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    dst = np.float32([[random.uniform(-m, m) * w, random.uniform(-m, m) * h],
+                      [w + random.uniform(-m, m) * w, random.uniform(-m, m) * h],
+                      [w + random.uniform(-m, m) * w, h + random.uniform(-m, m) * h],
+                      [random.uniform(-m, m) * w, h + random.uniform(-m, m) * h]])
+    return cv2.warpPerspective(gray, cv2.getPerspectiveTransform(src, dst),
+                               (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+
+def _bright_gradient(gray):
+    """Linear brightness ramp — uneven lighting across the display."""
+    h, w = gray.shape
+    g0, g1 = random.uniform(-0.25, 0.25), random.uniform(-0.25, 0.25)
+    ramp = (np.linspace(g0, g1, w)[None, :] if random.random() < 0.5
+            else np.linspace(g0, g1, h)[:, None])
+    return np.clip(gray + ramp, 0, 1).astype(np.float32)
+
+
+def _jpeg(gray):
+    """JPEG recompression artifacts (frames arrive as JPEG)."""
+    ok, buf = cv2.imencode(".jpg", (gray * 255).astype(np.uint8),
+                           [cv2.IMWRITE_JPEG_QUALITY, random.randint(30, 75)])
+    if not ok:
+        return gray
+    return cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0
+
+
 def _augment(gray):
     h, w = gray.shape
-    tx = random.uniform(-0.06, 0.06) * w
-    ty = random.uniform(-0.10, 0.10) * h
-    sc = random.uniform(0.90, 1.10)
-    ang = random.uniform(-3, 3)
+    # geometry: translate + scale + rotate (+ occasional perspective skew)
+    tx, ty = random.uniform(-0.06, 0.06) * w, random.uniform(-0.10, 0.10) * h
+    sc, ang = random.uniform(0.90, 1.10), random.uniform(-3, 3)
     M = cv2.getRotationMatrix2D((w / 2, h / 2), ang, sc)
     M[0, 2] += tx
     M[1, 2] += ty
     gray = cv2.warpAffine(gray, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    if random.random() < 0.20:
+        gray = _perspective(gray)
+    # lighting: global brightness + uneven gradient
     gray = np.clip(gray * random.uniform(0.75, 1.25)
                    + random.uniform(-0.12, 0.12), 0, 1)
+    if random.random() < 0.25:
+        gray = _bright_gradient(gray)
+    # GLARE — the headline fix: a realistic reflection wash on ~40% of frames
+    if random.random() < 0.40:
+        gray = _glare(gray)
+    # blur + sensor noise + JPEG artifacts (kept light so they rarely stack into
+    # an unreadable image — augmentation must stay HARDER-but-READABLE)
     if random.random() < 0.5:
-        k = random.choice([3, 3, 5])
-        gray = cv2.GaussianBlur(gray, (k, k), 0)
-    if random.random() < 0.4:
-        ew, eh = random.randint(w // 10, w // 4), random.randint(h // 6, h // 2)
+        gray = cv2.GaussianBlur(gray, (random.choice([3, 3, 5]),) * 2, 0)
+    if random.random() < 0.25:
+        gray = np.clip(gray + np.random.normal(
+            0, random.uniform(0.02, 0.04), gray.shape), 0, 1)
+    if random.random() < 0.20:
+        gray = _jpeg(gray)
+    # occasional small hard occlusion (real obstructions happen too)
+    if random.random() < 0.10:
+        ew, eh = random.randint(w // 14, w // 8), random.randint(h // 8, h // 4)
         ex, ey = random.randint(0, w - ew), random.randint(0, h - eh)
         gray[ey:ey + eh, ex:ex + ew] = random.uniform(0, 1)
     return gray.astype(np.float32)
@@ -523,6 +587,21 @@ def evaluate(model, loader, device):
     return dc / dt, fc / ft
 
 
+def eval_per_frame(model, rows, device):
+    """Per-frame full-9 correctness (ordered like rows) — for the hard-frame
+    comparison: which held-out frames each model gets fully right."""
+    model.eval()
+    ld = DataLoader(MeterDigits(rows, train=False), batch_size=64,
+                    shuffle=False, num_workers=0)
+    out = []
+    with torch.no_grad():
+        for batch in ld:
+            x, y = batch[0].to(device), batch[1].to(device)
+            pred = model(x).argmax(-1)
+            out.extend((pred == y).all(dim=1).cpu().numpy().tolist())
+    return out
+
+
 def train_challenger(train_rows, test_loader, device):
     train_ld = DataLoader(MeterDigits(train_rows, train=True),
                           batch_size=BATCH, shuffle=True, num_workers=0)
@@ -646,6 +725,23 @@ def main():
     chall = train_challenger(train_rows, test_loader, device)
     h_d, h_f = evaluate(chall, test_loader, device)
     log(f"CHALLENGER {nxt_ver}: per-digit {h_d:.3f}  full-9 {h_f:.3f}")
+
+    # HARD-FRAME EVAL: the clean held-out benchmark is mostly easy historical
+    # frames, so a glare/aug improvement can be invisible there. Compare the two
+    # models on the subset the CHAMPION gets WRONG — that's where new robustness
+    # shows up. fixed = champion-wrong that challenger nails; broke = the reverse.
+    try:
+        champ_pf = eval_per_frame(champ, test_rows, device)
+        chall_pf = eval_per_frame(chall, test_rows, device)
+        hard = [i for i, ok in enumerate(champ_pf) if not ok]
+        fixed = sum(1 for i in hard if chall_pf[i])
+        broke = sum(1 for i in range(len(champ_pf))
+                    if champ_pf[i] and not chall_pf[i])
+        log(f"HARD-FRAME EVAL: champion missed {len(hard)}/{len(test_rows)}; "
+            f"challenger FIXED {fixed}, newly BROKE {broke} "
+            f"(net {fixed - broke:+d} on hard frames)")
+    except Exception as e:
+        log(f"hard-frame eval skipped: {e}")
 
     promoted = False
     # The currently-deployed champion may PREDATE the permanent hash holdout

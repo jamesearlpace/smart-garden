@@ -45,6 +45,51 @@
 4. **Glare augmentation (softened)** — full retrain 0.664 vs 0.673, hard-frame net −1. Kept v5.
 5. **Synthetic recombination + trust weighting** — full retrain EXACT TIE 0.6726. Kept v5.
 
+---
+
+## 2026-06-21 — FULL SESSION LOG (timestamped)
+
+A long session that went from "polish the benchmark audit" to discovering the
+live reader was 0% and shipping the real fix. Chronological:
+
+| Time | Event | Commit |
+|------|-------|--------|
+| ~10:00 | **Smart benchmark audit** — `/cam/test-audit` runs the CNN per held-out frame, flags ONLY where it disagrees with the stored label (52/129 suspicious). James cleans labels. | `a97800b` |
+| ~10:10 | **Remove button** on audit cards — discard cut-off/garbage frames to `~/meter-training/_discarded/` (reversible). | `0f4ca74` |
+| ~10:15 | **Reviewed frames drop off** the suspicious list (corrected=True) so they stop reappearing on refresh; "N left to review". | `85594fe` |
+| ~10:30 | **Benchmark composition analysis** + scoreboard + failed-experiments list added to this doc. | `0d309d4` |
+| ~10:45 | **Honest re-measure on cleaned labels:** full-9 **0.8203** (was 0.6726), first-7 0.9141, per-digit 0.9601. The 0.673 was a WRONG-LABEL artifact — same model. | `2e64302` |
+| 11:02–11:41 | **v6 retrain** on 52 new gold corrections. Result: per-digit 0.969 (>champ) but full-9 0.784 (<0.808) AND hard-frame net −3 (fixed 6, broke 9). **KEEP v5** — gate worked, v6 was lateral/worse. Run = 2324s (~38min). | — |
+| ~11:50 | **Regression set** built — permanent hard-fail tests; `/cam/regression` page + ⚓ button; trainer forces them into TEST + gate blocks regressing on them. Seeded 10 (champ 0/10). | `3584c48` |
+| (earlier) | **Retrain speed:** frame cache (`8471bd9`, ~15min faster, bit-identical) + early-stop (`59e8874`, ~25% faster, keeps best). GPU unusable (torch is CPU-only build; GTX 970). | — |
+| ~12:10 | **Lock found STALE** (~29 min behind). James: "it's awful." Re-anchored manually to `094594906`, then the meter had advanced → `094596953`. | — |
+| 12:31–12:47 | **ROOT CAUSE found in journalctl: HTTP 429 — OpenAI quota exceeded.** The GPT-4o oracle (the thing that keeps the meter readable when the CNN can't) was failing on every call. At 12:47 quota recovered and the system self-healed (re-anchor + auto-bank). | — |
+| ~13:00 | **`/cam/quality` page + oracle-down RED alert** — surfaces the existing `cnn_metrics` oracle-graded CNN accuracy time-series + flags a quota outage instead of silent staleness. | `8b72757` |
+| ~13:05 | **LIVE CNN accuracy revealed: ~0%** (cnn_daily: 28% 06-15 → 0% since 06-16). Offline 0.82 is meaningless for live. The oracle carries everything (thousands of fallbacks/day). | — |
+| ~13:20 | **NEW HARD BENCHMARK** — test set = held-out oracle-caught CNN failures (529 hard frames, 195 current-edge). Champion v5 = **0.655** full-9 on the honest set (vs fake 0.82). Easy frames pushed to train. Retrain launched on it. | `8408fba` |
+| ~13:40 | **CONSTRAINED DECODE (James's idea)** — offline test PROVED 0%→100% in-window on 60 live frames. Built into CNN service (`/cnn?anchor=&ceil=`) + live worker. **LIVE: display now reads `094598961` correct/high-conf** off the frames raw CNN garbles. Keeps lock fresh for FREE → slashes OpenAI cost. Env-gated, fresh-lock-only, forward-only bounded. | `a2a60e8` |
+
+### Key numbers locked this session
+- **Live CNN raw accuracy on current glare frames: 0%** (the real metric; offline 0.82 was a mirage).
+- **Constrained decode: 0% → 100% in-window** on live frames (the fix).
+- **Champion v5 on the HARD benchmark: full-9 0.655** (the honest bar going forward; was fake 0.82 on easy frames).
+- **Hard-frame material available: 529** oracle-caught CNN failures, 195 current-edge.
+
+### The corrected mental model (supersedes everything above)
+1. The tiny CNN **cannot** read current high-glare frames raw (0%).
+2. **Constrained decode** (read within the lock's plausible window) rescues it for FREE and keeps the display fresh — the primary live reader now.
+3. The **GPT-4o oracle** is the recovery path (cold/stale lock) + drift spot-check + the source of gold training labels — used SPARINGLY now (cost control).
+4. The **CNN itself** improves over retrains as oracle-banked current-glare frames accumulate, judged on the **hard benchmark** (the only honest gate).
+5. **`/cam/quality`** shows the live truth + a red alert when the oracle (OpenAI) quota dies.
+
+### Open follow-ups
+- Keep OpenAI billing funded (oracle is the recovery + training-label source). Watch `/cam/quality`.
+- Verify oracle call rate actually dropped after constrained decode (cost win) — check `cnn_daily.oracle_calls` trend.
+- Hard-benchmark retrain result (launched ~13:21) — did a challenger beat champion's 0.655 on the hard set?
+- Consider widening the constrained window / lowering oracle cap once the raw CNN improves.
+
+---
+
 ## 2026-06-21 — Benchmark composition: 0.673 is partly a wrong-label artifact
 
 Read-only analysis of the 128 held-out benchmark frames (during James's `/cam/test-audit` label cleaning):

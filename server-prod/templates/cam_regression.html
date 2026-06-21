@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Regression set — Smart Garden</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.5;padding:18px 16px 60px;max-width:1100px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
+.back{display:inline-block;margin-bottom:12px;font-size:.85rem}
+.bar{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;
+  padding:10px 14px;font-size:.85rem;margin-bottom:16px}
+.score{font-size:1.6rem;font-weight:800;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.card.fail{border-color:#fca5a5;box-shadow:0 0 0 2px #fee2e2}
+.card.pass{border-color:#bbf7d0}
+.imgwrap{background:#11181f;text-align:center}
+.imgwrap img{max-width:100%;transform:rotate(180deg);display:block;margin:0 auto}
+.body{padding:10px 12px}
+.lbl{font-family:ui-monospace,monospace;font-size:1.1rem;font-weight:700}
+.lbl .dot{color:var(--text2)}
+.ai{font-size:.74rem;margin-top:3px;min-height:1em}
+.verdict{font-weight:700;font-size:.8rem;margin-top:4px}
+.reason{font-size:.68rem;color:var(--text2);margin-top:2px}
+.row{margin-top:8px;display:flex;gap:6px;align-items:center}
+.rm{font-size:.74rem;padding:4px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text2);cursor:pointer}
+.msg{font-size:.72rem}
+</style>
+</head>
+<body>
+<a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
+<h1>&#9875; Regression set</h1>
+<div class="sub" id="sub">Loading the permanent regression frames&hellip;</div>
+<div class="bar">These are <b>known-hard frames the model got wrong and a human verified</b> (glare collapse, current leading edge). They are <b>always test</b> &mdash; the trainer never trains on them &mdash; and the gate must never let a new model silently regress on them. A fixed failure becomes a <b>forever-test</b>. Add frames from the <a href="/cam/test-audit">benchmark audit</a> with the &#9875; button.</div>
+<div class="score" id="score"></div>
+<div class="grid" id="grid"></div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmt9(s){ var d=(String(s||'').match(/\d/g)||[]).join(''); return d.length===9?d.slice(0,6)+'.'+d.slice(6):(d||''); }
+
+function card(it){
+  var p = it.pass;
+  var read = it.cnn
+    ? (p ? '<div class="ai" style="color:var(--green)">model reads '+fmt9(it.cnn)+'</div>'
+         : '<div class="ai" style="color:var(--red)">model reads '+fmt9(it.cnn)+(it.cnn_conf?(' \u00b7 '+esc(it.cnn_conf)):'')+'</div>')
+    : '<div class="ai" style="color:var(--text2)">no read</div>';
+  var verdict = it.cnn
+    ? (p ? '<div class="verdict" style="color:var(--green)">\u2713 PASS</div>'
+         : '<div class="verdict" style="color:var(--red)">\u2717 FAIL</div>') : '';
+  return '<div class="card '+(it.cnn?(p?'pass':'fail'):'')+'" data-file="'+esc(it.file)+'">'
+    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="body">'
+    + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span></div>'
+    + read + verdict
+    + (it.reason?('<div class="reason">'+esc(it.reason)+'</div>'):'')
+    + '<div class="row"><button class="rm">remove</button><span class="msg"></span></div>'
+    + '</div></div>';
+}
+
+function wire(el){
+  var file = el.getAttribute('data-file');
+  el.querySelector('.rm').onclick = function(){
+    if(!confirm('Remove this frame from the regression set?')) return;
+    var msg = el.querySelector('.msg');
+    fetch('/api/cam/regression/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:file})}).then(function(r){return r.json();}).then(function(res){
+        if(res.ok){ el.style.opacity='.35'; msg.textContent='removed'; }
+        else { msg.textContent=res.error||'failed'; }
+      }).catch(function(){ msg.textContent='failed'; });
+  };
+}
+
+document.getElementById('sub').textContent = 'Running the model on each regression frame\u2026';
+fetch('/api/cam/regression/list?flag=1').then(function(r){return r.json();}).then(function(d){
+  var fr = d.frames||[];
+  var n = fr.length, np = d.passing||0;
+  if(!n){
+    document.getElementById('sub').innerHTML = 'The regression set is empty. Seed it from the <a href="/cam/test-audit">benchmark audit</a> using the \u9875 button on hard frames.';
+    document.getElementById('score').textContent = '';
+    return;
+  }
+  document.getElementById('sub').textContent = 'Known-hard frames the model must always get right.';
+  var pct = Math.round(100*np/n);
+  var col = pct===100 ? 'var(--green)' : (pct>=80 ? 'var(--amber)' : 'var(--red)');
+  document.getElementById('score').innerHTML =
+    '<span style="color:'+col+'">'+np+' / '+n+' passing ('+pct+'%)</span>';
+  document.getElementById('grid').innerHTML = fr.map(card).join('');
+  document.querySelectorAll('#grid .card').forEach(wire);
+}).catch(function(){ document.getElementById('sub').textContent='Could not load the regression set.'; });
+</script>
+</body>
+</html>

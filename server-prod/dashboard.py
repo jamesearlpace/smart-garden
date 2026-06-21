@@ -3929,6 +3929,126 @@ def create_app(config, engine, weather, billing):
                     pass
         return out
 
+    # ---- Permanent regression set -------------------------------------------
+    # Frames the model got WRONG that a human verified. Unlike the hash holdout
+    # (a random sample), these are deliberately the known-hard failures (glare
+    # collapse, current leading edge). They are ALWAYS test (the trainer never
+    # trains on them) and the gate must never let a challenger silently regress
+    # on them. This is the "lock in how good it got" mechanism: a fixed failure
+    # becomes a forever-test.
+    REGRESSION_PATH = os.path.join(LABELS_DIR, "regression_labels.jsonl")
+
+    def _load_regression():
+        """{file: {label, reason, ts}} — last write per file wins; an action
+        'remove' record drops a frame from the set."""
+        import json as _json
+        out = {}
+        if os.path.exists(REGRESSION_PATH):
+            for line in open(REGRESSION_PATH):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except Exception:
+                    continue
+                f = rec.get("file")
+                if not f:
+                    continue
+                if rec.get("action") == "remove":
+                    out.pop(f, None)
+                else:
+                    out[f] = rec
+        return out
+
+    @app.route("/api/cam/regression/add", methods=["POST"])
+    def cam_regression_add():
+        """Bank a frame into the permanent regression set. Label defaults to the
+        frame's human/manual label, else its filename label."""
+        import json as _json
+        body = request.get_json(silent=True) or {}
+        fname = os.path.basename(str(body.get("file", "")))
+        if not fname.endswith(".jpg"):
+            return jsonify({"ok": False, "error": "bad file"}), 400
+        if not os.path.exists(os.path.join(BANK_DIR, fname)):
+            return jsonify({"ok": False, "error": "frame not in bank"}), 404
+        lbl = "".join(c for c in str(body.get("label", "")) if c.isdigit())
+        if len(lbl) != 9:
+            mv = _load_manual().get(fname) or {}
+            lbl = mv.get("label") or fname.split("_")[0]
+        if not (lbl and lbl.isdigit() and len(lbl) == 9):
+            return jsonify({"ok": False, "error": "need a 9-digit label"}), 400
+        rec = {"file": fname, "label": lbl,
+               "reason": str(body.get("reason", "hard-fail"))[:60],
+               "action": "add", "ts": datetime.now().isoformat()}
+        try:
+            os.makedirs(LABELS_DIR, exist_ok=True)
+            with open(REGRESSION_PATH, "a") as f:
+                f.write(_json.dumps(rec) + "\n")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "saved": rec})
+
+    @app.route("/api/cam/regression/remove", methods=["POST"])
+    def cam_regression_remove():
+        import json as _json
+        body = request.get_json(silent=True) or {}
+        fname = os.path.basename(str(body.get("file", "")))
+        if not fname.endswith(".jpg"):
+            return jsonify({"ok": False, "error": "bad file"}), 400
+        try:
+            os.makedirs(LABELS_DIR, exist_ok=True)
+            with open(REGRESSION_PATH, "a") as f:
+                f.write(_json.dumps({"file": fname, "action": "remove",
+                                     "ts": datetime.now().isoformat()}) + "\n")
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True})
+
+    @app.route("/api/cam/regression/list")
+    def cam_regression_list():
+        """The regression set. ?flag=1 also runs the live CNN on each and marks
+        pass/fail (failures sort first)."""
+        flag = request.args.get("flag")
+        reg = _load_regression()
+        out = []
+        for f, rec in reg.items():
+            if not os.path.exists(os.path.join(BANK_DIR, f)):
+                continue
+            out.append({"file": f, "label": rec["label"],
+                        "reason": rec.get("reason", ""),
+                        "img": "/api/cam/training/img/" + f})
+        if flag:
+            npass = 0
+            for it in out:
+                try:
+                    data = open(os.path.join(BANK_DIR, it["file"]), "rb").read()
+                    res = _read_via_cnn(data)
+                except Exception:
+                    res = None
+                g = None
+                if res:
+                    g = res.get("digits")
+                    if isinstance(g, list):
+                        g = "".join(str(x) for x in g)
+                    g = "".join(c for c in str(g or "") if c.isdigit())
+                    if len(g) != 9 and res.get("value") is not None:
+                        g = f"{int(res['value']):09d}"
+                it["cnn"] = g if g and len(g) == 9 else None
+                it["cnn_conf"] = res.get("confidence") if res else None
+                it["pass"] = bool(it["cnn"] and it["cnn"] == it["label"])
+                if it["pass"]:
+                    npass += 1
+            out.sort(key=lambda r: (r.get("pass", False), r["file"]))
+        return jsonify({"frames": out, "count": len(out),
+                        "passing": sum(1 for r in out if r.get("pass")),
+                        "flagged": bool(flag)})
+
+    @app.route("/cam/regression")
+    def cam_regression_page():
+        """View the permanent regression set + live pass/fail per frame."""
+        return render_template("cam_regression.html")
+
     @app.route("/api/cam/labels")
     def cam_labels_api():
         """Merge the verified manifest + needs-review into one status list so the

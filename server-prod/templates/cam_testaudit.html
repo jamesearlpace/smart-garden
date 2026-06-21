@@ -31,6 +31,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .ok{font-size:.78rem;padding:5px 10px;border:1px solid var(--green);border-radius:6px;background:#f0fdf4;color:#15803d;cursor:pointer;font-weight:600}
 .fix{font-size:.78rem;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:#8b5cf6;cursor:pointer;font-weight:600}
 .rm{font-size:.78rem;padding:5px 10px;border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;font-weight:600}
+.reg{font-size:.78rem;padding:5px 10px;border:1px solid #f59e0b;border-radius:6px;background:#fff;color:#b45309;cursor:pointer;font-weight:600}
 .save{font-size:.78rem;padding:5px 12px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
 .msg{font-size:.74rem}
 .tag{font-size:.66rem;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:1px 6px}
@@ -72,6 +73,7 @@ function card(it){
     + '<div class="row" data-row>'
     + '<button class="ok">\u2713 Label is right</button><button class="fix">Fix</button>'
     + '<button class="rm" title="Discard this frame \u2014 cut-off / garbage capture">\ud83d\uddd1 Remove</button>'
+    + '<button class="reg" title="Bank as a permanent regression test \u2014 a hard frame the model must always get right">\u2693 Regression</button>'
     + '<span class="msg"></span></div>'
     + '</div></div>';
 }
@@ -93,6 +95,14 @@ function wire(el){
         if(res.ok){ el.style.opacity='.35';
           msg.innerHTML='<span style="color:#b91c1c;font-weight:700">\ud83d\uddd1 removed</span>'; }
         else { row.querySelectorAll('button').forEach(function(b){ b.disabled=false; }); msg.textContent=res.error||'failed'; }
+      }).catch(function(){ msg.textContent='failed'; });
+  };
+  el.querySelector('.reg').onclick = function(){
+    fetch('/api/cam/regression/add',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({file:file,label:el.getAttribute('data-label')})})
+      .then(function(r){return r.json();}).then(function(res){
+        if(res.ok){ msg.innerHTML='<span style="color:#b45309;font-weight:700">\u2693 banked as regression test</span>'; }
+        else { msg.textContent=res.error||'failed'; }
       }).catch(function(){ msg.textContent='failed'; });
   };
   el.querySelector('.fix').onclick = function(){

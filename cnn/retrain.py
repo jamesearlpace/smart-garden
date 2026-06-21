@@ -54,6 +54,7 @@ MANUAL_MARKER = os.path.join(BASE, "last_retrain_manual")  # # manual edits trai
 CLEAN_REGIME = os.path.join(BASE, "clean_regime")  # set once the baseline is fair
 MANUAL_JSONL = os.path.join(WORK, "manual_labels.jsonl")  # human corrections (gold)
 PROPAGATED_JSONL = os.path.join(WORK, "propagated_labels.jsonl")  # monotonic cleanup
+REGRESSION_JSONL = os.path.join(WORK, "regression_labels.jsonl")  # permanent hard-fail tests
 LOG = os.path.join(BASE, "retrain.log")
 
 CROP = (0.02, 0.02, 0.92, 0.46)
@@ -382,6 +383,15 @@ def sync_from_acer():
             check=False)
     except Exception as e:
         log(f"sync: propagated_labels rsync skipped ({e})")
+    # Permanent regression set — human-banked hard failures. Optional.
+    try:
+        subprocess.run(
+            ["rsync", "-az", "--timeout=60", "--ignore-missing-args",
+             f"{ACER}:cnn-dataset-oracle/regression_labels.jsonl",
+             REGRESSION_JSONL],
+            check=False)
+    except Exception as e:
+        log(f"sync: regression_labels rsync skipped ({e})")
     n = len([f for f in os.listdir(FRAMES) if f.endswith(".jpg")])
     log(f"sync: {n} frames present")
     return n
@@ -404,6 +414,32 @@ def load_propagated():
                     out[r["file"]] = (r.get("status"), d)
             except Exception:
                 pass
+    return out
+
+
+def load_regression():
+    """Permanent hard-failure regression set banked by a human: {file: label}.
+    Forced into TEST (never trained on) and guards the promotion gate. Last
+    write per file wins; an action 'remove' record drops a frame."""
+    out = {}
+    if os.path.exists(REGRESSION_JSONL):
+        for line in open(REGRESSION_JSONL):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            f = r.get("file")
+            if not f:
+                continue
+            if r.get("action") == "remove":
+                out.pop(f, None)
+            else:
+                d = "".join(c for c in str(r.get("label", "")) if c.isdigit())
+                if len(d) == 9:
+                    out[f] = d
     return out
 
 
@@ -527,18 +563,22 @@ def gather_labels(manual=None):
     return clean, trust
 
 
-def build_rows(clean, trust=None):
+def build_rows(clean, trust=None, regression=None):
     """Dedup to MAX_PER_LABEL per distinct reading; split by permanent hash.
-    Attaches a per-sample trust weight (defaults 1.0)."""
+    Attaches a per-sample trust weight (defaults 1.0). Regression frames are
+    FORCED into test (never trained on) and tagged reg=True so the gate can
+    score them separately."""
     trust = trust or {}
+    regression = regression or set()
     per = {}
     train, test = [], []
     # test frames first (never capped — keep the benchmark complete)
     for f, lbl in sorted(clean.items()):
-        if is_test(f):
-            test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0)})
+        if is_test(f) or f in regression:
+            test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0),
+                         "reg": f in regression})
     for f, lbl in sorted(clean.items()):
-        if is_test(f):
+        if is_test(f) or f in regression:
             continue
         if per.get(lbl, 0) >= MAX_PER_LABEL:
             continue
@@ -698,6 +738,7 @@ def main():
     sync_from_acer()
     manual = load_manual()
     clean, trust = gather_labels(manual)
+    regression = load_regression()
     n_new, max_ts = new_frame_count(clean)
     n_manual_new, manual_total = manual_new_count(manual)
     log(f"new frames since last retrain: {n_new} (threshold {MIN_NEW_FRAMES})")
@@ -711,9 +752,13 @@ def main():
                       "reason": "below MIN_NEW_FRAMES"})
         return
 
-    train_rows, test_rows = build_rows(clean, trust)
+    train_rows, test_rows = build_rows(clean, trust, set(regression))
+    n_reg_test = sum(1 for r in test_rows if r.get("reg"))
     log(f"dataset: train {len(train_rows)}  held-out TEST {len(test_rows)} "
         f"({len({r['label'] for r in train_rows})} distinct train labels)")
+    if regression:
+        log(f"regression set: {n_reg_test} permanent hard-fail frames forced "
+            f"into TEST (never trained on)")
     if len(test_rows) < MIN_TEST:
         log(f"ABORT: held-out test too small ({len(test_rows)} < {MIN_TEST})")
         write_status({"ts": time.time(), "skipped": True,
@@ -766,6 +811,24 @@ def main():
     except Exception as e:
         log(f"hard-frame eval skipped: {e}")
 
+    # REGRESSION SET: human-banked known-hard frames, forced into the holdout
+    # (never trained on). A challenger must NOT score worse on them than the
+    # champion, no matter how good its overall full-9 — that's the lock that
+    # stops a fixed failure from silently coming back.
+    champ_reg = chall_reg = None
+    reg_rows = [r for r in test_rows if r.get("reg")]
+    if reg_rows:
+        try:
+            c_pf = eval_per_frame(champ, reg_rows, device)
+            h_pf = eval_per_frame(chall, reg_rows, device)
+            champ_reg = sum(c_pf) / len(reg_rows)
+            chall_reg = sum(h_pf) / len(reg_rows)
+            log(f"REGRESSION SET: champion {sum(c_pf)}/{len(reg_rows)} "
+                f"({champ_reg:.2f})  challenger {sum(h_pf)}/{len(reg_rows)} "
+                f"({chall_reg:.2f})")
+        except Exception as e:
+            log(f"regression eval skipped: {e}")
+
     promoted = False
     # The currently-deployed champion may PREDATE the permanent hash holdout
     # (the legacy v1/v2 were trained before it existed), so it has memorized
@@ -782,6 +845,13 @@ def main():
     else:
         win = h_f > c_f
         reason = f"strict: {h_f:.3f} {'>' if win else '<='} champion {c_f:.3f}"
+
+    # Regression guard: never promote a challenger that does WORSE on the
+    # permanent regression set than the champion, even if overall full-9 is up.
+    if win and chall_reg is not None and chall_reg < champ_reg:
+        win = False
+        reason = (f"BLOCKED by regression guard: challenger {chall_reg:.2f} < "
+                  f"champion {champ_reg:.2f} on regression set ({reason})")
 
     if win and not args.dry_run:
         # back up the champion, swap in the challenger, bump version, restart
@@ -813,6 +883,9 @@ def main():
         "champion_version": cur_ver, "challenger_version": nxt_ver,
         "champion_full9": round(c_f, 4), "challenger_full9": round(h_f, 4),
         "champion_perdigit": round(c_d, 4), "challenger_perdigit": round(h_d, 4),
+        "champion_regression": round(champ_reg, 4) if champ_reg is not None else None,
+        "challenger_regression": round(chall_reg, 4) if chall_reg is not None else None,
+        "regression_n": len(reg_rows),
         "train_n": len(train_rows), "test_n": len(test_rows),
         "new_frames": n_new, "new_manual": n_manual_new,
         "secs": int(time.time() - t0),

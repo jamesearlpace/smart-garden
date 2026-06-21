@@ -23,6 +23,30 @@
 
 ---
 
+## SCOREBOARD (single source of truth — update on every promotion)
+
+| Champion | Per-digit | Full-9 | Date | What it beat / note |
+|----------|-----------|--------|------|---------------------|
+| v5 | 0.9518 | 0.6726 | 2026-06-20 | current champion; synth+weighting and glare-aug both TIED, not promoted |
+
+**Failed experiments (do NOT re-propose without new evidence):**
+1. **Naive multi-frame fusion** — glare is systematic (constant over seconds); fusing correlated-wrong reads = confidently wrong. Offline-proven.
+2. **Naive context-decoder** — overwrote fast low digits from a stale prior, 93%→66%; position-aware recovered to ~92% but never beat raw. Shelved.
+3. **Aggressive augmentation stacking** — glare 0.55 + perspective + noise + jpeg cratered an 8-ep smoke to 0.142. Aug must stay harder-but-READABLE.
+4. **Glare augmentation (softened)** — full retrain 0.664 vs 0.673, hard-frame net −1. Kept v5.
+5. **Synthetic recombination + trust weighting** — full retrain EXACT TIE 0.6726. Kept v5.
+
+## 2026-06-21 — Benchmark composition: 0.673 is partly a wrong-label artifact
+
+Read-only analysis of the 128 held-out benchmark frames (during James's `/cam/test-audit` label cleaning):
+
+- **NOT "easy historical frames."** Spans the meter's whole life `094009`→`094546` (current leading edge), fairly evenly, with a 9-frame cluster at the current value. **66% (85/128) are low-confidence / glare-hard.** Good, honest coverage — the doc's "benchmark of easy frames" worry is unfounded *for this set*.
+- **Cleaning is visibly working:** champion–label disagreements dropped **52 → 25** as James fixed wrong labels. Champion now agrees with the cleaned label on **103/128 = 80%** — i.e. the frozen 0.673 was **depressed by wrong TEST labels, not a weak model.** True full-9 is climbing toward ~80%+.
+- **Errors are concentrated in the LAST 2 digits.** Per-position mismatch (pos0=leftmost): `0,0,0,5,6,5,7,11,20`. pos7–8 = 31 of all mismatches; pos8 (ones-of-cf) alone = 20. High-order digits (pos0–6, which drive the usage total) are near-perfect; the wobble is the fast-spinning, mid-roll, **low-impact** last digit.
+- **Reframe the metric:** full-9 over-penalizes the one digit that's hardest *and* least important. **First-7-digits accuracy** reflects real-world correctness and is likely >95%. Consider scoring/gating on first-7 (or weighting pos8 down) so real gains aren't masked by an unwinnable last-digit fight.
+
+---
+
 ## 1. The goal
 James wants near-100% meter reading. Current per-frame CNN: **95.1% per-digit,
 67.3% full-9** (0.951⁹ ≈ 0.63, consistent). To hit 99% *full-9* you'd need

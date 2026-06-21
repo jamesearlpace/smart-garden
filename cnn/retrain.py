@@ -443,6 +443,31 @@ def load_regression():
     return out
 
 
+def load_hard_frames():
+    """Files where the OpenAI oracle caught the CNN reading WRONG (per-frame
+    sidecar source=oracle, cnn_correct=False). These are the LIVE failure cases
+    — the honest, current benchmark material. A held-out slice of these becomes
+    the test set, so the gate measures the frames we actually fail on (current
+    high-value glare), not easy historical gimmes. Returns a set of .jpg names."""
+    hard = set()
+    try:
+        names = os.listdir(FRAMES)
+    except FileNotFoundError:
+        return hard
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(FRAMES, name)))
+        except Exception:
+            continue
+        if d.get("source") == "oracle" and d.get("cnn_correct") is False:
+            jpg = name[:-5] + ".jpg"
+            if os.path.exists(os.path.join(FRAMES, jpg)):
+                hard.add(jpg)
+    return hard
+
+
 def load_manual():
     """Human corrections from the gallery — last action per file wins, with the
     last EXPLICIT label carried forward (a label-less 'ok' after a 'Fix' still
@@ -563,22 +588,40 @@ def gather_labels(manual=None):
     return clean, trust
 
 
-def build_rows(clean, trust=None, regression=None):
-    """Dedup to MAX_PER_LABEL per distinct reading; split by permanent hash.
-    Attaches a per-sample trust weight (defaults 1.0). Regression frames are
-    FORCED into test (never trained on) and tagged reg=True so the gate can
-    score them separately."""
+def build_rows(clean, trust=None, regression=None, hard=None):
+    """Dedup to MAX_PER_LABEL per distinct reading; split into train/test.
+
+    NEW TEST POLICY: the benchmark is the held-out HARD frames (oracle-caught
+    CNN failures) + the regression set — the frames that reflect the LIVE
+    operating point (current high-value glare). Easy historical frames that
+    happen to hash into the holdout are sent to TRAIN instead, so the gate stops
+    grading the model on gimmes it already aces. Falls back to the plain hash
+    holdout only if too few hard frames exist yet (< MIN_TEST).
+
+    Regression frames are always FORCED into test (never trained on). reg/hard
+    tags let the gate score each subset."""
     trust = trust or {}
     regression = regression or set()
+    hard = hard or set()
+    n_hard_test = len([f for f in clean if f in hard and is_test(f)])
+    use_hard = n_hard_test >= MIN_TEST
+
+    def in_test(f):
+        if f in regression:
+            return True
+        if use_hard:
+            return f in hard and is_test(f)
+        return is_test(f)
+
     per = {}
     train, test = [], []
     # test frames first (never capped — keep the benchmark complete)
     for f, lbl in sorted(clean.items()):
-        if is_test(f) or f in regression:
+        if in_test(f):
             test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0),
-                         "reg": f in regression})
+                         "reg": f in regression, "hard": f in hard})
     for f, lbl in sorted(clean.items()):
-        if is_test(f) or f in regression:
+        if in_test(f):
             continue
         if per.get(lbl, 0) >= MAX_PER_LABEL:
             continue
@@ -739,6 +782,7 @@ def main():
     manual = load_manual()
     clean, trust = gather_labels(manual)
     regression = load_regression()
+    hard = load_hard_frames()
     n_new, max_ts = new_frame_count(clean)
     n_manual_new, manual_total = manual_new_count(manual)
     log(f"new frames since last retrain: {n_new} (threshold {MIN_NEW_FRAMES})")
@@ -752,13 +796,18 @@ def main():
                       "reason": "below MIN_NEW_FRAMES"})
         return
 
-    train_rows, test_rows = build_rows(clean, trust, set(regression))
+    train_rows, test_rows = build_rows(clean, trust, set(regression), hard)
     n_reg_test = sum(1 for r in test_rows if r.get("reg"))
+    n_hard_test = sum(1 for r in test_rows if r.get("hard"))
     log(f"dataset: train {len(train_rows)}  held-out TEST {len(test_rows)} "
         f"({len({r['label'] for r in train_rows})} distinct train labels)")
-    if regression:
-        log(f"regression set: {n_reg_test} permanent hard-fail frames forced "
-            f"into TEST (never trained on)")
+    if n_hard_test:
+        log(f"HARD BENCHMARK: test = {n_hard_test} held-out HARD frames "
+            f"(oracle-caught CNN failures) — the gate now measures the LIVE "
+            f"failure mode, not easy historical frames. ({len(hard)} hard total)")
+    else:
+        log(f"hard benchmark: only {len(hard)} hard frames, too few held out "
+            f"— falling back to plain hash holdout")
     if len(test_rows) < MIN_TEST:
         log(f"ABORT: held-out test too small ({len(test_rows)} < {MIN_TEST})")
         write_status({"ts": time.time(), "skipped": True,

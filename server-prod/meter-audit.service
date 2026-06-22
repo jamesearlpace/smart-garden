@@ -1,0 +1,9 @@
+[Unit]
+Description=Water meter lock accuracy audit (read-only, independent dual-model truth)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jamesearlpace
+WorkingDirectory=/home/jamesearlpace/smart-garden-server
+ExecStart=/home/jamesearlpace/smart-garden-server/.venv/bin/python meter_audit.py

@@ -95,12 +95,17 @@ def available():
     return bool(_api_key())
 
 
-def read_meter(jpeg_bytes, rotate180=True, hint=None):
+def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
     """Send a JPEG frame to GPT-4o vision and return a parsed reading.
 
     ``hint`` (optional dict) supplies physics context so the model can reason
     through glare on the high digits: {last_value, min_value, max_value,
     high_prefix}. It never overrides clearly-read low digits — see _build_hint.
+
+    ``model`` (optional) overrides the default ORACLE_MODEL for this single
+    call — used by the hybrid arbiter: a cheap model (gpt-4o-mini) for the
+    routine heartbeat reads, and a stronger model (gpt-4o) only when the read
+    is about to MOVE the lock (a correction), where accuracy matters most.
 
     Returns a dict: {"ok":bool, "value":int|None, "digits":str, "confidence":str,
     "readable":bool, "error":str|None, "cost_tokens":int}. ``value`` is the int
@@ -129,7 +134,7 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None):
     if hint_text:
         user_text += " " + hint_text
     body = {
-        "model": MODEL,
+        "model": model or MODEL,
         "messages": [
             {"role": "system", "content": _SYS},
             {"role": "user", "content": [
@@ -162,6 +167,7 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None):
                 "confidence": parsed.get("confidence", "low"),
                 "readable": bool(parsed.get("readable", False)),
                 "error": None if value is not None else "not 9 digits",
+                "model": model or MODEL,
                 "cost_tokens": tokens}
     except Exception as e:
         detail = ""

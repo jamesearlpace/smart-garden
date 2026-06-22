@@ -2908,6 +2908,15 @@ def create_app(config, engine, weather, billing):
     # moves the register far more. Tiny steps need an exact-repeat to commit, so
     # noise can't ratchet the lock upward. 20 counts ≈ 0.02 ft³ ≈ 0.15 gal.
     ORACLE_NOISE_BAND = int(os.environ.get("METER_ORACLE_NOISE_BAND", "20"))
+    # ── Hybrid arbiter models ──────────────────────────────────────────────
+    # Cheap model for the routine heartbeat reads (keeps cost ~tenths of a cent
+    # per call); a stronger model is used ONLY to confirm a read that's about to
+    # MOVE the lock (a correction) — where accuracy matters most and a bad read
+    # would ratchet or drop the lock. If both resolve to the same model the
+    # confirm step is skipped (no double charge).
+    ORACLE_HEARTBEAT_MODEL = os.environ.get("ORACLE_MODEL", "gpt-4o-mini")
+    ORACLE_AUTHORITY_MODEL = os.environ.get(
+        "METER_ORACLE_AUTHORITY_MODEL", "gpt-4o")
     # Max gold-dataset images to keep PER DISTINCT reading. One clean image per
     # number is enough to train a per-digit model (a model learns nothing extra
     # from 3 copies of the same digits), and it keeps the set lean. Raise via env
@@ -3233,6 +3242,7 @@ def create_app(config, engine, weather, billing):
             # ratchet on that noise. Discriminate by MAGNITUDE instead: real
             # water use moves the register far more than the last-digit noise.
             commit = False
+            _authority = False  # set on consequential moves → confirm with gpt-4o
             zone_on = _active_gpm() > 0
             if lg is None:
                 commit = True
@@ -3256,12 +3266,28 @@ def create_app(config, engine, weather, billing):
                         log.info("oracle %09d vs lock %s held — last-digit noise "
                                  "guard (no sprinkler flow)", val, lg)
                         return
+                elif (val // 1000) < (lg // 1000):
+                    # DOWNWARD correction — the lock's WHOLE-cubic-feet reading is
+                    # HIGHER than the oracle's, i.e. the lock over-read and
+                    # ratcheted past a digit boundary. (Last-digit glare jitter
+                    # stays within the same 1000, so this fires ONLY on a real
+                    # whole-cf overshoot, never on noise.) This is the most
+                    # consequential move, so we DON'T trust the cheap heartbeat
+                    # read alone — it's confirmed by the stronger model (gpt-4o)
+                    # in the authority gate below before the lock actually moves.
+                    commit = True
+                    _authority = True
+                    log.info("oracle DOWNWARD candidate: lock %s -> ~%09d "
+                             "(whole-cf overshoot; gpt-4o confirm pending)",
+                             lg, val)
                 elif prev is not None and abs(val - prev) <= ORACLE_CORROB_TOL:
                     # A MEANINGFUL move — real household use (shower/toilet/tap),
                     # or stale catch-up — confirmed by a 2nd agreeing read. This
                     # is what lets non-sprinkler usage register while one-off
-                    # garbage (which never repeats) is rejected.
+                    # garbage (which never repeats) is rejected. A forward jump
+                    # also moves the lock, so it too is confirmed by gpt-4o below.
                     commit = True
+                    _authority = True
                     log.info("oracle move corroborated: %09d (lock %s, prev %s)",
                              val, lg, prev)
                 else:
@@ -3272,6 +3298,47 @@ def create_app(config, engine, weather, billing):
                     return
             if not commit:
                 return
+            # ── Hybrid authority confirm ────────────────────────────────────
+            # The cheap heartbeat model (mini) decided to MOVE the lock. Before
+            # we actually move it, confirm with the stronger model (gpt-4o) on
+            # the SAME frame — a bad correction would ratchet or drop the lock,
+            # so accuracy is worth one extra call here (corrections are rare; the
+            # routine heartbeat stays on the cheap model). Skipped automatically
+            # when both models resolve to the same name (no double charge).
+            if (_authority and ORACLE_AUTHORITY_MODEL
+                    and ORACLE_AUTHORITY_MODEL != ORACLE_HEARTBEAT_MODEL):
+                # Read UNBIASED (hint=None): the hint's high_prefix comes from the
+                # current lock, which may be the very over-read we're trying to
+                # correct down — feeding it back would bias the authority into
+                # confirming the bad prefix. The strong model reads the odometer
+                # straight; if glare garbles its high digits the whole-cf won't
+                # match and the move simply holds (fails safe).
+                ares = vision_oracle.read_meter(
+                    frame, rotate180=True, hint=None,
+                    model=ORACLE_AUTHORITY_MODEL)
+                _oracle_state["calls"] += 1
+                cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+                aval = ares.get("value")
+                if (not ares.get("ok") or ares.get("confidence") == "low"
+                        or not ares.get("readable") or aval is None
+                        or aval < anchor - 5):
+                    log.info("authority(%s) read not trusted (%s) — move %09d "
+                             "held", ORACLE_AUTHORITY_MODEL, ares, val)
+                    _oracle_state["pending_val"] = None
+                    return
+                # The authority must agree on the WHOLE cubic feet (the reliable
+                # digits — the last 3 jitter under glare on either model). If it
+                # does, COMMIT THE AUTHORITY'S value (it's the better reader); if
+                # not, the move is unsafe — hold and re-evaluate next cycle.
+                if (aval // 1000) != (val // 1000):
+                    log.info("authority(%s) %09d disagrees with heartbeat %09d "
+                             "(whole-cf) — move held",
+                             ORACLE_AUTHORITY_MODEL, aval, val)
+                    _oracle_state["pending_val"] = None
+                    return
+                log.info("authority(%s) confirmed move: %09d (heartbeat had %09d)",
+                         ORACLE_AUTHORITY_MODEL, aval, val)
+                val = aval
             _oracle_state["pending_val"] = None
             if meter_reader.reanchor(val, ts=now, source="oracle"):
                 _oracle_state["reanchors"] += 1

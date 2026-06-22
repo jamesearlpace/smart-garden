@@ -255,3 +255,28 @@ ssh Acer "ssh tower 'cd ~/meter-cnn && nohup ~/meter-ocr/.venv/bin/python \
   retrain.py --force > /tmp/retrain_full.log 2>&1 & echo PID-$!'"
 # monitor: ~/meter-cnn/retrain.log (logs at ep%10 + final); retrain_status.json
 ```
+
+---
+
+## 2026-06-21 (evening) — Oracle-arbiter redesign: down-correction, hybrid, + independent audit
+
+Constrained decode stayed DISABLED (commit `5d7241b`, positive-feedback drift flaw). Instead, made the **oracle the arbiter** that can move the lock both directions, cut cost, and — crucially — **built the first non-circular way to measure if the display is actually right.**
+
+**Changes (deployed to Acer, healthy; git = `server-prod/`):**
+- **Cost:** `ORACLE_MODEL=gpt-4o-mini` heartbeat (systemd drop-in). ~15-20x cheaper than gpt-4o.
+- **Down-correction** (`dashboard.py _oracle_run`): the lock can now self-heal DOWN after an over-read. Fires only when the oracle's WHOLE-cubic-feet (`//1000`) is below the lock's (a real overshoot, never last-digit jitter). Splice guard stops a correct below-lock read being forced forward.
+- **Hybrid arbiter:** mini does every cheap heartbeat read; **gpt-4o confirms ONLY when the lock is about to MOVE** (a correction), read UNBIASED (`hint=None`) so the lock's prefix can't bias it. Must agree on whole-cf or the move holds (fails safe). `vision_oracle.read_meter(model=...)` per-call override.
+- **Independent audit** (`meter_audit.py` + `meter-audit.timer`, every 20 min, own `meter_audit.db`, READ-ONLY): samples the latest frame, reads it unbiased with BOTH models, logs `lock_error` vs that truth, staleness, two-model agreement, and down-corrections. `--report` summarises. **This is the only non-circular measure** — the oracle can't grade itself once it drives the display. Dark-frame skip avoids paying for black night frames.
+
+**First live numbers (the honest answer to "is it accurate?"):**
+- Lock vs independent dual-model truth: **whole cubic foot 100% correct**; last-3-digit error ~−522 counts (≈4 gal, lock lagging slightly behind active flow). Two-model agreement 100%. Staleness fine (~66s).
+- The image genuinely can't yield the last 2-3 digits reliably (blurry/glared) — **whole-cf is the honest accuracy ceiling**, and we're hitting it.
+
+**Corrected mental model (supersedes the constrained-decode model above):**
+1. Live CNN ≈ 0% on glare frames — dead weight on the live path (cnn_eval: reads the middle digits totally wrong).
+2. **The oracle is the reader.** mini = heartbeat, gpt-4o = authority on moves. Lock = monotonic physics model the oracle can correct both ways.
+3. **The audit is how we know it works** — error/staleness/correction numbers from independent unbiased reads, not self-grading.
+
+**Cost note (watch):** audit = 1 mini + 1 gpt-4o every 20 min, daylight-gated. ~$5-11/mo if left on 24/7. Stop with `sudo systemctl disable --now meter-audit.timer` after the measurement window, or lower the cadence.
+
+**Next:** (a) read the 24-48h audit report to confirm it holds + catches a real overshoot; (b) consider mini-only on most audit samples + gpt-4o every Nth to cut cost; (c) forward-reads-never-corroborate-during-fast-flow is a separate pre-existing gap.

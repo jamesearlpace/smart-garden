@@ -2712,11 +2712,26 @@ def create_app(config, engine, weather, billing):
     # frames — and keeps the lock fresh so the paid oracle is needed far less.
     # Only trusted while the lock is reasonably fresh; a cold/stale lock has an
     # unreliable window, so we let the oracle recover it instead.
-    CONSTRAINED_ENABLED = os.environ.get("METER_CONSTRAINED", "1") == "1"
+    # CONSTRAINED DECODE — DISABLED BY DEFAULT (2026-06-21). It has a
+    # positive-feedback drift flaw: it anchors to the lock and searches a
+    # forward-only window, so on an idle/noisy meter it ratchets the monotonic
+    # lock UPWARD on noise (observed overshoot 094599794 -> 094600704). The
+    # median smoothing only stops ISOLATED spikes, not systematic drift. Needs a
+    # redesign (e.g. only advance on real measured flow) before re-enabling.
+    # Set METER_CONSTRAINED=1 to opt back in for experiments.
+    CONSTRAINED_ENABLED = os.environ.get("METER_CONSTRAINED", "0") == "1"
     CONSTRAINED_MAX_STALE = float(
         os.environ.get("METER_CONSTRAINED_MAX_STALE", "900"))   # 15 min
     CONSTRAINED_MIN_CEIL = int(os.environ.get("METER_CONSTRAINED_MIN_CEIL", "600"))
     CONSTRAINED_MAX_CEIL = int(os.environ.get("METER_CONSTRAINED_MAX_CEIL", "3000"))
+    # Median smoothing: commit only the (conservative, lower-middle) median of
+    # the last N constrained reads, so a cluster of outlier frames can't ratchet
+    # the monotonic lock and stick. N=7 tolerates up to 3 outliers in the window;
+    # lower-middle biases toward NOT over-advancing (under-reads self-correct,
+    # over-reads stick forever on a monotonic meter).
+    CONSTRAINED_MEDIAN_N = int(os.environ.get("METER_CONSTRAINED_MEDIAN_N", "7"))
+    CONSTRAINED_MEDIAN_MIN = int(
+        os.environ.get("METER_CONSTRAINED_MEDIAN_MIN", "4"))
     # Training-data banking: when the validator produces a HIGH-confidence read,
     # save (raw frame JPEG, validated 9-digit label) so a custom per-digit model
     # can be trained later on THIS meter under THIS camera's real conditions.
@@ -3321,6 +3336,9 @@ def create_app(config, engine, weather, billing):
         outage can't grow memory without limit — only then are the very oldest
         frames dropped.
         """
+        # Rolling window of recent constrained reads. We commit only the MEDIAN
+        # of this window so a lone outlier spike can't ratchet the lock.
+        _constr_window = _deque(maxlen=CONSTRAINED_MEDIAN_N)
         while True:
             item = None
             depth = 0
@@ -3381,24 +3399,36 @@ def create_app(config, engine, weather, billing):
                             cnn.get("min_conf"))
                     else:
                         trust_cnn = True
+                # CONSTRAINED-DECODE MEDIAN: a single outlier read must NOT move
+                # the monotonic lock (a lone high spike sticks forever and
+                # poisons the display — seen 2026-06-21 when the lock ratcheted to
+                # 094599999 while the meter was at ~094599794). So smooth the
+                # constrained reads and commit only the MEDIAN of the recent
+                # window: an isolated spike is outvoted and dropped, while a
+                # sustained real advance still moves the median forward (~2-frame
+                # lag). Plausibility vs the lock is enforced entering the window
+                # AND at commit, and it's forward-only.
+                constrained_text = None
+                if c_anchor is None:
+                    _constr_window.clear()
+                elif (cnn and not cnn_big_jump
+                        and cnn.get("constrained_value") is not None):
+                    cv = int(cnn["constrained_value"])
+                    if c_anchor <= cv <= c_anchor + c_ceil:
+                        _constr_window.append(cv)
+                    if len(_constr_window) >= CONSTRAINED_MEDIAN_MIN:
+                        sw = sorted(_constr_window)
+                        med = sw[(len(sw) - 1) // 2]   # conservative lower-middle
+                        if c_anchor <= med <= c_anchor + c_ceil:
+                            constrained_text = f"{med:09d}"
                 if trust_cnn:
                     text = cnn["digits"]
                     cam_ocr_stats["last_ms"] = cnn.get("ms")
                     cam_ocr_stats["cnn_used"] += 1
                     cam_ocr_stats["reader"] = "cnn"
                     used_cnn = True
-                elif (c_anchor is not None and cnn and not cnn_big_jump
-                      and cnn.get("constrained_value") is not None
-                      and c_anchor <= int(cnn["constrained_value"])
-                      <= c_anchor + c_ceil):
-                    # CONSTRAINED DECODE: the CNN couldn't read cleanly, but its
-                    # per-digit probabilities + the plausible window pin the
-                    # value. Use it to keep the lock fresh for FREE (no RapidOCR,
-                    # no oracle). Bounded to [lock, lock+ceil] so it can never
-                    # jump far or run backward. The oracle's verify heartbeat
-                    # still spot-checks periodically to catch a drifting lock.
-                    cval = int(cnn["constrained_value"])
-                    text = f"{cval:09d}"
+                elif constrained_text is not None:
+                    text = constrained_text
                     cam_ocr_stats["last_ms"] = cnn.get("ms")
                     cam_ocr_stats["cnn_constrained"] = (
                         cam_ocr_stats.get("cnn_constrained", 0) + 1)

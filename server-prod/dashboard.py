@@ -2917,6 +2917,20 @@ def create_app(config, engine, weather, billing):
     ORACLE_HEARTBEAT_MODEL = os.environ.get("ORACLE_MODEL", "gpt-4o-mini")
     ORACLE_AUTHORITY_MODEL = os.environ.get(
         "METER_ORACLE_AUTHORITY_MODEL", "gpt-4o")
+    # Absolute hard cap on how far a SINGLE oracle commit may advance the lock,
+    # in counts (1000 = 1 ft³). The idle-aware physics ceiling grows without
+    # bound as the lock goes stale (an LLM/quota outage), so after ~30 min it
+    # would re-admit a big garble (a digit transposition that fools corroboration
+    # AND gpt-4o on the same blurry frame). This cap means no consensus, however
+    # unanimous, can jump the lock more than ~15 ft³ at once. A genuine bigger
+    # jump (burst pipe, or catch-up after a long outage) is rare and is either a
+    # leak or a garble — it should get a human re-anchor, not a silent commit.
+    ORACLE_MAX_ADVANCE = int(os.environ.get("METER_ORACLE_MAX_ADVANCE", "15000"))
+    # Absolute plumbing flow limit (gallons/min) used ONLY by the physics guard
+    # to reject impossible jumps. This is what a burst/fully-open pipe could flow
+    # — far above normal use — so it permits real household use (showers, fills)
+    # while making a 180-gpm garble jump impossible.
+    METER_MAX_GPM = float(os.environ.get("METER_MAX_GPM", "20"))
     # Max gold-dataset images to keep PER DISTINCT reading. One clean image per
     # number is enough to train a per-digit model (a model learns nothing extra
     # from 3 copies of the same digits), and it keeps the set lean. Raise via env
@@ -3297,6 +3311,29 @@ def create_app(config, engine, weather, billing):
                              val, lg)
                     return
             if not commit:
+                return
+            # ── PHYSICS BEATS CONSENSUS (hard guard) ────────────────────────
+            # A systematic glare garble (a digit transposition like 094608->094680)
+            # repeats IDENTICALLY across frames, so it fools corroboration AND the
+            # authority model (gpt-4o transposes the same way on the same blurry
+            # frame). Physics can't be fooled: block any committed FORWARD move
+            # bigger than the MAXIMUM flow physically possible (a wide-open pipe,
+            # METER_MAX_GPM) since the lock last moved — capped so a long stale
+            # stretch can't balloon it. This uses the ABSOLUTE plumbing limit, NOT
+            # the tiny idle ceiling, so legitimate household use (a shower, ~2-3
+            # ft³) still commits via corroboration; only the impossible +72 ft³
+            # (180 gpm) transposition is rejected. Down-corrections (val below
+            # lock) are exempt (val > lg is false for them).
+            phys_max = min(
+                int((METER_MAX_GPM / 60.0) * elapsed * cam_ocr.COUNTS_PER_GAL
+                    * 1.5) + ORACLE_IDLE_JITTER,
+                ORACLE_MAX_ADVANCE)
+            if (lg is not None and val is not None and val > lg
+                    and (val - lg) > phys_max):
+                _oracle_state["pending_val"] = None
+                log.warning("oracle BLOCKED impossible jump %09d: +%d > phys_max "
+                            "%d in %.0fs (lock %s held) — garble, consensus "
+                            "ignored", val, val - lg, phys_max, elapsed, lg)
                 return
             # ── Hybrid authority confirm ────────────────────────────────────
             # The cheap heartbeat model (mini) decided to MOVE the lock. Before

@@ -286,3 +286,26 @@ Constrained decode stayed DISABLED (commit `5d7241b`, positive-feedback drift fl
 **Cost note (watch):** audit = 1 mini + 1 gpt-4o every 20 min, daylight-gated. ~$5-11/mo if left on 24/7. Stop with `sudo systemctl disable --now meter-audit.timer` after the measurement window, or lower the cadence.
 
 **Next:** (a) read the 24-48h audit report to confirm it holds + catches a real overshoot; (b) consider mini-only on most audit samples + gpt-4o every Nth to cut cost; (c) forward-reads-never-corroborate-during-fast-flow is a separate pre-existing gap.
+
+---
+
+## 2026-06-21 (evening, pt 2) — CNN viability KILLED by data + literature. STOP re-proposing it.
+
+Spent the rest of the session honestly stress-testing whether the CNN could be salvaged (narrow scope, bigger model, different architecture). Conclusion: **no — and don't revisit without new hardware.** Three independent lines of evidence:
+
+**1. Per-position accuracy (399 real frames, cnn_eval vs oracle truth):**
+- `p0:100% p1:100% p2:100%` (constant `094`, parroted) → `p3:5% p4:50% p5:55% p6:65% p7:61% p8:42%`.
+- Last-N-digit exact: last1=42%, last2=29%, **last3=25%**, last4=23%, full9=0%.
+- The "CNN reads the fast low digits well" belief was an ILLUSION from a few lucky frames. It reads NO digit position better than 65%. The narrow-scope "CNN does last 3, logic does the rest" idea is dead: 25% on the last 3.
+
+**2. Root-cause split (what's actually wrong, from the per-position data):**
+- **High changing digit (p3=5%) = DATA problem (leading edge), NOT glare.** Same glare didn't stop p0-2 reading 100%. The meter sits at one value for weeks → almost no training examples of the new digit → collapse. The edge keeps moving as the meter climbs, so it never resolves.
+- **Fast low digits (p6-p8, 42-65%) = genuine IMAGE-QUALITY ceiling.** These cycle 0-9 constantly so they have FULL training coverage — yet cap at ~60%. That gap IS glare+blur+soft-lens. Even with perfect data, glare alone holds the low digits ~60%.
+- **Camera angle/position drift = minor.** Proven: constant digits read 100% through all the drift; the generous crop + augmentation absorb it. Not the bottleneck.
+
+**3. Literature (Laroca et al., the AMR research field — UFPR-AMR 2019, Copel-AMR 2021):**
+- SOTA real-world AMR (12,500 field images, glare/dirt/rotation) reports **">99% recognition WHEN REJECTING low-confidence reads."** i.e. they hit 99% by NOT reading the hard frames — they reject + defer. That is EXACTLY our reject-to-LLM architecture. The literature validates what we built; it does NOT offer a CNN that reads glare frames.
+- Their novel stage = corner-detection + perspective rectification → targets ANGLE/rotation, which we proved isn't our bottleneck.
+- Their CNNs generalize because they train on THOUSANDS of DIFFERENT meters. We have ONE meter with a climbing leading edge → their diversity advantage doesn't transfer. Our single-meter coverage problem is structurally different (and in that sense harder).
+
+**VERDICT:** The reader IS the LLM (gpt-4o-mini heartbeat + gpt-4o on moves). The CNN is dead weight on the live path and cannot be rescued by narrowing scope, a bigger model, or a different architecture on THIS hardware/data. The only theoretical paths left both need things James has ruled out or that don't pay off: (a) reduce glare = hardware (declined); (b) thousands of diverse meters = N/A; (c) distill gpt-4o reads into a bigger local student model = still hits the same glare information-loss wall, and `mini` already killed the cost motive. **Whole-cubic-foot is accurate and that's the win. Don't spend more nights on the CNN.**

@@ -10,6 +10,12 @@
 > (192.168.0.109, `~/smart-garden-server/`).
 
 ## TL;DR
+- **▶ CURRENT STATE (2026-06-21 evening — START HERE; full detail in the bottom entry "Oracle-arbiter redesign"):**
+  - **The oracle is the reader; the CNN is dead weight on the live path (~0%).** Architecture now: `gpt-4o-mini` does every cheap heartbeat read; `gpt-4o` confirms ONLY when the lock is about to MOVE (a correction), read unbiased. Lock = monotonic physics model the oracle can correct **both directions** (down-correction added — it can self-heal after an over-read).
+  - **Accuracy (verified by independent audit): whole cubic foot 100% correct; last 2-3 digits lag/jitter ~hundreds of counts because the image is too blurry to read them.** Whole-cf is the honest ceiling — James will NOT buy a polarizing lens, so don't propose hardware fixes.
+  - **How we measure it (the only non-circular way):** `meter_audit.py` + `meter-audit.timer` (every 20min, READ-ONLY, own `meter_audit.db`) reads each frame unbiased with BOTH models and logs lock_error / staleness / agreement / down-corrections. Run `meter_audit.py --report --hours=48`. **COST: ~$5-11/mo if left on** — stop with `sudo systemctl disable --now meter-audit.timer`.
+  - **Git:** committed `f784305` in `c:\MyCode\smart-garden` (server-prod/), **NOT pushed**. Edit-mirror `smart-garden-server-live` is NOT a git repo; canonical tracked copies are in `smart-garden/server-prod/`.
+  - **Open:** watch 24-48h audit to confirm it holds + catches a real overshoot. Constrained decode stays DISABLED (positive-feedback flaw).
 - **(2026-06-21 CORRECTION) The LIVE CNN accuracy is ~0% on current frames, and has been for days** — graded by the oracle (`cnn_daily` table): 28% on 06-15 → 0% since 06-16 across v3/v4/v5. The offline benchmark (0.82) is MEANINGLESS for the live operating point.
 - **The GPT-4o vision oracle is what actually keeps the meter readable** — the CNN falls back to it thousands of times/day. When the oracle's OpenAI quota dies (HTTP 429), there is NO working reader → display goes stale → user pain. That IS the failure chain (confirmed in logs 2026-06-21).
 - **Re-anchoring manually does NOT train anything** — it only sets the lock momentarily; the next frame collapses again. Bailing water, not fixing the leak.

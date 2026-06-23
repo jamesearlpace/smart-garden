@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (auto-heal hardening: episode-scoped confirms + guard-preserving clear)
+**Last Updated:** 2026-06-23 (archive-to-lock self-heal: drifted CNN history auto-reconciles to the trusted lock)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -104,6 +104,33 @@
    - truth-guard state available and readable post-patch.
 
 **Outcome:** The auto-heal system remains fully automated, but now with stronger episode isolation and no accidental clearing of unrelated manual safety latches.
+
+---
+
+## 2026-06-23 — Archive-to-lock self-heal (drifted CNN/history auto-corrects)
+
+**Problem:** The dashboard card showed `094841999` (`cnn`) while the physical glass + the oracle-trusted lock read `094791096` — about +51 ft³ too high. The lock auto-heal could NOT catch this: the wrong number lives on the **archive chain**, a separate surface that anchors each frame to its OWN previous value with a forward-only bound. So a one-time over-read became a permanent high floor it could never come back down from, even though the lock was correct. The lock never disagrees with itself → the lock heal never armed.
+
+**Root cause (verified in code):**
+- `_archive_frame` anchored the exact-frame CNN read to `prev_i` (previous archive value), not the trusted lock.
+- A `cnn`-high archive row was treated as a `trusted_anchor` and propagated, reinforcing the drift.
+- The existing repair helpers (`_auto_interpolate_to_anchor`, `propagate_delta`) **stop at trusted/reviewed rows**, so they halted right at the wrong number.
+
+**Fix (all automatic, nothing hardcoded — `dashboard.py` + `meter_archive.py`):**
+- **Anchor to truth:** when the lock is oracle-trusted (`_lock_trusted_value()` — oracle-confirmed within 15 min and the lock hasn't drifted off that confirmation), new archive frames anchor to the **lock**, not to a possibly-drifted previous value. A high garble frame is then rejected by the bound and the row defaults to the correct lock value — drift stops at the source.
+- **Monotonic floor capped at truth:** the "lock lags" recovery floor (`prev_floor`) is capped at the trusted lock, so a drifted-high previous row can't re-pin a row upward.
+- **Reconcile existing drift:** `meter_archive.reconcile_above()` rewrites every archive row reading ABOVE the trusted lock (the meter is monotonic, so the lock is the all-time high → anything higher is provably impossible) down to the lock. It deliberately **overrides wrongly-trusted `cnn`/`oracle`/`lock`/`propagated` rows** (the sharpening the old helpers couldn't) but NEVER touches `manual` human corrections.
+- **Strong trust gate:** heal only acts when the lock is oracle-trusted recently AND within plausible real-flow lead of the confirmed value — so it can never force the archive onto a bad lock (fail-safe).
+- **Observability:** new `archive_heal` block in `/api/cam/status` (`reconciles`, `rows`, `last_from/to`, `lock_trusted`).
+
+**Verified live (2026-06-23 15:11):**
+- Pre-heal archive max: `094844999` (drifted ~+54 ft³).
+- On restart, once the oracle re-confirmed the lock, the heal fired automatically:
+  `ARCHIVE-HEAL: reconciled 559 impossible-high archive row(s) (max 094844999 -> trusted lock 094791096) — NO manual step`.
+- Post-heal archive max: `094791096` (matches the trusted lock). Status: `archive_heal.reconciles=1, rows=559, lock_trusted=true`.
+- New frames written after the heal stay correct (`094791096`, source `lock`) — no re-drift.
+
+**Net:** both meter surfaces now self-heal automatically — the **lock** (sustained multi-model consensus) and the **archive/display** (reconcile-to-trusted-lock). Fully programmatic, no manual re-anchor.
 
 ---
 

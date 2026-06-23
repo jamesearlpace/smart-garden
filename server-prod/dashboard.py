@@ -3035,6 +3035,33 @@ def create_app(config, engine, weather, billing):
         os.environ.get("METER_RECONNECT_BACKFILL_MAX_ATTEMPTS", "60"))
     _archive_state = {"last_ts": 0.0, "bytes": 0, "files": None, "saved": 0,
                       "evicted": 0, "last_reread_ts": 0.0}
+    # ── ARCHIVE-TO-LOCK SELF-HEAL ──────────────────────────────────────────
+    # The archive chain reads each frame anchored to its OWN previous value with
+    # a forward-only bound, so a one-time over-read becomes a permanent high
+    # floor it can never come back down from — even when the live oracle-trusted
+    # lock is correct. (The lock auto-heal can't catch this: the lock never
+    # disagrees with itself.) This heals the DISPLAY/HISTORY surface: when the
+    # lock is oracle-trusted, any archive row reading ABOVE it (the meter is
+    # monotonic, so the lock is the all-time high) is provably impossible and is
+    # snapped back to the trusted lock automatically. No hardcoded value, no
+    # manual step. Thresholds are env-tunable.
+    ARCHIVE_HEAL_ENABLED = (
+        os.environ.get("METER_ARCHIVE_HEAL_ENABLED", "1") == "1")
+    # Lock counts as "oracle-trusted" only if the oracle confirmed it within this
+    # window AND the live lock hasn't drifted away from that confirmed value by
+    # more than real flow could explain.
+    ARCHIVE_HEAL_TRUST_WINDOW_SECS = float(
+        os.environ.get("METER_ARCHIVE_HEAL_TRUST_WINDOW_SECS", "900"))
+    # Physical-lead tolerance: an archive frame can legitimately lead the lock by
+    # a little real flow, so only rows above lock+tol are treated as impossible.
+    ARCHIVE_HEAL_TOL_COUNTS = int(
+        os.environ.get("METER_ARCHIVE_HEAL_TOL_COUNTS", "1500"))
+    ARCHIVE_HEAL_LOOKBACK_MIN = int(
+        os.environ.get("METER_ARCHIVE_HEAL_LOOKBACK_MIN", "720"))
+    _archive_heal_state = {
+        "reconciles": 0, "rows": 0, "last_ts": 0.0,
+        "last_from": None, "last_to": None,
+    }
     _reconnect_backfill = {
         "pending": False,
         "start_ts": None,
@@ -3342,6 +3369,81 @@ def create_app(config, engine, weather, billing):
         except Exception:
             return None
 
+    def _lock_trusted_value(now=None):
+        """Return the live lock value IFF it is currently oracle-trusted.
+
+        "Trusted" = the oracle confirmed a value within
+        ARCHIVE_HEAL_TRUST_WINDOW_SECS, and the live lock still sits at/above that
+        confirmed value but not further ahead than real flow could explain in the
+        window. The lock is independently protected by the lock auto-heal + the
+        physics guard, so a recent oracle confirmation is a strong truth signal.
+        Returns int lock value, or None if we can't vouch for it (in which case
+        the archive heal stays hands-off — fail safe, never force a bad lock).
+        """
+        if not ARCHIVE_HEAL_ENABLED:
+            return None
+        now = now or time.time()
+        lg = getattr(meter_reader, "last_good", None)
+        cv = _oracle_state.get("confirmed_val")
+        cts = float(_oracle_state.get("confirmed_ts", 0.0) or 0.0)
+        if lg is None or cv is None or cts <= 0:
+            return None
+        if (now - cts) > ARCHIVE_HEAL_TRUST_WINDOW_SECS:
+            return None
+        try:
+            lg = int(lg)
+            cv = int(cv)
+        except (TypeError, ValueError):
+            return None
+        # Lock must not have fallen BELOW the confirmed value (monotonic) nor run
+        # implausibly far AHEAD of it since the confirmation (bounded real flow).
+        if lg < cv - ORACLE_NOISE_BAND:
+            return None
+        max_lead = int((METER_MAX_GPM / 60.0)
+                       * max(now - cts, 1.0) * cam_ocr.COUNTS_PER_GAL * 1.5) + 500
+        if (lg - cv) > max_lead:
+            return None
+        return lg
+
+    def _archive_reconcile_to_lock(trusted_lock, captured_dt):
+        """Snap provably-impossible-high archive rows back to the trusted lock.
+
+        The meter is monotonic, so the oracle-trusted lock is the all-time-high
+        reading. Any archive row above it (beyond a small physical-lead
+        tolerance) cannot be real history — it's a drifted CNN/lock chain. We
+        rewrite those rows down to the trusted lock automatically. Cheap-gated:
+        we first check the window's MAX and only touch the DB when an
+        impossible-high row actually exists, so this is a no-op in steady state.
+        """
+        if not ARCHIVE_HEAL_ENABLED or trusted_lock is None:
+            return
+        try:
+            import meter_archive
+            end = captured_dt.isoformat(timespec="seconds")
+            start = (captured_dt - timedelta(
+                minutes=max(5, ARCHIVE_HEAL_LOOKBACK_MIN))).isoformat(
+                    timespec="seconds")
+            threshold = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
+            mx = meter_archive.max_reading_in(start, end)
+            if mx is None or mx <= threshold:
+                return  # nothing impossibly high → no-op
+            n = meter_archive.reconcile_above(
+                threshold=threshold, new_value=int(trusted_lock),
+                start=start, end=end)
+            if n > 0:
+                _archive_heal_state["reconciles"] += 1
+                _archive_heal_state["rows"] += int(n)
+                _archive_heal_state["last_ts"] = time.time()
+                _archive_heal_state["last_from"] = int(mx)
+                _archive_heal_state["last_to"] = int(trusted_lock)
+                log.warning(
+                    "ARCHIVE-HEAL: reconciled %d impossible-high archive row(s) "
+                    "(max %09d -> trusted lock %09d) — display/history snapped "
+                    "back to truth automatically, NO manual step",
+                    n, mx, int(trusted_lock))
+        except Exception as e:
+            log.debug("archive reconcile failed: %s", e)
+
     def _archive_frame(frame, captured_dt):
         """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
         the oldest files when the total exceeds ARCHIVE_MAX_BYTES. Best-effort —
@@ -3391,7 +3493,15 @@ def create_app(config, engine, weather, billing):
 
                     # Primary: exact-frame constrained CNN read anchored to the
                     # previous archive value (or lock snapshot when no history).
-                    anchor_i = prev_i if prev_i is not None else arc_reading
+                    # SELF-HEAL: when the live lock is oracle-trusted, anchor to
+                    # IT instead of a possibly-drifted previous archive value —
+                    # so a high garble frame is rejected by the bound and the row
+                    # defaults to the correct lock value (stops new drift).
+                    trusted_lock = _lock_trusted_value(now)
+                    if trusted_lock is not None:
+                        anchor_i = trusted_lock
+                    else:
+                        anchor_i = prev_i if prev_i is not None else arc_reading
                     if anchor_i is not None:
                         ex = _archive_try_exact_cnn(frame, anchor_i)
                         if ex:
@@ -3399,29 +3509,38 @@ def create_app(config, engine, weather, billing):
                             arc_conf = ex["confidence"]
                             arc_source = ex["source"]
 
-                    if (prev_i is not None
-                            and (arc_reading is None or arc_reading < prev_i)):
+                    # Monotonic floor for the "lock lags" recovery below: the
+                    # previous row — but NEVER above the trusted lock (the meter
+                    # can't have been higher than the current verified reading),
+                    # so a drifted-high prev can't re-pin this row upward.
+                    prev_floor = prev_i
+                    if (trusted_lock is not None and prev_floor is not None
+                            and prev_floor > trusted_lock + ARCHIVE_HEAL_TOL_COUNTS):
+                        prev_floor = trusted_lock
+
+                    if (prev_floor is not None
+                            and (arc_reading is None or arc_reading < prev_floor)):
                         # Preserve monotonic continuity when lock lags, but avoid
                         # pinning forever by first trying a free constrained CNN
                         # read, then a bounded strong-model reread once lock is
                         # stale enough.
-                        cr = _archive_try_stale_cnn(frame, prev_i)
+                        cr = _archive_try_stale_cnn(frame, prev_floor)
                         if cr:
                             arc_reading = int(cr["reading"])
                             arc_conf = cr["confidence"]
                             arc_source = cr["source"]
                         elif lock_age >= ARCHIVE_STALE_REREAD_S:
-                            rr = _archive_try_stale_reread(frame, prev_i)
+                            rr = _archive_try_stale_reread(frame, prev_floor)
                             if rr:
                                 arc_reading = int(rr["reading"])
                                 arc_conf = rr["confidence"]
                                 arc_source = rr["source"]
                             else:
-                                arc_reading = prev_i
+                                arc_reading = prev_floor
                                 arc_conf = "propagated"
                                 arc_source = "propagated"
                         else:
-                            arc_reading = prev_i
+                            arc_reading = prev_floor
                             arc_conf = "propagated"
                             arc_source = "propagated"
 
@@ -3429,6 +3548,11 @@ def create_app(config, engine, weather, billing):
                         ts_iso, name,
                         reading=arc_reading,
                         confidence=arc_conf, source=arc_source)
+
+                    # Heal any EXISTING impossible-high history now that we have a
+                    # trusted lock — collapses a drifted chain back onto truth.
+                    if trusted_lock is not None:
+                        _archive_reconcile_to_lock(trusted_lock, captured_dt)
 
                     trusted_anchor = (
                         arc_reading is not None
@@ -3687,6 +3811,7 @@ def create_app(config, engine, weather, billing):
     _oracle_state = {"last_call": 0.0, "last_verify": 0.0, "calls": 0,
                      "reanchors": 0, "labels": 0, "dupes": 0, "day": "",
                      "day_calls": 0, "busy": False, "confirmed_val": None,
+                     "confirmed_ts": 0.0,
                      "last_result": None, "last_value": None,
                      "pending_val": None, "pending_ts": 0.0,
                      "quota_block_until": 0.0,
@@ -4135,6 +4260,7 @@ def create_app(config, engine, weather, billing):
         if meter_reader.reanchor(heal_val, ts=now, source="auto-heal-consensus"):
             _oracle_state["reanchors"] += 1
             _oracle_state["confirmed_val"] = heal_val
+            _oracle_state["confirmed_ts"] = time.time()
             _oracle_state["pending_val"] = None
             cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]
             _heal_state["confirms"] = 0
@@ -4481,6 +4607,7 @@ def create_app(config, engine, weather, billing):
                     log.debug("record_oracle_reading failed: %s", e)
             # Remember the confirmed value so we don't re-send the SAME number.
             _oracle_state["confirmed_val"] = val
+            _oracle_state["confirmed_ts"] = time.time()
             _oracle_bank_label(frame, val, captured_ts, res.get("confidence"),
                                local_low=local_low, cnn_digits=cnn_digits)
         except Exception as e:
@@ -4963,6 +5090,15 @@ def create_app(config, engine, weather, billing):
                 "last_heal_ts": _heal_state.get("last_heal_ts") or None,
                 "last_heal_from": _heal_state.get("last_heal_from"),
                 "last_heal_to": _heal_state.get("last_heal_to"),
+            },
+            "archive_heal": {
+                "enabled": bool(ARCHIVE_HEAL_ENABLED),
+                "reconciles": int(_archive_heal_state.get("reconciles", 0)),
+                "rows": int(_archive_heal_state.get("rows", 0)),
+                "last_ts": _archive_heal_state.get("last_ts") or None,
+                "last_from": _archive_heal_state.get("last_from"),
+                "last_to": _archive_heal_state.get("last_to"),
+                "lock_trusted": (_lock_trusted_value() is not None),
             },
             "archive": {
                 "enabled": ARCHIVE_ENABLED,

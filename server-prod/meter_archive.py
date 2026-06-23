@@ -314,6 +314,57 @@ def propagate_delta(anchor_ts, delta):
         c.close()
 
 
+def max_reading_in(start, end):
+    """Highest stored reading in [start, end] (or None). Used by the
+    archive-to-lock self-heal to cheaply detect an impossible-high chain."""
+    c = _conn()
+    try:
+        r = c.execute(
+            "SELECT MAX(reading) m FROM archive_frame "
+            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL",
+            (start, end)).fetchone()
+        return int(r["m"]) if r and r["m"] is not None else None
+    finally:
+        c.close()
+
+
+def reconcile_above(threshold, new_value, start, end):
+    """Self-heal: collapse provably-impossible-high archive rows onto the
+    trusted live lock value.
+
+    A water meter is monotonic, so the current oracle-trusted lock is the
+    highest value the register has EVER reached. Any archive row reading ABOVE
+    that (beyond a small physical-lead tolerance) is therefore impossible — it's
+    a drifted CNN/lock chain, not real history. This rewrites every such row in
+    [start, end] to ``new_value`` (the trusted lock).
+
+    SHARPENING (the reason this is its own function): it deliberately OVERRIDES
+    rows previously marked as trusted anchors (``cnn``-high, ``oracle``, ``lock``,
+    ``propagated``) — those are exactly the wrong rows that block the existing
+    interpolation helpers. It NEVER touches ``manual`` rows (a human correction
+    is authoritative and is left alone). Returns the number of rows rewritten.
+    """
+    try:
+        threshold = int(threshold)
+        new_value = int(new_value)
+    except (TypeError, ValueError):
+        return 0
+    cf = new_value / COUNTS_PER_CF
+    now = datetime.now().isoformat(timespec="seconds")
+    c = _conn()
+    try:
+        cur = c.execute(
+            "UPDATE archive_frame SET reading=?, reading_cf=?, "
+            "confidence='reconciled', source='reconciled', updated_ts=? "
+            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL AND reading>? "
+            "AND source!='manual'",
+            (new_value, cf, now, start, end, threshold))
+        c.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        c.close()
+
+
 def delete_by_filename(filename):
     """Drop the row for an image the disk-cap evicted (keep DB in sync)."""
     c = _conn()

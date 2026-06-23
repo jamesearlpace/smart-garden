@@ -1,0 +1,45 @@
+{# ============================================================
+   Shared meter / cam tools nav — sticky top bar, self-contained
+   (scoped CSS + tiny JS, no deps). Include right after <body> with:
+       {% include '_meternav.html' %}
+   Horizontal-scrolls on narrow screens so every tool is reachable.
+   ============================================================ #}
+<style>
+  .mtn-bar { position:sticky; top:0; z-index:1500; display:flex; gap:4px;
+    align-items:center; overflow-x:auto; -webkit-overflow-scrolling:touch;
+    background:#0f3d17; padding:6px 8px; border-bottom:1px solid #0a2c10;
+    font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+  .mtn-bar::-webkit-scrollbar { height:0; }
+  .mtn-link { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px;
+    padding:6px 10px; border-radius:8px; text-decoration:none; white-space:nowrap;
+    color:#d7e8d9; font-size:13px; font-weight:500; }
+  .mtn-link:hover { background:rgba(255,255,255,.1); color:#fff; }
+  .mtn-link.active { background:#fff; color:#0f3d17; font-weight:700; }
+  .mtn-link .mtn-ic { font-size:15px; line-height:1; }
+  .mtn-sep { flex:0 0 auto; width:1px; align-self:stretch; margin:2px 4px;
+    background:rgba(255,255,255,.18); }
+</style>
+<nav class="mtn-bar" id="mtnBar" aria-label="Meter tools">
+  <a class="mtn-link" href="/" data-path="/"><span class="mtn-ic">🏠</span>Dashboard</a>
+  <a class="mtn-link" href="/cam" data-path="/cam"><span class="mtn-ic">🗂️</span>All Tools</a>
+  <span class="mtn-sep"></span>
+  <a class="mtn-link" href="/cam/convergence" data-path="/cam/convergence"><span class="mtn-ic">📈</span>Convergence</a>
+  <a class="mtn-link" href="/cam/archive" data-path="/cam/archive"><span class="mtn-ic">🖼️</span>Archive</a>
+  <a class="mtn-link" href="/cam/quality" data-path="/cam/quality"><span class="mtn-ic">📊</span>Quality</a>
+  <span class="mtn-sep"></span>
+  <a class="mtn-link" href="/cam/review" data-path="/cam/review"><span class="mtn-ic">✅</span>Review</a>
+  <a class="mtn-link" href="/cam/labels" data-path="/cam/labels"><span class="mtn-ic">🏷️</span>Labels</a>
+  <a class="mtn-link" href="/cam/regression" data-path="/cam/regression"><span class="mtn-ic">🔁</span>Regression</a>
+  <a class="mtn-link" href="/cam/test-audit" data-path="/cam/test-audit"><span class="mtn-ic">🧪</span>Test Audit</a>
+  <a class="mtn-link" href="/cam/cnn-report" data-path="/cam/cnn-report"><span class="mtn-ic">🧠</span>CNN Report</a>
+</nav>
+<script>
+(function(){
+  var path = window.location.pathname.replace(/\/$/, '') || '/';
+  document.querySelectorAll('#mtnBar .mtn-link').forEach(function(a){
+    var p = (a.getAttribute('data-path') || '').replace(/\/$/, '') || '/';
+    if (p === path) { a.classList.add('active');
+      a.scrollIntoView({inline:'center', block:'nearest'}); }
+  });
+})();
+</script>

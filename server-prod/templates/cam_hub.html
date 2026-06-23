@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meter & Cam Tools — Smart Garden</title>
+<style>
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+         background:#f5f7f5; color:#1a1a1a; }
+  header { background:#0f3d17; color:#fff; padding:16px 18px; }
+  header h1 { margin:0; font-size:19px; }
+  header .sub { font-size:12px; opacity:.85; margin-top:3px; }
+  main { padding:18px; max-width:1000px; margin:0 auto; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.04em;
+       color:#557; margin:22px 0 10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+          gap:12px; }
+  a.tile { display:block; background:#fff; border:1px solid #e0e4e0; border-radius:12px;
+           padding:14px 16px; text-decoration:none; color:inherit; transition:.12s; }
+  a.tile:hover { border-color:#1b5e20; box-shadow:0 2px 10px rgba(0,0,0,.06);
+                 transform:translateY(-1px); }
+  .tile .t { font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px; }
+  .tile .d { font-size:12.5px; color:#667; margin-top:5px; line-height:1.35; }
+  .ic { font-size:18px; }
+</style>
+</head>
+<body>
+{% include '_meternav.html' %}
+<header>
+  <h1>Meter &amp; Cam Tools</h1>
+  <div class="sub">Every water-meter camera page in one place.</div>
+</header>
+<main>
+  <h2>Monitoring &amp; truth</h2>
+  <div class="grid">
+    <a class="tile" href="/cam/convergence">
+      <div class="t"><span class="ic">📈</span>Convergence Monitor</div>
+      <div class="d">Progress toward perfect records + blind AI re-audit and your-own-eyes spot-check.</div></a>
+    <a class="tile" href="/cam/archive">
+      <div class="t"><span class="ic">🖼️</span>Archive Browser</div>
+      <div class="d">Every archived frame with its derived reading. Re-read or correct any image.</div></a>
+    <a class="tile" href="/cam/quality">
+      <div class="t"><span class="ic">📊</span>Reading Quality</div>
+      <div class="d">Reader accuracy, confidence mix, and recent quality trend.</div></a>
+  </div>
+
+  <h2>Training &amp; ML</h2>
+  <div class="grid">
+    <a class="tile" href="/cam/review">
+      <div class="t"><span class="ic">✅</span>Review Queue</div>
+      <div class="d">Confirm or correct low-confidence reads to grow the gold dataset.</div></a>
+    <a class="tile" href="/cam/labels">
+      <div class="t"><span class="ic">🏷️</span>Labels</div>
+      <div class="d">Browse and edit the per-digit training labels.</div></a>
+    <a class="tile" href="/cam/regression">
+      <div class="t"><span class="ic">🔁</span>Regression Set</div>
+      <div class="d">Pinned hard frames the reader must keep getting right.</div></a>
+    <a class="tile" href="/cam/test-audit">
+      <div class="t"><span class="ic">🧪</span>Test Audit</div>
+      <div class="d">Run the reader against the held-out test set and score it.</div></a>
+    <a class="tile" href="/cam/cnn-report">
+      <div class="t"><span class="ic">🧠</span>CNN Report</div>
+      <div class="d">Per-version CNN accuracy + improvement insights.</div></a>
+  </div>
+
+  <h2>Back to the garden</h2>
+  <div class="grid">
+    <a class="tile" href="/"><div class="t"><span class="ic">🏠</span>Dashboard</div>
+      <div class="d">Home, zones, history, settings.</div></a>
+    <a class="tile" href="/moisture-sim"><div class="t"><span class="ic">💧</span>Schedule</div>
+      <div class="d">7-day watering plan and forecasts.</div></a>
+    <a class="tile" href="/flow"><div class="t"><span class="ic">🩺</span>Flow &amp; Leaks</div>
+      <div class="d">Per-zone GPM and leak detection from the meter.</div></a>
+    <a class="tile" href="/costs"><div class="t"><span class="ic">💵</span>Water Cost</div>
+      <div class="d">Consumption converted to dollars by tier.</div></a>
+  </div>
+</main>
+</body>
+</html>

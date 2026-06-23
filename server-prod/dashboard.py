@@ -6955,6 +6955,10 @@ def create_app(config, engine, weather, billing):
         return jsonify(out)
 
     # ── Convergence monitor + self-audit ───────────────────────────────────
+    @app.route("/cam")
+    def cam_hub_page():
+        return render_template("cam_hub.html")
+
     @app.route("/cam/convergence")
     def cam_convergence_page():
         return render_template("convergence.html")

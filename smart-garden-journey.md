@@ -201,6 +201,23 @@
 
 ---
 
+## 2026-06-23 — Navigation: every meter/cam page is now reachable
+
+**Context:** The cam/meter pages were standalone with no shared navigation — you had to know the URL. James wanted to be able to navigate to everything.
+
+**What was built:**
+- **`templates/_meternav.html`** — a shared, self-contained sticky top nav bar (scoped CSS + tiny JS, horizontal-scroll on mobile) linking every meter tool: Dashboard, All Tools, Convergence, Archive, Quality, Review, Labels, Regression, Test Audit, CNN Report. Highlights the current page.
+- **`templates/cam_hub.html` + route `/cam`** — a directory page grouping all tools (Monitoring & truth / Training & ML / Back to the garden) with descriptions.
+- **Injected `{% include '_meternav.html' %}`** right after `<body>` in all cam pages: cam_archive, cam_review, cam_quality, cam_regression, cam_testaudit, cam_labels, cnn_report, convergence, cam_reading.
+- **Desktop sidebar** (`index.html`): added a "📷 Meter Tools" link (→ `/cam`) next to Meter Archive.
+- **Shared mobile nav** (`_mobilenav.html` More sheet): added "📷 Meter Tools" → `/cam`, so all main pages (index/forecast/moisture/costs/sensor-history) can reach the hub on phones.
+
+**Note:** `/cam-device` renders `cam_device.html` which does NOT exist on disk (pre-existing dead route) — deliberately left OUT of the nav so we don't link to a 500.
+
+**Verified live (2026-06-23 16:47 deploy):** service active; all 9 meter pages render the nav bar (`mtn-bar` present); `/cam` hub loads; no TemplateNotFound/jinja2/Traceback in logs (only transient oracle 429s from the heal worker).
+
+---
+
 ## Plumbing Permit — Irrigation Water Tap
 
 **Status:** Application submitted 2026-05-21 via Duvall permit portal. **Permit #26-175.** Currently in Administrative Review.

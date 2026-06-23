@@ -10,6 +10,8 @@
 > (192.168.0.109, `~/smart-garden-server/`).
 
 ## TL;DR
+- **✅ STUCK-LOCK ROOT CAUSE FIXED — self-healing now automatic (2026-06-23, see bottom entry "Self-healing stuck-lock recovery"):** The accuracy bug below (lock anchored wrong vs the glass, in EITHER direction) persisted because the per-frame physics cap (`ORACLE_MAX_ADVANCE`) blocked every honest correction once the lock was wrong by more than the cap — so the meter could only recover via a manual re-anchor. Root cause: **trust was gated by MAGNITUDE, not by EVIDENCE STRENGTH.** Fix: a consensus auto-heal — when many independent reads over minutes agree, cluster tightly (not erratic garble), and the authority model confirms on fresh frames, the system concludes the LOCK is wrong and auto-re-anchors to the live consensus (no hardcoded value, no human step). **Verified live:** lock auto-corrected `94740084 → 94791096` after a restart left it ~51 ft³ stale-low — 8 agreeing reads + 2 authority confirms over 208s, fully automatic. Works in both directions for any future stuck-lock cause.
+- **🚨 ORIGINAL ACCURACY BUG (2026-06-23 — see bottom entry "Archive readings anchored ~42 ft³ high"):** The archive/history readings were reading **HIGH vs the physical meter glass** (e.g. system `094830801` while the LCD plainly shows `094788507`, ~+42 ft³ / ~315 gal). Systematic (positions 4–9), and the wrong values increase smoothly frame-to-frame, so the dashboard looked healthy. The **persistence** of this (the lock being unable to self-correct) is now fixed by the auto-heal above; per-frame read accuracy under glare is still imperfect but the system now recovers automatically instead of staying stranded.
 - **▶ CURRENT STATE (2026-06-21 evening — START HERE; full detail in the bottom entry "Oracle-arbiter redesign"):**
   - **The oracle is the reader; the CNN is dead weight on the live path (~0%).** Architecture now: `gpt-4o-mini` does every cheap heartbeat read; `gpt-4o` confirms ONLY when the lock is about to MOVE (a correction), read unbiased. Lock = monotonic physics model the oracle can correct **both directions** (down-correction added — it can self-heal after an over-read).
   - **Accuracy (verified by independent audit): whole cubic foot 100% correct; last 2-3 digits lag/jitter ~hundreds of counts because the image is too blurry to read them.** Whole-cf is the honest ceiling — James will NOT buy a polarizing lens, so don't propose hardware fixes.
@@ -364,3 +366,51 @@ James shifted the focus from real-time to **accurate historical insights**: show
 - NOTE: only images archived AFTER this deploy are indexed (the ~13 min of pre-index archive frames have no reading rows — negligible). Going forward every 1/min image is indexed.
 - These changes improve decision quality without reopening the catastrophic jump/crash classes we already closed.
 - Internet-down windows are now explicitly excluded from the quality score so they do not pollute model/arbitration evaluation.
+
+## 2026-06-23 — OPEN BUG: archive readings anchored ~42 ft³ high vs the physical glass
+
+**Observed (from the `/cam/archive` history grid, screenshot reviewed):**
+
+| Frame (time) | Meter LCD (ground truth, visible in photo) | System "cnn" reading | Error |
+|---|---|---|---|
+| 13:44:34 | 094788**507** | 0948**30801** (94,830.801 ft³) | ~+42 ft³ high |
+| 13:43:28 | 094788**434** | 0948**29934** (94,829.934 ft³) | ~+42 ft³ high |
+| 13:41:19 | 094788… | 0948**29881** (94,829.881 ft³) | ~+42 ft³ high |
+
+**Why this matters / what's actually wrong:**
+
+1. **It is not last-digit jitter.** The first 3 digits match (`094`), but positions 4–9 are systematically off — the visible `788…` is being emitted as `830…`/`829…`. This is a whole-number disagreement of ~42 ft³ (~315 gallons), not the "last 2–3 digits lag" failure mode described in the TL;DR.
+2. **The error is hidden behind a smooth curve.** The wrong values are *internally consistent* — they increase monotonically frame-to-frame (829881 → 829934 → 830801). Nothing crashes, nothing reads as stale, and the usage graph looks plausible. The only way to catch it is to compare the derived number against the actual glass (which is what surfaced it).
+3. **It contradicts the standing accuracy claim.** The TL;DR asserts "whole cubic foot 100% correct." This frame set is whole-cf wrong by ~42, so that claim is at minimum incomplete — there is a regime (current conditions, 2026-06-23) where the whole-cf reading is confidently wrong.
+4. **The learning loop can entrench it.** `_archive_frame` indexes each archived image with the **live lock value at capture time** (`source=lock`). If the lock itself is anchored ~42 high, every archived row inherits the wrong baseline. Worse, the oracle auto-banks CNN "misses" as gold corrections — if the oracle agrees with (or is hinted toward) the wrong anchor, the wrong value becomes a training label and future retrains learn toward it.
+
+**Leading hypotheses (UNVERIFIED — do not act without checking):**
+- **A. Wrong lock anchor.** The monotonic lock latched onto a ~42-high value during some earlier glare/correction event and has been incrementing from the bad baseline since. The archive (`source=lock`) would then faithfully record the wrong number. *Check:* compare live lock value vs a hand-read of the glass right now; inspect recent down-correction / re-anchor events in the lock state.
+- **B. Systematic CNN/oracle mis-read of the middle digits** under current lighting (glare on the `788` band reads as `830`). *Check:* run `meter_audit.py --report --hours=48` and an unbiased `gpt-4o` re-read of these exact archived frames (`/api/cam/archive/reread`) and compare to the glass.
+- **C. Stale neighbor-hint feedback.** The archive re-read path passes a "soft neighbor hint"; if the neighbors are already wrong, the hint biases the read toward the wrong value (the same positive-feedback flaw that killed constrained decode). *Check:* re-read one frame with NO hint vs with hint.
+
+**What NOT to do (lessons already paid for):**
+- Do NOT manually re-anchor as a "fix" — re-anchoring trains nothing; the next frame collapses again (bailing water, not fixing the leak).
+- Do NOT let the bad reads feed the gold-label bank until root cause is known — that reinforces the error.
+- Do NOT propose hardware (polarizing lens) — James has declined that.
+
+**Status:** Documented only. No code changed for this bug. Root cause not yet isolated (A/B/C above). Next session: verify lock anchor vs glass first (cheapest, highest-probability), then unbiased re-read audit.
+
+## 2026-06-23 — Self-healing stuck-lock recovery (RESOLVES the persistence of the bug above)
+
+**Root cause (the real one, isolated):** The bug above persisted not because a wrong read happened once, but because **the lock could not self-correct once it was wrong by more than the per-frame cap.** The oracle pipeline has a hard guard — `phys_max` / `ORACLE_MAX_ADVANCE` (15,000 counts = 15 ft³) — that blocks any single committed move bigger than the cap. That guard is correct for ONE blurry frame (a digit-transposition garble must never ratchet the lock). But it was the ONLY arbiter of trust, so it treated *magnitude* as the signal. When the lock itself became wrong by more than 15 ft³ (a restart loading a stale persisted lock; the oracle being quota-blocked while real water flowed), every honest read was then "too far" from the bad lock, got blocked every cycle, and the meter could only recover by a human re-anchor. **Trust was gated by magnitude, not by evidence strength.**
+
+**The fix (software, automatic, nothing hardcoded):** `_consensus_auto_heal()` in `dashboard.py`. It hooks the two physics-block sites. Every blocked read is recorded as a "the lock disagrees" vote. When the votes are:
+- **sustained** (≥ `HEAL_MIN_READS`=6 reads persisting ≥ `HEAL_MIN_PERSIST_SECS`=120s),
+- **stable** (cluster spread ≤ `HEAL_CLUSTER_TOL`=800 counts — a garble jitters by thousands, a stale-but-true value drifts by tens), and
+- **independently confirmed** (≥ `HEAL_AUTHORITY_CONFIRMS`=2 fresh, unbiased authority-model reads agree, spaced ≥ `HEAL_CONFIRM_INTERVAL`=45s apart),
+
+then the conclusion flips: the **lock** is wrong, not the reads → auto-re-anchor to the live consensus value, clear the truth-guard, log it. The heal target is **always** what the meter is actually reading right now (the authority model's own current value) — never a constant. Works in **either direction** (stuck-low forward heal, stuck-high backward heal) and for any future cause. All thresholds are env-tunable (`METER_HEAL_*`); none of them is the meter value.
+
+**Why this is safe (doesn't re-open the catastrophic-jump class):** a single big jump is still blocked. Healing requires a multi-frame, multi-minute, tightly-clustered, two-model consensus — a systematic garble can't fake that across changing glare and different frames, and an opposite-direction one-off is filtered out by direction before it can poison the cluster. Magnitude no longer determines trust; accumulated evidence does.
+
+**Observability:** `/api/cam/status` → new `auto_heal` block (`heals`, `pending_samples`, `confirms`, `confirms_required`, `last_heal_from/to/ts`). The truth-guard still latches + pauses label banking during the disagreement, then is auto-cleared by the heal.
+
+**Verified live (2026-06-23 14:40):** after a service restart left the lock stale-low at `94,740,084` while the meter actually read ~`94,791,096` (~51 ft³ / ~382 gal gap, far beyond the 15 ft³ cap), the system healed itself: `AUTO-HEAL: lock 94740084 -> 094791096 (8 agreeing reads + 2 authority confirms over 208s) — stuck lock recovered with NO manual step`. Post-heal: `truth_guard.active=false`, `auto_heal.heals=1`. No human re-anchor was performed.
+
+**Supersedes the "Do NOT manually re-anchor" guidance for this failure mode** — there is no longer a manual step; the system recovers on its own.

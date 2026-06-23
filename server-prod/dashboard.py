@@ -3693,6 +3693,53 @@ def create_app(config, engine, weather, billing):
                      "effective_daily_cap": ORACLE_DAILY_CAP,
                      "budget": {}, "last_budget_refresh": 0.0}
 
+    # ── SELF-HEALING STUCK-LOCK RECOVERY ───────────────────────────────────
+    # ROOT CAUSE this fixes: the per-frame physics cap (phys_max /
+    # ORACLE_MAX_ADVANCE) correctly blocks a SINGLE frame's big jump (a garble),
+    # but it ALSO permanently strands the meter whenever the LOCK itself becomes
+    # wrong by more than the cap — e.g. a restart loaded a stale persisted lock,
+    # or the oracle was down/quota-blocked while real water flowed. Then every
+    # HONEST read is "too far" from the bad lock, gets blocked, and the meter can
+    # never recover without a human re-anchor. That violates "self-healing".
+    #
+    # THE FIX (no hardcoded values, no manual step): trust is a function of
+    # EVIDENCE STRENGTH, not magnitude. A big jump from ONE blurry frame = weak
+    # (still blocked). The SAME value, read independently many times over
+    # minutes, tightly clustered (so it's not erratic garble), and then confirmed
+    # by the STRONGER model on fresh frames = overwhelming → the LOCK is the thing
+    # that's wrong, not the reads. When that bar is met we auto-re-anchor to the
+    # live consensus. The target ALWAYS comes from what the meter is actually
+    # reading right now — never a constant. Works in either direction, for any
+    # future stuck-lock cause. All thresholds are env-tunable (not the value).
+    HEAL_ENABLED = os.environ.get("METER_HEAL_ENABLED", "1") == "1"
+    # How long the consensus history window is, and how long disagreement must
+    # PERSIST before we even consider healing (a transient garble can't persist).
+    HEAL_WINDOW_SECS = float(os.environ.get("METER_HEAL_WINDOW_SECS", "300"))
+    HEAL_MIN_PERSIST_SECS = float(
+        os.environ.get("METER_HEAL_MIN_PERSIST_SECS", "120"))
+    # Minimum number of independent blocked reads that must agree.
+    HEAL_MIN_READS = int(os.environ.get("METER_HEAL_MIN_READS", "6"))
+    # Max spread (counts) of the agreeing cluster. Real idle/light-use drift over
+    # a few minutes is tens of counts; a digit-transposition garble jitters by
+    # thousands — so this cleanly separates "stale-but-true" from "garbage".
+    HEAL_CLUSTER_TOL = int(os.environ.get("METER_HEAL_CLUSTER_TOL", "800"))
+    # Independent fresh-frame confirmations from the AUTHORITY model required
+    # before healing (defends against a shared-bias misread). Spaced out in time.
+    HEAL_AUTHORITY_CONFIRMS = int(
+        os.environ.get("METER_HEAL_AUTHORITY_CONFIRMS", "2"))
+    HEAL_CONFIRM_INTERVAL = float(
+        os.environ.get("METER_HEAL_CONFIRM_INTERVAL", "45"))
+    HEAL_MAX_SAMPLES = int(os.environ.get("METER_HEAL_MAX_SAMPLES", "96"))
+    _heal_state = {
+        "samples": _deque(maxlen=HEAL_MAX_SAMPLES),  # (ts, blocked_candidate)
+        "confirms": 0,            # consecutive agreeing authority reads
+        "last_confirm_ts": 0.0,   # cooldown gate for the costly authority read
+        "last_heal_ts": 0.0,
+        "heals": 0,
+        "last_heal_from": None,
+        "last_heal_to": None,
+    }
+
     def _refresh_oracle_budget(force=False):
         """Refresh cached budget summary and effective daily oracle cap."""
         now = time.time()
@@ -3984,6 +4031,124 @@ def create_app(config, engine, weather, billing):
                 return cand
         return None
 
+    def _consensus_auto_heal(frame, candidate, lg, now):
+        """Self-heal a lock that the per-frame physics cap has stranded.
+
+        Called ONLY from the two physics-block sites, so every ``candidate`` is
+        already a read the cap rejected as "too far" from the lock. One such read
+        is weak evidence (could be a garble) — but when MANY independent reads
+        over minutes agree, cluster tightly (so it's not erratic garble), and the
+        stronger authority model confirms it on fresh frames, the conclusion
+        flips: the LOCK is wrong, not the reads. Then we re-anchor to the live
+        consensus automatically — no hardcoded value, no human step.
+
+        Returns True if it healed (lock moved), False otherwise.
+        """
+        if not HEAL_ENABLED or candidate is None or lg is None:
+            return False
+        try:
+            candidate = int(candidate)
+            lg = int(lg)
+        except (TypeError, ValueError):
+            return False
+
+        samples = _heal_state["samples"]
+        samples.append((now, candidate))
+        cutoff = now - HEAL_WINDOW_SECS
+        while samples and samples[0][0] < cutoff:
+            samples.popleft()
+
+        # Direction of the current disagreement (lock stuck LOW → forward heal;
+        # lock stuck HIGH → backward heal). Filter the window to that direction
+        # so an occasional opposite-direction garble can't poison the cluster.
+        direction = 1 if candidate > lg else -1
+        if direction > 0:
+            agree = [(t, v) for (t, v) in samples if v > lg]
+        else:
+            agree = [(t, v) for (t, v) in samples
+                     if v < lg and (lg - v) > ORACLE_MAX_ADVANCE]
+        if len(agree) < HEAL_MIN_READS:
+            return False
+        ts0, tsN = agree[0][0], agree[-1][0]
+        if (tsN - ts0) < HEAL_MIN_PERSIST_SECS:
+            return False
+        vals = [v for (_, v) in agree]
+        if (max(vals) - min(vals)) > HEAL_CLUSTER_TOL:
+            return False  # erratic → looks like garble, not a stable stale value
+
+        # Costly authority confirmation is rate-limited.
+        if now - float(_heal_state.get("last_confirm_ts", 0.0)) \
+                < HEAL_CONFIRM_INTERVAL:
+            return False
+        _heal_state["last_confirm_ts"] = now
+
+        consensus = int(round(sum(vals) / len(vals)))
+        # Fresh, UNBIASED authority read of the current frame must independently
+        # land on the consensus. Accumulate confirmations across separate frames
+        # so a single shared-bias misread can't trigger a heal.
+        try:
+            import vision_oracle
+            ares = vision_oracle.read_meter(
+                frame, rotate180=True, hint=None, model=ORACLE_AUTHORITY_MODEL)
+            _record_oracle_spend(ares, model_name=ORACLE_AUTHORITY_MODEL)
+            _oracle_state["calls"] += 1
+            cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+        except Exception as e:
+            log.debug("auto-heal authority read failed: %s", e)
+            return False
+
+        aval = ares.get("value")
+        a_ok = (ares.get("ok") and ares.get("confidence") != "low"
+                and ares.get("readable") and aval is not None
+                and abs(int(aval) - consensus) <= HEAL_CLUSTER_TOL)
+        if not a_ok:
+            _heal_state["confirms"] = 0      # any disagreement breaks the streak
+            log.info("auto-heal: authority did NOT confirm consensus ~%09d "
+                     "(got %s) — streak reset", consensus, aval)
+            return False
+
+        _heal_state["confirms"] = int(_heal_state.get("confirms", 0)) + 1
+        heal_val = int(aval)   # use the authority's own current value (freshest)
+        if _heal_state["confirms"] < HEAL_AUTHORITY_CONFIRMS:
+            log.info("auto-heal: evidence building %d/%d (lock %s, consensus "
+                     "~%09d) — need more authority confirms before re-anchor",
+                     _heal_state["confirms"], HEAL_AUTHORITY_CONFIRMS, lg, heal_val)
+            return False
+
+        # Overwhelming, sustained, multi-model evidence → the lock is wrong. Heal.
+        if meter_reader.reanchor(heal_val, ts=now, source="auto-heal-consensus"):
+            _oracle_state["reanchors"] += 1
+            _oracle_state["confirmed_val"] = heal_val
+            _oracle_state["pending_val"] = None
+            cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]
+            _heal_state["confirms"] = 0
+            _heal_state["samples"].clear()
+            _heal_state["heals"] = int(_heal_state.get("heals", 0)) + 1
+            _heal_state["last_heal_ts"] = now
+            _heal_state["last_heal_from"] = lg
+            _heal_state["last_heal_to"] = heal_val
+            try:
+                oentry = meter_reader.record_oracle_reading(
+                    heal_val, captured_ts=now, note="auto-heal re-anchor")
+                if oentry and oentry.get("id"):
+                    _save_frame(oentry["id"], frame)
+            except Exception as e:
+                log.debug("auto-heal record_oracle_reading failed: %s", e)
+            _truth_guard_clear(
+                "auto-healed: sustained multi-read + authority consensus "
+                "re-anchored a stale lock",
+                source="auto-heal",
+                details={"healed_to": heal_val, "was_lock": lg,
+                         "delta": heal_val - lg,
+                         "reads": len(vals),
+                         "authority_confirms": HEAL_AUTHORITY_CONFIRMS})
+            log.warning("AUTO-HEAL: lock %s -> %09d (%d agreeing reads + %d "
+                        "authority confirms over %.0fs) — stuck lock recovered "
+                        "with NO manual step", lg, heal_val, len(vals),
+                        HEAL_AUTHORITY_CONFIRMS, tsN - ts0)
+            return True
+        return False
+
     def _oracle_run(frame, captured_ts, stale_for, now, local_low=None,
                     cnn_digits=None):
         """Background: the slow GPT-4o call + re-anchor. Never runs in the OCR
@@ -4160,6 +4325,11 @@ def create_app(config, engine, weather, billing):
                 log.warning("oracle BLOCKED impossible jump %09d: +%d > phys_max "
                             "%d in %.0fs (lock %s held) — garble, consensus "
                             "ignored", val, val - lg, phys_max, elapsed, lg)
+                # Self-heal: if this big-forward disagreement is actually a
+                # STUCK LOCK (sustained, tightly-clustered, authority-confirmed),
+                # auto-re-anchor instead of staying stranded forever.
+                if _consensus_auto_heal(frame, val, lg, now):
+                    return
                 return
             # ── SYMMETRIC GUARD for DOWN-corrections ────────────────────────
             # The same systematic garble can read LOW (mini AND gpt-4o transpose
@@ -4186,6 +4356,12 @@ def create_app(config, engine, weather, billing):
                 log.warning("oracle BLOCKED impossible down-correction %09d: -%d > "
                             "cap %d (lock %s held) — garbled-low read, consensus "
                             "ignored", val, lg - val, ORACLE_MAX_ADVANCE, lg)
+                # Self-heal: a genuine over-read (lock stuck HIGH) shows up here
+                # as a sustained down-disagreement; heal it the same way (still
+                # gated by clustering + authority confirms so a one-off garbled
+                # low read can never crash the lock).
+                if _consensus_auto_heal(frame, val, lg, now):
+                    return
                 return
             # ── Hybrid authority confirm ────────────────────────────────────
             # The cheap heartbeat model (mini) decided to MOVE the lock. Before
@@ -4750,6 +4926,16 @@ def create_app(config, engine, weather, billing):
                 "budget": _oracle_state.get("budget", {}),
             },
             "truth_guard": _truth_guard_snapshot(),
+            "auto_heal": {
+                "enabled": bool(HEAL_ENABLED),
+                "heals": int(_heal_state.get("heals", 0)),
+                "pending_samples": len(_heal_state.get("samples") or []),
+                "confirms": int(_heal_state.get("confirms", 0)),
+                "confirms_required": int(HEAL_AUTHORITY_CONFIRMS),
+                "last_heal_ts": _heal_state.get("last_heal_ts") or None,
+                "last_heal_from": _heal_state.get("last_heal_from"),
+                "last_heal_to": _heal_state.get("last_heal_to"),
+            },
             "archive": {
                 "enabled": ARCHIVE_ENABLED,
                 "dir": ARCHIVE_DIR,

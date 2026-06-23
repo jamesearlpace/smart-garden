@@ -10,6 +10,13 @@ for producing trusted training-data labels — never on every 5s frame, so cost
 stays at a few tenths of a cent per call.
 
 Key + endpoint come from /etc/smart-garden/cam-env (root-only).
+
+Provider selection:
+- Azure OpenAI (preferred when configured):
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_KEY, AZURE_OPENAI_DEPLOYMENT
+    Optional: AZURE_OPENAI_API_VERSION (default 2024-10-21)
+- OpenAI platform fallback:
+    OPENAI_API_KEY
 """
 import base64
 import io
@@ -22,6 +29,7 @@ log = logging.getLogger("vision_oracle")
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 MODEL = os.environ.get("ORACLE_MODEL", "gpt-4o")
+AZURE_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
 _SYS = (
     "You read residential water-meter LCD odometers. The display shows exactly "
@@ -91,8 +99,51 @@ def _api_key():
     return None
 
 
+def _env(name, default=None):
+    val = os.environ.get(name)
+    if val not in (None, ""):
+        return val
+    try:
+        for line in open("/etc/smart-garden/cam-env"):
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return default
+
+
+def _provider_config():
+    """Resolve runtime provider configuration.
+
+    Prefer Azure OpenAI when endpoint+key+deployment are configured; otherwise
+    fall back to OpenAI platform key.
+    """
+    az_endpoint = _env("AZURE_OPENAI_ENDPOINT")
+    az_key = _env("AZURE_OPENAI_KEY")
+    az_deploy = _env("AZURE_OPENAI_DEPLOYMENT") or _env("ORACLE_MODEL") or MODEL
+    az_api_version = _env("AZURE_OPENAI_API_VERSION", AZURE_API_VERSION)
+
+    if az_endpoint and az_key and az_deploy:
+        return {
+            "provider": "azure_openai",
+            "endpoint": str(az_endpoint).rstrip("/"),
+            "key": az_key,
+            "deployment": az_deploy,
+            "api_version": az_api_version,
+        }
+
+    key = _api_key()
+    if key:
+        return {
+            "provider": "openai",
+            "url": OPENAI_URL,
+            "key": key,
+        }
+    return None
+
+
 def available():
-    return bool(_api_key())
+    return bool(_provider_config())
 
 
 def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
@@ -111,9 +162,9 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
     "readable":bool, "error":str|None, "cost_tokens":int}. ``value`` is the int
     of the 9 digits (leading zeros kept via 9-width), or None if unreadable.
     """
-    key = _api_key()
-    if not key:
-        return {"ok": False, "error": "no OPENAI_API_KEY", "value": None,
+    cfg = _provider_config()
+    if not cfg:
+        return {"ok": False, "error": "no oracle credentials configured", "value": None,
                 "digits": "", "confidence": "none", "readable": False,
                 "cost_tokens": 0}
     try:
@@ -134,7 +185,6 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
     if hint_text:
         user_text += " " + hint_text
     body = {
-        "model": model or MODEL,
         "messages": [
             {"role": "system", "content": _SYS},
             {"role": "user", "content": [
@@ -147,10 +197,26 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
         "max_tokens": 80,
         "temperature": 0,
     }
+
+    req_url = cfg.get("url")
+    req_headers = {"Content-Type": "application/json"}
+    req_model = model or MODEL
+    provider = cfg.get("provider")
+
+    if provider == "azure_openai":
+        deployment = str(model or cfg.get("deployment") or MODEL)
+        req_url = (
+            f"{cfg.get('endpoint')}/openai/deployments/{deployment}/chat/completions"
+            f"?api-version={cfg.get('api_version') or AZURE_API_VERSION}"
+        )
+        req_headers["api-key"] = cfg.get("key")
+        req_model = deployment
+    else:
+        req_headers["Authorization"] = f"Bearer {cfg.get('key')}"
+        body["model"] = req_model
+
     req = urllib.request.Request(
-        OPENAI_URL, data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {key}"})
+        req_url, data=json.dumps(body).encode(), headers=req_headers)
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             out = json.load(r)
@@ -167,7 +233,8 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
                 "confidence": parsed.get("confidence", "low"),
                 "readable": bool(parsed.get("readable", False)),
                 "error": None if value is not None else "not 9 digits",
-                "model": model or MODEL,
+            "model": req_model,
+            "provider": provider,
                 "cost_tokens": tokens}
     except Exception as e:
         detail = ""
@@ -179,4 +246,5 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
         log.warning("oracle call failed: %s %s", e, detail)
         return {"ok": False, "error": f"{type(e).__name__}: {e} {detail}",
                 "value": None, "digits": "", "confidence": "none",
-                "readable": False, "cost_tokens": 0}
+            "readable": False, "provider": provider,
+            "cost_tokens": 0}

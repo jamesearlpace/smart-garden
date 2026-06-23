@@ -178,6 +178,91 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
 
 ---
 
+## 2026-06-23 — Oracle budget controller shipped ($150/mo target, spend-to-improve)
+
+**Context:** James asked for explicit budget usage policy: use the subscription budget intentionally to improve meter accuracy now, then drive toward a no-LLM steady state. He approved aggressive spend within a hard monthly cap.
+
+**What shipped:**
+- New module `server-prod/oracle_budget.py`:
+   - tracks oracle spend per call in `smart-garden.db` (`oracle_spend` table)
+   - estimates USD from tokens (or fallback per-call estimate)
+   - computes cycle-to-date spend + remaining budget + suggested daily cap
+   - adds cycle projection fields (`projected_cycle_spend_usd`, `projected_delta_vs_budget_usd`, utilization %, elapsed/total cycle days)
+- `dashboard.py` oracle integration:
+   - new env knobs: `METER_ORACLE_BUDGET_ENABLED`, `METER_ORACLE_MONTHLY_BUDGET_USD` (default 150), `METER_ORACLE_DAILY_MIN`, token/fallback pricing knobs
+   - new env knob: `METER_ORACLE_BUDGET_CYCLE_START_DAY` (default 1) for non-calendar billing cycles
+   - dynamic daily oracle cap (`effective_daily_cap`) refreshed from budget state
+   - spend recording on **all** oracle call sites (heartbeat, authority confirms, archive reread/reprocess, manual reanchor)
+   - visibility added to `/api/cam/status` and `/api/cam/quality` (`budget`, hard/effective cap, monthly target)
+
+**Operational result on Acer after deploy:**
+- `smart-garden-server` active
+- status payload now includes live oracle budget summary (month spend, remaining, suggested cap)
+- status + quality payload now include cycle start day and month-end projection values
+- with current defaults, target is $150/month and pacing cap is computed automatically each day
+
+**2026-06-23 accuracy ramp (applied in production):**
+- Added systemd drop-in `oracle-accuracy.conf` with accuracy-first pacing while keeping monthly cap:
+   - `METER_ORACLE_MONTHLY_BUDGET_USD=150`
+   - `METER_ORACLE_DAILY_CAP=1200`
+   - `METER_ORACLE_DAILY_MIN=800`
+   - `METER_ORACLE_VERIFY_SECS=60`
+   - `METER_ORACLE_MIN_INTERVAL=20`
+   - `METER_ORACLE_LOWCONF_INTERVAL=25`
+- Verified active service env includes the new oracle knobs.
+- Oracle spend table confirmed sustained activity after rollout (`calls_last_10m: 17`).
+- Archive UI now shows the 3 simple spend numbers directly:
+   - **Spent** this cycle
+   - **Remaining** this cycle
+   - **Projected end-of-cycle spend**
+   (implemented in `server-prod/templates/cam_archive.html`, refreshed every 30s from `/api/cam/quality`).
+
+**Azure-side guardrail attempt:**
+- Tried creating a subscription budget via CLI + REST for `f94c002c-2212-4bfb-b7a4-f8898b7ea4e5`.
+- Blocked by RBAC (`RBACAccessDenied`) on Cost Management budget write at current account permissions.
+- App-level budget controller is active regardless; cloud budget object still needs higher role permissions.
+
+## 2026-06-23 — Smart archive window reprocess shipped (wider context, dry-run/apply)
+
+**Context:** James asked for a smarter approach than one-row fixes: use wider temporal context, support dry-run before commit, and reprocess targeted windows when the archive looks suspicious (including the 08:08 case).
+
+**What shipped (server + UI):**
+- **Context-aware reprocessor** in `server-prod/dashboard.py`:
+   - `_smart_archive_reprocess(start, end, max_rows, oracle_budget, commit)`
+   - `POST /api/cam/archive/reprocess` with `minutes/start/end/max_rows/oracle_budget/dry_run`
+   - Candidate scoring across existing value + constrained CNN + selective oracle
+   - Monotonic + physics bounds + prefix progression guard
+- **Config knobs** for safe tuning without code edits:
+   - `METER_ARCHIVE_REPROCESS_MAX_ROWS`
+   - `METER_ARCHIVE_REPROCESS_MAX_ORACLE`
+   - `METER_ARCHIVE_REPROCESS_CNN_MIN_CONF`
+   - `METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS`
+- **UI controls** in `server-prod/templates/cam_archive.html`:
+   - "Smart Reprocess (dry run)"
+   - "Apply Smart Reprocess"
+- Manual correction path continues to use delta propagation in `meter_archive.propagate_delta(...)` so nearby stale rows align immediately after a human correction.
+
+**Important hardening fix after first dry-run:**
+- Added a **strict right-anchor bound** for upcoming reviewed/manual anchors.
+- Before this fix, a row immediately before a reviewed anchor could still overshoot by tolerance and create a dip at the anchor.
+- Now reviewed/manual anchors are hard upper bounds; tolerant bounds remain only for softer anchors.
+
+**Production validation (Acer, 100.84.106.20):**
+- Compile clean locally and on server.
+- Service restart successful (`smart-garden-server` active).
+- 2-hour pass: dry-run then apply completed; updates committed.
+- 6-hour pass with larger oracle budget: dry-run then apply completed.
+
+**Observed around 08:08 after apply:**
+- `08:07:16 -> 94779715`
+- `08:08:18 -> 94779715` (reviewed anchor preserved)
+- `08:09:18 -> 94779891`
+- Sequence remains monotonic around the anchor with no pre-anchor overshoot.
+
+**Current state:**
+- Smart window reprocessing is now available from the archive page and via API.
+- Users can run dry-run first, inspect `would_update/oracle_calls/changes`, then apply.
+
 ## 2026-06-13 — Dedicated Sensor History page + unified compact mobile nav + cam-cutoff fix
 
 **Context:** James couldn't see soil-sensor history anywhere (the existing charts are buried in the index History panel's drilldowns), and the mobile bottom nav was broken: 11 items jammed into a `justify-content:space-around` row wrapped onto 2–3 lines on a phone — so the bar was huge, items were cut off, and **the Water Meter Cam panel got hidden behind the over-tall nav** ("camera cut off"). Each page also hardcoded a *different* nav subset (forecast/calibrate showed fewer items than home) because the in-page SPA panels (Zones/History/Cam/Deer) only exist on index.html.
@@ -652,7 +737,7 @@ This stops the engine from making any further automatic decisions until you've d
 
 ---
 
-## 2026-06-15 � CNN closed loop LIVE: v1?v2 gated retrain, confident-wrong guard, improvement metrics
+## 2026-06-15 � CNN closed loop LIVE: v1?v2 gated retrain, confident-wrong guard, improvement metrics
 
 **Context:** The water-meter reader gained a real trainable model and the self-improving loop went end-to-end. Full detail in `ocr-harness/CNN-CLOSED-LOOP-PLAN.md` and repo memory `/memories/repo/water-meter-ocr.md`. Headlines:
 
@@ -660,10 +745,44 @@ This stops the engine from making any further automatic decisions until you've d
 
 **Improvement metrics layer:** persisted `cnn_eval` + `cnn_daily` tables (`cnn_metrics.py`) so improvement is measurable across restarts and tagged by model version. Report page at `/cam/cnn-report`. Every oracle check is a free ground-truth sample of the CNN. Reading-detail page got a resizable captured-image slider.
 
-**Confident-wrong incident + systemic guard:** the CNN read a glary frame as `094180041` at **0.95 confidence** (wrong � true `094171953`) and ratcheted the lock ~2000 counts too high, because high-conf reads skip the oracle. Re-anchored to truth (James confirmed the value). Added a hard guard: a high-conf CNN read is trusted directly ONLY if it advances the lock <=500 counts (`CNN_MAX_TRUST_ADVANCE`); a bigger forward jump forces oracle corroboration first. This is now the 4th guardrail. Lesson: a confident reader can be confidently wrong � never trust a big jump on confidence alone, and do NOT lower the confidence threshold to "use the CNN more."
+**Confident-wrong incident + systemic guard:** the CNN read a glary frame as `094180041` at **0.95 confidence** (wrong � true `094171953`) and ratcheted the lock ~2000 counts too high, because high-conf reads skip the oracle. Re-anchored to truth (James confirmed the value). Added a hard guard: a high-conf CNN read is trusted directly ONLY if it advances the lock <=500 counts (`CNN_MAX_TRUST_ADVANCE`); a bigger forward jump forces oracle corroboration first. This is now the 4th guardrail. Lesson: a confident reader can be confidently wrong � never trust a big jump on confidence alone, and do NOT lower the confidence threshold to "use the CNN more."
 
-**First gated retrain � v2 PROMOTED:** re-audited 650 banked frames (monotonic LNDS) ? quarantined 16 physically-impossible labels (incl the poison reads). Built an expanded verified set (614 frames / 456 distinct, +243 new oracle-verified). Trained challenger v2 and judged it against champion v1 on **60 held-out frames neither model trained on**. Result: **v1 55.0% vs v2 58.3% full-9 (+3.3 pts) -> PROMOTE.** Deployed v2 to the tower, bumped VERSION to v2, metrics now track the version transition. The loop works: collect -> verify -> audit -> gated retrain -> promote-only-if-better. Re-run `train_v2_gated.py` for v3+ as corrections accumulate; the champion baseline rises each cycle.
+**First gated retrain � v2 PROMOTED:** re-audited 650 banked frames (monotonic LNDS) ? quarantined 16 physically-impossible labels (incl the poison reads). Built an expanded verified set (614 frames / 456 distinct, +243 new oracle-verified). Trained challenger v2 and judged it against champion v1 on **60 held-out frames neither model trained on**. Result: **v1 55.0% vs v2 58.3% full-9 (+3.3 pts) -> PROMOTE.** Deployed v2 to the tower, bumped VERSION to v2, metrics now track the version transition. The loop works: collect -> verify -> audit -> gated retrain -> promote-only-if-better. Re-run `train_v2_gated.py` for v3+ as corrections accumulate; the champion baseline rises each cycle.
 
-**Honest state:** +3.3 pts is a modest first step; live oracle-checked accuracy is ~30% (live glare is the worst case). Value today = the loop is proven and measurable, not a one-shot win. James is fine waiting as long as it is improving � and now it is, with numbers.
+**Honest state:** +3.3 pts is a modest first step; live oracle-checked accuracy is ~30% (live glare is the worst case). Value today = the loop is proven and measurable, not a one-shot win. James is fine waiting as long as it is improving � and now it is, with numbers.
+
+---
+
+## 2026-06-19 — TP-Link CPE210 deployed as WiFi repeater for the garden (cam packet-loss fix)
+
+**Context:** The ESP32-CAM (water-meter reader) has chronically poor WiFi — ~30% packet loss + high jitter, late/stale frames — because the garden is far from the Eero. Earlier journey entries listed *"relocate / repeater / external antenna"* as the cure. Bought a TP-Link **Pharos CPE210** (outdoor 2.4 GHz AP/CPE) to act as a wireless repeater. Full setup guide: `cpe210-repeater-setup.md`. Credentials + live status in repo memory `/memories/repo/cpe210-repeater.md`.
+
+**Goal:** Repeater that pulls internet **from the Eero over WiFi** (no Ethernet WAN) and rebroadcasts toward the garden, so the cam (and ESP32 `.150`) get a stronger signal.
+
+**What we did:**
+- Confirmed the device on the LAN at factory IP **192.168.0.254** (MAC `b0-be-76-af-01-7c`, TP-Link OUI). Reachable from a normal browser; no laptop re-IP needed since it was already bridged onto the network.
+- Logged into Pharos OS (admin / `password` — weak, flagged for later hardening).
+- **Operation Mode dropdown → `Repeater`** (NOT Access Point, which was the factory default and expects wired WAN). Chose Repeater over Bridge deliberately: Repeater clones the **same SSID**, so the ESP32 devices connect with **zero reconfiguration** (Bridge would force a new SSID → ESP32 reflash, which is brownout-brick risky).
+- Quick Setup → **Survey** → picked the home mesh **`TellMyWifiLoveHer`** (appears on 3 BSSIDs = the Eero nodes). Selected the strongest node (`C0-36-53-02-BA-A6`, −42 dBm) but left **Lock-to-AP OFF** — device will be moved to the garden, so it should roam by SSID and latch onto whichever node is strongest at the final spot.
+- Entered WiFi password, WPA-PSK/WPA2-PSK, channel 11, kept IP at **192.168.0.254** (free on LAN, no conflict — abandoned the earlier `.250` plan to avoid "losing" the device at a new address).
+- **Finished → rebooted into Repeater mode.** STATUS confirmed live uplink: **Signal −38 dBm, SNR 66 dB, CCQ 99** at the config spot (next to a node) — rock solid.
+
+**Verified the wireless bridge:**
+- Unplugged the injector's LAN cable (the config cable to the laptop). The CPE210 stayed reachable at `192.168.0.254` via ping (5–19 ms) — proving connectivity is purely over WiFi through the Eero, no Ethernet uplink needed.
+- PoE wiring rule documented: **CPE210 ↔ injector cable + injector wall power must stay connected** (that's the only power source); the injector's LAN port can be empty in Repeater mode.
+
+**Still TODO:**
+- ~~Power-cycle resilience test~~ ✅ PASSED 2026-06-19 — pulled power, it rebooted and re-associated with the Eero on its own (ping recovered, no intervention).
+- Mount/aim at the garden (flat front face toward the cam), recheck STATUS signal at the final spot (want **≥ −65 dBm**).
+- **Power-cycle the ESP32-CAM** after the repeater is in place — ESP32s don't roam mid-session, so it needs a reboot to latch onto the now-stronger repeater.
+- Re-check cam RSSI vs the **−71 dBm baseline** (captured 2026-06-19 before deploy; target ~−55 to −60). 
+
+**Baseline before repeater:** ESP32-CAM `.150` RSSI −71 dBm, reconnects 0, boot 124.
+
+**✅ RESOLVED 2026-06-19 — packet loss fixed, external antenna NOT needed:** Correction — the cam is `.160` (the irrigation controller is `.150`). First garden test was 15% packet loss because the cam **hadn't roamed onto the repeater** (ESP32s don't roam mid-session). After **power-cycling the cam** in the garden it latched onto the repeater. Verified healthy on both hops: repeater→Eero **−41 dBm / SNR 60 / CCQ 100** (CPE210 STATUS), cam→repeater **−49 to −52 dBm** (phone WiFiman at the cam). Cam ping reliability went **15% loss → 0% loss** (60-ping test: avg 186 ms, max 1618 ms, only 1/60 >500 ms). The residual latency jitter is the **single-radio repeater tax** (one radio time-shared between cam-side and Eero-side) — harmless at a 5 s JPEG cadence. **Net: ~30% historical packet loss → 0%.** Also investigated an external U.FL antenna on the cam (unplug test proved it was inactive — board on PCB antenna, 0Ω jumper not moved) but it's **moot** now. Full detail + reusable diagnostic method in repo memory `/memories/repo/cpe210-repeater.md`.
+
+**Key lesson:** an ESP32-CAM will NOT move onto a new/stronger AP by itself — always power-cycle the cam after placing a repeater, and verify (phone WiFiman) the repeater is the strongest `TellMyWifiLoveHer` (BSSID `B0:BE:76`) at the cam first. Diagnose the path in two hops: cam→repeater (WiFiman at cam) and repeater→Eero (CPE210 STATUS Signal Strength).
+
+**Follow-up — external antenna mod for burial (2026-06-19):** the cam is being **buried in the underground meter pit**, where the PCB antenna would be dead. So the external U.FL antenna became required after all (supersedes the "not needed" note above — that only applied to the above-ground test). Board confirmed = Aideepen/AI-Thinker ESP32-CAM-MB; antenna select is a `0Ω` resistor next to the U.FL connector (`/` = PCB, `\` = external). James soldered the bridge to the U.FL side. **Result was dramatic:** yard ping went from avg **186 ms / max 1618 ms** (PCB) → avg **24.8 ms / max 181 ms / min 6 ms**, still 0% loss — a 7.5× latency improvement that confirms the external antenna is now the active path. Remaining step: bury the board with the **antenna routed up out of the pit into open air**, then re-test.
 
 ---

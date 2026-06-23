@@ -2795,8 +2795,42 @@ def create_app(config, engine, weather, billing):
     # 30 GiB default cap. Average frame ~48KB → ~640k images ≈ 440 days at 1/min.
     ARCHIVE_MAX_BYTES = int(
         os.environ.get("METER_ARCHIVE_MAX_BYTES", str(30 * 1024 ** 3)))
+    # If the live lock falls behind a corrected archive anchor, avoid pinning new
+    # rows forever: periodically re-read the archived frame with the strong model
+    # and accept only tightly-bounded forward moves.
+    ARCHIVE_STALE_REREAD_ENABLED = (
+        os.environ.get("METER_ARCHIVE_STALE_REREAD_ENABLED", "1") == "1")
+    ARCHIVE_STALE_REREAD_S = float(
+        os.environ.get("METER_ARCHIVE_STALE_REREAD_S", "600"))
+    ARCHIVE_STALE_REREAD_INTERVAL = float(
+        os.environ.get("METER_ARCHIVE_STALE_REREAD_INTERVAL", "300"))
+    ARCHIVE_STALE_REREAD_MAX_ADVANCE = int(
+        os.environ.get("METER_ARCHIVE_STALE_REREAD_MAX_ADVANCE", "2500"))
+    ARCHIVE_STALE_CNN_ENABLED = (
+        os.environ.get("METER_ARCHIVE_STALE_CNN_ENABLED", "1") == "1")
+    ARCHIVE_STALE_CNN_MAX_ADVANCE = int(
+        os.environ.get("METER_ARCHIVE_STALE_CNN_MAX_ADVANCE", "2500"))
+    ARCHIVE_STALE_CNN_MIN_CONF = float(
+        os.environ.get("METER_ARCHIVE_STALE_CNN_MIN_CONF", "0.55"))
+    # Prefer reading the EXACT archived frame (free constrained CNN) instead of
+    # inheriting a potentially stale live lock snapshot.
+    ARCHIVE_EXACT_CNN_ENABLED = (
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_ENABLED", "1") == "1")
+    ARCHIVE_EXACT_CNN_MAX_ADVANCE = int(
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_MAX_ADVANCE", "2500"))
+    ARCHIVE_EXACT_CNN_MIN_CONF = float(
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_MIN_CONF", "0.55"))
+    # On-demand window reprocessor knobs (broader-context repair pass).
+    ARCHIVE_REPROCESS_MAX_ROWS = int(
+        os.environ.get("METER_ARCHIVE_REPROCESS_MAX_ROWS", "180"))
+    ARCHIVE_REPROCESS_MAX_ORACLE = int(
+        os.environ.get("METER_ARCHIVE_REPROCESS_MAX_ORACLE", "30"))
+    ARCHIVE_REPROCESS_CNN_MIN_CONF = float(
+        os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.55"))
+    ARCHIVE_REPROCESS_CONSENSUS_COUNTS = int(
+        os.environ.get("METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS", "80"))
     _archive_state = {"last_ts": 0.0, "bytes": 0, "files": None, "saved": 0,
-                      "evicted": 0}
+                      "evicted": 0, "last_reread_ts": 0.0}
     _archive_lock = _threading.Lock()
 
     def _archive_init():
@@ -2824,6 +2858,146 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             _archive_state["files"] = _deque()
             log.warning("archive init failed: %s", e)
+
+    def _archive_try_stale_reread(frame, prev_value):
+        """Best-effort, bounded reread for stale-lock archive plateaus.
+
+        Runs at most every ARCHIVE_STALE_REREAD_INTERVAL seconds and only when
+        the lock is stale and behind a known archive value.
+        """
+        if not ARCHIVE_STALE_REREAD_ENABLED:
+            return None
+        now = time.time()
+        if now - float(_archive_state.get("last_reread_ts", 0.0)) < ARCHIVE_STALE_REREAD_INTERVAL:
+            return None
+        _archive_state["last_reread_ts"] = now
+        try:
+            import vision_oracle
+            if not vision_oracle.available():
+                return None
+            p = int(prev_value)
+            hint = {"last_value": p, "high_prefix": f"{p:09d}"[:5]}
+            res = vision_oracle.read_meter(
+                frame, rotate180=True, hint=hint, model=ORACLE_AUTHORITY_MODEL)
+            _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
+            if not (res.get("ok") and res.get("readable")
+                    and res.get("confidence") != "low"
+                    and res.get("value") is not None):
+                return None
+            v = int(res["value"])
+            if v < p:
+                return None
+            if (v - p) > ARCHIVE_STALE_REREAD_MAX_ADVANCE:
+                return None
+            pv5 = int((f"{p:09d}")[:5])
+            vv5 = int((f"{v:09d}")[:5])
+            if vv5 < pv5 or vv5 > (pv5 + 2):
+                return None
+            return {"reading": v, "confidence": res.get("confidence") or "medium",
+                    "source": "oracle"}
+        except Exception:
+            return None
+
+    def _archive_try_stale_cnn(frame, prev_value):
+        """Try a free constrained CNN read for stale-lock archive rows.
+
+        The constrained reader is anchored to the prior trusted archive value,
+        so it can recover small forward movement without a paid oracle call.
+        """
+        if not ARCHIVE_STALE_CNN_ENABLED:
+            return None
+        try:
+            p = int(prev_value)
+            cnn = _read_via_cnn(
+                frame, anchor=p, ceil=ARCHIVE_STALE_CNN_MAX_ADVANCE)
+            if not cnn:
+                return None
+
+            conf_txt = (cnn.get("confidence") or "").lower()
+            try:
+                min_conf = float(cnn.get("min_conf", 0.0) or 0.0)
+            except Exception:
+                min_conf = 0.0
+
+            v = None
+            if cnn.get("constrained_value") is not None:
+                try:
+                    v = int(cnn.get("constrained_value"))
+                except Exception:
+                    v = None
+                if v is not None and min_conf < ARCHIVE_STALE_CNN_MIN_CONF:
+                    return None
+            if v is None and conf_txt == "high" and cnn.get("digits"):
+                try:
+                    v = int(cnn.get("digits"))
+                except Exception:
+                    v = None
+            if v is None:
+                return None
+            if v < p:
+                return None
+            if (v - p) > ARCHIVE_STALE_CNN_MAX_ADVANCE:
+                return None
+            pv5 = int((f"{p:09d}")[:5])
+            vv5 = int((f"{v:09d}")[:5])
+            if vv5 < pv5 or vv5 > (pv5 + 2):
+                return None
+            return {"reading": v,
+                    "confidence": ("high" if conf_txt == "high" else "medium"),
+                    "source": "cnn"}
+        except Exception:
+            return None
+
+    def _archive_try_exact_cnn(frame, anchor_value):
+        """Read the exact archived frame with constrained CNN.
+
+        This is the primary path for archive-row accuracy because it reads the
+        same image shown in the history card.
+        """
+        if not ARCHIVE_EXACT_CNN_ENABLED:
+            return None
+        try:
+            a = int(anchor_value)
+            cnn = _read_via_cnn(
+                frame, anchor=a, ceil=ARCHIVE_EXACT_CNN_MAX_ADVANCE)
+            if not cnn:
+                return None
+
+            conf_txt = (cnn.get("confidence") or "").lower()
+            try:
+                min_conf = float(cnn.get("min_conf", 0.0) or 0.0)
+            except Exception:
+                min_conf = 0.0
+
+            v = None
+            if cnn.get("constrained_value") is not None:
+                try:
+                    v = int(cnn.get("constrained_value"))
+                except Exception:
+                    v = None
+                if v is not None and min_conf < ARCHIVE_EXACT_CNN_MIN_CONF:
+                    return None
+            elif conf_txt == "high" and cnn.get("digits"):
+                try:
+                    v = int(cnn.get("digits"))
+                except Exception:
+                    v = None
+
+            if v is None:
+                return None
+            if v < a:
+                return None
+            if (v - a) > ARCHIVE_EXACT_CNN_MAX_ADVANCE:
+                return None
+            av5 = int((f"{a:09d}")[:5])
+            vv5 = int((f"{v:09d}")[:5])
+            if vv5 < av5 or vv5 > (av5 + 2):
+                return None
+            return {"reading": v,
+                    "confidence": ("high" if conf_txt == "high" else "medium"),
+                    "source": "cnn"}
+        except Exception:
+            return None
 
     def _archive_frame(frame, captured_dt):
         """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
@@ -2858,11 +3032,60 @@ def create_app(config, engine, weather, billing):
                 # archive page — accurate history without paying per image.
                 try:
                     import meter_archive
+                    ts_iso = captured_dt.isoformat(timespec="seconds")
                     lg = getattr(meter_reader, "last_good", None)
+                    arc_reading = int(lg) if lg is not None else None
+                    arc_conf = "lock"
+                    arc_source = "lock"
+
+                    prev = meter_archive.neighbor_reading(ts_iso)
+                    prev_i = int(prev) if prev is not None else None
+                    lock_ts = getattr(meter_reader, "_lock_ts", None)
+                    try:
+                        lock_age = max(0.0, float(now) - float(lock_ts))
+                    except Exception:
+                        lock_age = ARCHIVE_STALE_REREAD_S + 1.0
+
+                    # Primary: exact-frame constrained CNN read anchored to the
+                    # previous archive value (or lock snapshot when no history).
+                    anchor_i = prev_i if prev_i is not None else arc_reading
+                    if anchor_i is not None:
+                        ex = _archive_try_exact_cnn(frame, anchor_i)
+                        if ex:
+                            arc_reading = int(ex["reading"])
+                            arc_conf = ex["confidence"]
+                            arc_source = ex["source"]
+
+                    if (prev_i is not None
+                            and (arc_reading is None or arc_reading < prev_i)):
+                        # Preserve monotonic continuity when lock lags, but avoid
+                        # pinning forever by first trying a free constrained CNN
+                        # read, then a bounded strong-model reread once lock is
+                        # stale enough.
+                        cr = _archive_try_stale_cnn(frame, prev_i)
+                        if cr:
+                            arc_reading = int(cr["reading"])
+                            arc_conf = cr["confidence"]
+                            arc_source = cr["source"]
+                        elif lock_age >= ARCHIVE_STALE_REREAD_S:
+                            rr = _archive_try_stale_reread(frame, prev_i)
+                            if rr:
+                                arc_reading = int(rr["reading"])
+                                arc_conf = rr["confidence"]
+                                arc_source = rr["source"]
+                            else:
+                                arc_reading = prev_i
+                                arc_conf = "propagated"
+                                arc_source = "propagated"
+                        else:
+                            arc_reading = prev_i
+                            arc_conf = "propagated"
+                            arc_source = "propagated"
+
                     meter_archive.record(
-                        captured_dt.isoformat(timespec="seconds"), name,
-                        reading=int(lg) if lg is not None else None,
-                        confidence="lock", source="lock")
+                        ts_iso, name,
+                        reading=arc_reading,
+                        confidence=arc_conf, source=arc_source)
                 except Exception as _ae:
                     log.debug("archive index failed: %s", _ae)
                 # Evict oldest until back under the cap (keep at least 1 file).
@@ -2991,7 +3214,24 @@ def create_app(config, engine, weather, billing):
     # Trust-but-verify heartbeat: re-check even HIGH-confidence reads this often,
     # to catch a systematic-misread drift the local pipeline is falsely sure of.
     ORACLE_VERIFY_SECS = float(os.environ.get("METER_ORACLE_VERIFY_SECS", "300"))
-    ORACLE_DAILY_CAP = int(os.environ.get("METER_ORACLE_DAILY_CAP", "800"))
+    ORACLE_DAILY_CAP = int(os.environ.get("METER_ORACLE_DAILY_CAP", "3000"))
+    # Budget-aware pacing: target a monthly spend while dynamically adjusting
+    # how many oracle calls are allowed per day.
+    ORACLE_BUDGET_ENABLED = (
+        os.environ.get("METER_ORACLE_BUDGET_ENABLED", "1") == "1")
+    ORACLE_MONTHLY_BUDGET_USD = float(
+        os.environ.get("METER_ORACLE_MONTHLY_BUDGET_USD", "150"))
+    ORACLE_DAILY_MIN = int(os.environ.get("METER_ORACLE_DAILY_MIN", "25"))
+    ORACLE_BUDGET_CYCLE_START_DAY = max(1, min(31, int(
+        os.environ.get("METER_ORACLE_BUDGET_CYCLE_START_DAY", "1"))))
+    ORACLE_BUDGET_REFRESH_SECS = float(
+        os.environ.get("METER_ORACLE_BUDGET_REFRESH_SECS", "120"))
+    # Optional token pricing (USD per 1K tokens). When unset/0, use fallback
+    # flat per-call estimate.
+    ORACLE_USD_PER_1K_TOKENS = float(
+        os.environ.get("METER_ORACLE_USD_PER_1K_TOKENS", "0"))
+    ORACLE_FALLBACK_CALL_USD = float(
+        os.environ.get("METER_ORACLE_FALLBACK_CALL_USD", "0.004"))
     # Counts of read-jitter to allow when the meter is IDLE (no zone on): the
     # register shouldn't move, so any advance beyond this when idle is suspect
     # and must be corroborated before it moves the lock. 200 counts = 0.2 ft³.
@@ -3062,7 +3302,55 @@ def create_app(config, engine, weather, billing):
                      "reanchors": 0, "labels": 0, "dupes": 0, "day": "",
                      "day_calls": 0, "busy": False, "confirmed_val": None,
                      "last_result": None, "last_value": None,
-                     "pending_val": None, "pending_ts": 0.0}
+                     "pending_val": None, "pending_ts": 0.0,
+                     "effective_daily_cap": ORACLE_DAILY_CAP,
+                     "budget": {}, "last_budget_refresh": 0.0}
+
+    def _refresh_oracle_budget(force=False):
+        """Refresh cached budget summary and effective daily oracle cap."""
+        now = time.time()
+        if (not force
+                and (now - float(_oracle_state.get("last_budget_refresh", 0.0)))
+                < ORACLE_BUDGET_REFRESH_SECS):
+            return
+
+        effective = max(0, int(ORACLE_DAILY_CAP))
+        summary = {}
+        if ORACLE_BUDGET_ENABLED:
+            try:
+                import oracle_budget
+                summary = oracle_budget.summary(
+                    monthly_budget_usd=ORACLE_MONTHLY_BUDGET_USD,
+                    fallback_call_usd=ORACLE_FALLBACK_CALL_USD,
+                    cycle_start_day=ORACLE_BUDGET_CYCLE_START_DAY)
+                suggested = int(summary.get("suggested_daily_cap") or 0)
+                remaining = float(summary.get("remaining_usd") or 0.0)
+                if remaining > 0 and ORACLE_DAILY_MIN > 0:
+                    suggested = max(suggested, int(ORACLE_DAILY_MIN))
+                effective = min(max(0, int(ORACLE_DAILY_CAP)), max(0, suggested))
+            except Exception as e:
+                summary = {"error": str(e)}
+                effective = max(0, int(ORACLE_DAILY_CAP))
+
+        _oracle_state["effective_daily_cap"] = int(effective)
+        _oracle_state["budget"] = summary
+        _oracle_state["last_budget_refresh"] = now
+
+    def _record_oracle_spend(res, model_name=None):
+        """Persist spend for one oracle call (token-based or fallback)."""
+        if not isinstance(res, dict):
+            return
+        try:
+            import oracle_budget
+            tokens = int(res.get("cost_tokens", 0) or 0)
+            model = model_name or res.get("model") or ""
+            usd = oracle_budget.estimate_usd(
+                tokens=tokens,
+                usd_per_1k_tokens=ORACLE_USD_PER_1K_TOKENS,
+                fallback_call_usd=ORACLE_FALLBACK_CALL_USD)
+            oracle_budget.record_call("openai", model, tokens, usd)
+        except Exception:
+            pass
 
     def _active_gpm():
         """Sum of est_gpm for zones the controller currently has ON (0 if idle).
@@ -3193,7 +3481,9 @@ def create_app(config, engine, weather, billing):
         if _oracle_state["day"] != today:
             _oracle_state["day"] = today
             _oracle_state["day_calls"] = 0
-        if _oracle_state["day_calls"] >= ORACLE_DAILY_CAP:
+        _refresh_oracle_budget(force=False)
+        daily_cap = int(_oracle_state.get("effective_daily_cap", ORACLE_DAILY_CAP))
+        if _oracle_state["day_calls"] >= daily_cap:
             return
 
         conf = (entry or {}).get("confidence")
@@ -3314,6 +3604,7 @@ def create_app(config, engine, weather, billing):
                     "high_prefix": f"{int(lg0):09d}"[:4],
                 }
             res = vision_oracle.read_meter(frame, rotate180=True, hint=hint)
+            _record_oracle_spend(res, model_name=ORACLE_HEARTBEAT_MODEL)
             _oracle_state["calls"] += 1
             _oracle_state["last_result"] = res
             _oracle_state["last_value"] = res.get("value")
@@ -3491,6 +3782,7 @@ def create_app(config, engine, weather, billing):
                 ares = vision_oracle.read_meter(
                     frame, rotate180=True, hint=None,
                     model=ORACLE_AUTHORITY_MODEL)
+                _record_oracle_spend(ares, model_name=ORACLE_AUTHORITY_MODEL)
                 _oracle_state["calls"] += 1
                 cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
                 used_soft_hint = False
@@ -3513,6 +3805,7 @@ def create_app(config, engine, weather, billing):
                     sres = vision_oracle.read_meter(
                         frame, rotate180=True, hint=soft_hint,
                         model=ORACLE_AUTHORITY_MODEL)
+                    _record_oracle_spend(sres, model_name=ORACLE_AUTHORITY_MODEL)
                     _oracle_state["calls"] += 1
                     cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
                     if _authority_match(sres):
@@ -3784,6 +4077,14 @@ def create_app(config, engine, weather, billing):
     except Exception as e:
         log.warning("cnn_metrics init failed: %s", e)
 
+    # Oracle budget tracking/pacing: monthly spend target + dynamic daily cap.
+    try:
+        import oracle_budget
+        oracle_budget.ensure_schema()
+        _refresh_oracle_budget(force=True)
+    except Exception as e:
+        log.warning("oracle_budget init failed: %s", e)
+
     # Archive index: one row per long-term archived image + its derived reading,
     # for the history browser + accurate historical consumption graphs. Isolated
     # own DB (meter_archive.db); rows are written by _archive_frame.
@@ -3942,6 +4243,7 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/cam/status")
     def cam_status():
         """Return cam metadata."""
+        _refresh_oracle_budget(force=False)
         return jsonify({
             "has_image": cam_state["image"] is not None,
             "timestamp": cam_state["timestamp"],
@@ -3964,6 +4266,16 @@ def create_app(config, engine, weather, billing):
                 "dropped": cam_ocr_stats["dropped"],
                 "banked": cam_ocr_stats.get("banked", 0),
                 "last_ms": cam_ocr_stats["last_ms"],
+            },
+            "oracle": {
+                "enabled": ORACLE_ENABLED,
+                "day_calls": int(_oracle_state.get("day_calls", 0)),
+                "daily_cap_effective": int(
+                    _oracle_state.get("effective_daily_cap", ORACLE_DAILY_CAP)),
+                "daily_cap_hard": int(ORACLE_DAILY_CAP),
+                "monthly_budget_usd": float(ORACLE_MONTHLY_BUDGET_USD),
+                "budget_cycle_start_day": int(ORACLE_BUDGET_CYCLE_START_DAY),
+                "budget": _oracle_state.get("budget", {}),
             },
             "archive": {
                 "enabled": ARCHIVE_ENABLED,
@@ -4427,6 +4739,7 @@ def create_app(config, engine, weather, billing):
         Pulls the oracle-graded CNN-accuracy time series (cnn_metrics) and the
         live oracle state so a quota/429 outage is VISIBLE, not silent."""
         out = {"oracle": {}, "daily": [], "recent": []}
+        _refresh_oracle_budget(force=False)
         # Oracle health from live state (last_result carries 429/quota errors).
         try:
             st = _oracle_state
@@ -4436,7 +4749,11 @@ def create_app(config, engine, weather, billing):
                 "enabled": ORACLE_ENABLED,
                 "busy": st.get("busy", False),
                 "day_calls": st.get("day_calls", 0),
-                "daily_cap": ORACLE_DAILY_CAP,
+                "daily_cap": st.get("effective_daily_cap", ORACLE_DAILY_CAP),
+                "daily_cap_hard": ORACLE_DAILY_CAP,
+                "monthly_budget_usd": ORACLE_MONTHLY_BUDGET_USD,
+                "budget_cycle_start_day": int(ORACLE_BUDGET_CYCLE_START_DAY),
+                "budget": st.get("budget", {}),
                 "last_value": st.get("last_value"),
                 "last_error": err,
                 # down = last call returned a quota/429/auth error
@@ -4871,6 +5188,7 @@ def create_app(config, engine, weather, billing):
         hint = ({"last_value": int(lg0), "high_prefix": f"{int(lg0):09d}"[:4]}
                 if lg0 is not None else None)
         res = vision_oracle.read_meter(raw, rotate180=True, hint=hint)
+        _record_oracle_spend(res, model_name=ORACLE_HEARTBEAT_MODEL)
         applied = False
         if res.get("ok") and res.get("readable") and res.get("confidence") != "low":
             applied = meter_reader.reanchor(res["value"], source="manual-oracle")
@@ -4906,6 +5224,325 @@ def create_app(config, engine, weather, billing):
             return (start.isoformat(timespec="seconds"),
                     end.isoformat(timespec="seconds"))
         return request.args.get("start"), request.args.get("end")
+
+    def _smart_archive_reprocess(start, end, max_rows=240, oracle_budget=8,
+                                 commit=True):
+        """Context-aware archive reread over a whole window.
+
+        Uses left/right context instead of row-local edits:
+          * keeps reviewed/manual rows as hard anchors,
+          * prefers constrained CNN on the exact frame,
+          * selectively uses oracle only when confidence is weak,
+          * enforces monotonic + physics + bounded prefix progression.
+        """
+        import meter_archive
+        try:
+            import vision_oracle
+            oracle_ok = bool(vision_oracle.available())
+        except Exception:
+            vision_oracle = None
+            oracle_ok = False
+
+        def _epoch(ts):
+            try:
+                return datetime.fromisoformat(str(ts)).timestamp()
+            except Exception:
+                return None
+
+        def _source_score(src, conf, reviewed):
+            s = (src or "")
+            c = (conf or "")
+            if int(reviewed or 0) == 1:
+                return 1.00
+            if s == "manual":
+                return 0.98
+            if s == "oracle":
+                return 0.95 if c == "high" else 0.90
+            if s == "cnn":
+                return 0.86 if c == "high" else 0.72
+            if s == "propagated":
+                return 0.40
+            if s == "lock":
+                return 0.35
+            return 0.30
+
+        def _fits(v, prev_v, right_v, max_adv, right_strict=False):
+            if prev_v is not None:
+                if v < prev_v:
+                    return False
+                if (v - prev_v) > max_adv:
+                    return False
+                pv5 = int((f"{int(prev_v):09d}")[:5])
+                vv5 = int((f"{int(v):09d}")[:5])
+                if vv5 < pv5 or vv5 > (pv5 + 2):
+                    return False
+            if right_v is not None:
+                if right_strict:
+                    if v > right_v:
+                        return False
+                else:
+                    if v > (right_v + max(ARCHIVE_REPROCESS_CONSENSUS_COUNTS,
+                                          max_adv // 2)):
+                        return False
+            return True
+
+        rows = meter_archive.list_range(
+            start=start, end=end, limit=int(max_rows), offset=0, order="asc",
+            only_unreviewed=False)
+        total_window = meter_archive.count_range(start, end, False)
+        if not rows:
+            return {
+                "start": start,
+                "end": end,
+                "total_window": int(total_window),
+                "processed": 0,
+                "truncated": False,
+                "updated": 0,
+                "would_update": 0,
+                "oracle_calls": 0,
+                "uncertain": 0,
+                "by_source": {},
+                "changes": [],
+            }
+
+        n = len(rows)
+        strong = [False] * n
+        for i, r in enumerate(rows):
+            src = (r.get("source") or "")
+            conf = (r.get("confidence") or "")
+            strong[i] = (int(r.get("reviewed") or 0) == 1
+                         or src in ("manual", "oracle")
+                         or (src == "cnn" and conf == "high"))
+
+        next_anchor = [None] * n
+        next_anchor_strict = [False] * n
+        next_val = None
+        next_is_strict = False
+        for i in range(n - 1, -1, -1):
+            next_anchor[i] = next_val
+            next_anchor_strict[i] = bool(next_is_strict)
+            if strong[i] and rows[i].get("reading") is not None:
+                try:
+                    next_val = int(rows[i]["reading"])
+                    src_i = (rows[i].get("source") or "")
+                    next_is_strict = bool(
+                        int(rows[i].get("reviewed") or 0) == 1
+                        or src_i == "manual"
+                    )
+                except Exception:
+                    next_val = next_val
+
+        prev_val = meter_archive.neighbor_reading(start) if start else None
+        if prev_val is None:
+            for r in rows:
+                if r.get("reading") is not None:
+                    try:
+                        prev_val = int(r["reading"])
+                        break
+                    except Exception:
+                        pass
+        prev_ep = _epoch(rows[0].get("ts")) if rows else None
+
+        updated = 0
+        would_update = 0
+        uncertain = 0
+        oracle_calls = 0
+        by_source = {"cnn": 0, "oracle": 0, "propagated": 0, "kept": 0}
+        changes = []
+
+        for i, row in enumerate(rows):
+            ts = row.get("ts")
+            cur_val = None
+            if row.get("reading") is not None:
+                try:
+                    cur_val = int(row.get("reading"))
+                except Exception:
+                    cur_val = None
+
+            # Keep reviewed rows as hard anchors.
+            if int(row.get("reviewed") or 0) == 1:
+                if cur_val is not None:
+                    prev_val = cur_val
+                    prev_ep = _epoch(ts) or prev_ep
+                by_source["kept"] += 1
+                continue
+
+            ep = _epoch(ts)
+            elapsed = 60.0
+            if ep is not None and prev_ep is not None:
+                elapsed = max(1.0, ep - prev_ep)
+            max_adv = int((METER_MAX_GPM / 60.0) * elapsed
+                          * cam_ocr.COUNTS_PER_GAL * 1.5 + 200)
+            max_adv = max(300, min(ARCHIVE_EXACT_CNN_MAX_ADVANCE, max_adv))
+
+            right_v = next_anchor[i]
+            right_strict = bool(next_anchor_strict[i])
+            if prev_val is not None and right_v is not None and right_v < prev_val:
+                right_v = None
+                right_strict = False
+
+            cands = []
+            if cur_val is not None and _fits(
+                    cur_val, prev_val, right_v, max_adv,
+                    right_strict=right_strict):
+                cands.append({
+                    "value": cur_val,
+                    "source": row.get("source") or "lock",
+                    "confidence": row.get("confidence") or "medium",
+                    "score": _source_score(row.get("source"), row.get("confidence"), row.get("reviewed")),
+                    "reason": "existing",
+                })
+
+            frame = None
+            fpath = os.path.join(ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
+            if prev_val is not None and os.path.exists(fpath):
+                try:
+                    with open(fpath, "rb") as f:
+                        frame = f.read()
+                except OSError:
+                    frame = None
+
+            if frame is not None and prev_val is not None:
+                cnn = _read_via_cnn(frame, anchor=prev_val, ceil=max_adv)
+                if cnn:
+                    conf_txt = (cnn.get("confidence") or "").lower()
+                    try:
+                        min_conf = float(cnn.get("min_conf", 0.0) or 0.0)
+                    except Exception:
+                        min_conf = 0.0
+                    cv = cnn.get("constrained_value")
+                    if cv is not None:
+                        try:
+                            v = int(cv)
+                            if (min_conf >= ARCHIVE_REPROCESS_CNN_MIN_CONF
+                                    and _fits(v, prev_val, right_v, max_adv,
+                                              right_strict=right_strict)):
+                                cands.append({
+                                    "value": v,
+                                    "source": "cnn",
+                                    "confidence": ("high" if min_conf >= 0.8 else "medium"),
+                                    "score": min(0.94, 0.72 + (min_conf * 0.30)),
+                                    "reason": "cnn-constrained",
+                                })
+                        except Exception:
+                            pass
+                    elif conf_txt == "high" and cnn.get("digits"):
+                        try:
+                            v = int(cnn.get("digits"))
+                            if _fits(v, prev_val, right_v, max_adv,
+                                     right_strict=right_strict):
+                                cands.append({
+                                    "value": v,
+                                    "source": "cnn",
+                                    "confidence": "high",
+                                    "score": 0.88,
+                                    "reason": "cnn-high",
+                                })
+                        except Exception:
+                            pass
+
+            top_score = max((c["score"] for c in cands), default=0.0)
+            need_oracle = (frame is not None and prev_val is not None
+                           and oracle_ok and oracle_calls < int(oracle_budget)
+                           and top_score < 0.85)
+            if need_oracle and vision_oracle is not None:
+                hint = {
+                    "last_value": int(prev_val),
+                    "high_prefix": f"{int(prev_val):09d}"[:5],
+                }
+                try:
+                    ores = vision_oracle.read_meter(
+                        frame, rotate180=True, hint=hint,
+                        model=ORACLE_AUTHORITY_MODEL)
+                    _record_oracle_spend(ores, model_name=ORACLE_AUTHORITY_MODEL)
+                    oracle_calls += 1
+                    if (ores.get("ok") and ores.get("readable")
+                            and ores.get("value") is not None
+                            and ores.get("confidence") != "low"):
+                        v = int(ores.get("value"))
+                        if _fits(v, prev_val, right_v, max_adv,
+                                 right_strict=right_strict):
+                            cands.append({
+                                "value": v,
+                                "source": "oracle",
+                                "confidence": ores.get("confidence") or "medium",
+                                "score": 0.96 if ores.get("confidence") == "high" else 0.91,
+                                "reason": "oracle-hinted",
+                            })
+                except Exception:
+                    pass
+
+            if cands:
+                pv = prev_val if prev_val is not None else cands[0]["value"]
+                best = max(
+                    cands,
+                    key=lambda c: (c["score"], -(c["value"] - pv))
+                )
+                new_val = int(best["value"])
+                new_src = best["source"]
+                new_conf = best["confidence"]
+                reason = best["reason"]
+            else:
+                new_val = prev_val if prev_val is not None else cur_val
+                new_src = "propagated"
+                new_conf = "propagated"
+                reason = "no-trusted-candidate"
+
+            if new_val is None:
+                by_source["kept"] += 1
+                continue
+
+            if new_src == "propagated":
+                uncertain += 1
+
+            changed = (cur_val != int(new_val)
+                       or (row.get("source") or "") != new_src
+                       or (row.get("confidence") or "") != new_conf)
+
+            if changed:
+                if commit:
+                    meter_archive.update_reading(
+                        ts, int(new_val), new_conf, source=new_src,
+                        reviewed=False)
+                    updated += 1
+                else:
+                    would_update += 1
+                if len(changes) < 40:
+                    changes.append({
+                        "ts": ts,
+                        "from": {
+                            "reading": cur_val,
+                            "source": row.get("source"),
+                            "confidence": row.get("confidence"),
+                        },
+                        "to": {
+                            "reading": int(new_val),
+                            "source": new_src,
+                            "confidence": new_conf,
+                            "reason": reason,
+                        },
+                    })
+            else:
+                by_source["kept"] += 1
+
+            if new_src in by_source:
+                by_source[new_src] += 1
+            prev_val = int(new_val)
+            prev_ep = ep if ep is not None else prev_ep
+
+        return {
+            "start": start,
+            "end": end,
+            "total_window": int(total_window),
+            "processed": int(len(rows)),
+            "truncated": bool(total_window > len(rows)),
+            "updated": int(updated),
+            "would_update": int(would_update),
+            "oracle_calls": int(oracle_calls),
+            "uncertain": int(uncertain),
+            "by_source": by_source,
+            "changes": changes,
+        }
 
     @app.route("/cam/archive")
     def cam_archive_page():
@@ -4981,10 +5618,11 @@ def create_app(config, engine, weather, billing):
         # Soft context: the nearest known reading (prefix only, no hard floor) so
         # glare on the high digits is disambiguated without forcing the answer.
         nb = meter_archive.neighbor_reading(ts)
-        hint = ({"last_value": int(nb), "high_prefix": f"{int(nb):09d}"[:4]}
+        hint = ({"last_value": int(nb), "high_prefix": f"{int(nb):09d}"[:5]}
                 if nb is not None else None)
         res = vision_oracle.read_meter(
             frame, rotate180=True, hint=hint, model=ORACLE_AUTHORITY_MODEL)
+        _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
         updated = False
         if (res.get("ok") and res.get("readable")
                 and res.get("confidence") != "low"):
@@ -5010,11 +5648,76 @@ def create_app(config, engine, weather, billing):
         v = "".join(c for c in str(data.get("value", "")) if c.isdigit())
         if len(v) != 9:
             return jsonify({"ok": False, "error": "value must be 9 digits"}), 400
-        if not meter_archive.get(ts):
+        row = meter_archive.get(ts)
+        if not row:
             return jsonify({"ok": False, "error": "unknown ts"}), 404
+        new_val = int(v)
+        old_val = row.get("reading")
         ok = meter_archive.update_reading(
-            ts, int(v), "manual", source="manual", reviewed=True)
-        return jsonify({"ok": ok, "value": v, "reading_cf": int(v) / 1000.0})
+            ts, new_val, "manual", source="manual", reviewed=True)
+
+        propagated = 0
+        if ok and old_val is not None:
+            try:
+                propagated = meter_archive.propagate_delta(ts, new_val - int(old_val))
+            except Exception:
+                propagated = 0
+
+        return jsonify({
+            "ok": ok,
+            "value": v,
+            "reading_cf": new_val / 1000.0,
+            "propagated": propagated,
+        })
+
+    @app.route("/api/cam/archive/reprocess", methods=["POST"])
+    def cam_archive_reprocess():
+        """Window-aware smart reprocess for archive readings.
+
+        Body: {minutes?, start?, end?, max_rows?, oracle_budget?, dry_run?}
+        """
+        data = request.get_json(silent=True) or {}
+        start = str(data.get("start", "") or "")
+        end = str(data.get("end", "") or "")
+
+        minutes = data.get("minutes")
+        try:
+            minutes = int(minutes) if minutes is not None else None
+        except Exception:
+            minutes = None
+        if minutes and minutes > 0:
+            dt_end = datetime.now()
+            dt_start = dt_end - timedelta(minutes=minutes)
+            start = dt_start.isoformat(timespec="seconds")
+            end = dt_end.isoformat(timespec="seconds")
+
+        if not start or not end:
+            dt_end = datetime.now()
+            dt_start = dt_end - timedelta(hours=24)
+            start = dt_start.isoformat(timespec="seconds")
+            end = dt_end.isoformat(timespec="seconds")
+
+        try:
+            max_rows = int(data.get("max_rows", ARCHIVE_REPROCESS_MAX_ROWS))
+        except Exception:
+            max_rows = ARCHIVE_REPROCESS_MAX_ROWS
+        max_rows = max(20, min(int(ARCHIVE_REPROCESS_MAX_ROWS), max_rows))
+
+        try:
+            oracle_budget = int(data.get("oracle_budget", ARCHIVE_REPROCESS_MAX_ORACLE))
+        except Exception:
+            oracle_budget = ARCHIVE_REPROCESS_MAX_ORACLE
+        oracle_budget = max(0, min(int(ARCHIVE_REPROCESS_MAX_ORACLE), oracle_budget))
+
+        dry_raw = str(data.get("dry_run", "")).strip().lower()
+        dry = dry_raw in ("1", "true", "yes", "y", "on")
+
+        out = _smart_archive_reprocess(
+            start, end, max_rows=max_rows, oracle_budget=oracle_budget,
+            commit=(not dry))
+        out["ok"] = True
+        out["dry_run"] = dry
+        return jsonify(out)
 
     @app.route("/api/cam/archive/usage")
     def cam_archive_usage():

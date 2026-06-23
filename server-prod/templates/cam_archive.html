@@ -28,6 +28,8 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .toggle{font-size:.76rem;padding:5px 10px;border-radius:7px;border:1px solid var(--border);
   background:var(--card);cursor:pointer}
 .toggle.on{background:var(--purple);color:#fff;border-color:var(--purple)}
+.toolbtn{font-size:.74rem;padding:5px 10px;border-radius:7px;border:1px solid var(--border);
+  background:#ecfeff;color:#0f766e;cursor:pointer;font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .cell{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#0b1117}
 .cell img{width:100%;display:block;transform:rotate(180deg);background:#11181f;cursor:pointer}
@@ -38,7 +40,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .badge{display:inline-block;font-size:.64rem;padding:1px 7px;border-radius:10px;font-weight:600;vertical-align:middle}
 .b-lock{background:#eef2f6;color:#5f7082}
 .b-oracle{background:#dbeafe;color:#1d4ed8}
+.b-cnn{background:#d1fae5;color:#065f46}
 .b-manual{background:#ede9fe;color:#6d28d9}
+.b-prop{background:#ffedd5;color:#9a3412}
 .b-rev{background:#dcfce7;color:#15803d}
 .row{display:flex;gap:6px;margin-top:6px;align-items:center}
 .btn{font-size:.68rem;padding:3px 8px;border:1px solid var(--border);border-radius:6px;
@@ -78,11 +82,24 @@ h1{font-size:1.35rem;margin-bottom:2px}
 </div>
 
 <div class="card">
+  <h2>🎯 Accuracy spend (current cycle)</h2>
+  <div class="hint">Oracle checks improve label quality for CNN training. This keeps spend visible while staying inside the monthly budget.</div>
+  <div style="margin-bottom:8px">
+    <span class="stat">Spent: <b id="acc-spent">—</b> $</span>
+    <span class="stat">Remaining: <b id="acc-left">—</b> $</span>
+    <span class="stat">Projected end: <b id="acc-proj">—</b> $</span>
+  </div>
+  <div class="hint" id="acc-note">Loading cycle forecast…</div>
+</div>
+
+<div class="card">
   <h2>🖼️ Image history</h2>
   <div class="hint">Every archived photo with the reading derived for it. <b>Re-read (AI)</b> asks GPT-4o to read that exact image; <b>Fix</b> lets you type the true value. Corrections feed the graph above.</div>
   <div class="toolbar">
     <span class="toggle" id="tgUnrev" onclick="toggleUnrev()">Only unreviewed</span>
     <span class="toggle" id="tgOrder" onclick="toggleOrder()">Newest first</span>
+    <button class="toolbtn" id="btnSmartDry" onclick="smartReprocess(true)">Smart Reprocess (dry run)</button>
+    <button class="toolbtn" id="btnSmartApply" onclick="smartReprocess(false)">Apply Smart Reprocess</button>
     <span class="msg" id="listMsg"></span>
   </div>
   <div class="grid" id="grid"></div>
@@ -149,10 +166,40 @@ function loadUsage(){
     });
 }
 
+function money2(v){
+  var n = Number(v);
+  if (!isFinite(n)) return '—';
+  return n.toFixed(2);
+}
+
+function loadAccuracyBudget(){
+  fetch('/api/cam/quality')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var o = (d && d.oracle) || {};
+      var b = o.budget || {};
+      document.getElementById('acc-spent').textContent = money2(b.spent_month_usd);
+      document.getElementById('acc-left').textContent = money2(b.remaining_usd);
+      document.getElementById('acc-proj').textContent = money2(b.projected_cycle_spend_usd);
+
+      var calls = Number(b.calls_today||0);
+      var cap = Number(o.daily_cap||0);
+      var pct = Number(b.budget_utilization_pct||0).toFixed(1);
+      document.getElementById('acc-note').textContent =
+        'Today: ' + calls + ' oracle calls' + (cap>0 ? ' / cap ' + cap : '')
+        + ' · budget used: ' + pct + '%';
+    })
+    .catch(function(){
+      document.getElementById('acc-note').textContent = 'Cycle forecast unavailable right now.';
+    });
+}
+
 function cellHTML(it){
   var src = it.source||'lock';
   var badge = src==='oracle' ? '<span class="badge b-oracle">AI</span>'
+            : src==='cnn' ? '<span class="badge b-cnn">cnn</span>'
             : src==='manual' ? '<span class="badge b-manual">manual</span>'
+            : src==='propagated' ? '<span class="badge b-prop">prop</span>'
             : '<span class="badge b-lock">lock</span>';
   var rev = it.reviewed ? ' <span class="badge b-rev">✓</span>' : '';
   return '<div class="cell" data-ts="'+esc(it.ts)+'">'
@@ -213,8 +260,12 @@ function saveFix(btn){
         cell.querySelector('.rd').innerHTML = fmtReading(d.value)
           + ' <span class="badge b-manual">manual</span> <span class="badge b-rev">✓</span>';
         cell.querySelectorAll('.rd')[1].innerHTML = '<small>'+cf(d.reading_cf)+' ft³</small>';
-        msg.innerHTML = '<span style="color:var(--green)">✓ saved</span>';
+        var n = Number(d.propagated||0);
+        msg.innerHTML = '<span style="color:var(--green)">✓ saved'
+          + (n>0 ? ' · aligned '+n+' later row'+(n===1?'':'s') : '')
+          + '</span>';
         loadUsage();
+        loadList(true);
       } else { btn.disabled=false; msg.textContent = d.error || 'failed'; }
     })
     .catch(function(){ btn.disabled=false; msg.textContent='failed'; });
@@ -247,6 +298,40 @@ function loadList(reset){
   }).catch(function(){ loading=false; document.getElementById('listMsg').textContent='failed'; });
 }
 
+function smartReprocess(dryRun){
+  var msg = document.getElementById('listMsg');
+  var b1 = document.getElementById('btnSmartDry');
+  var b2 = document.getElementById('btnSmartApply');
+  if (!dryRun && !confirm('Apply smart reprocess to this window? This can update multiple rows.')) return;
+  b1.disabled = true; b2.disabled = true;
+  msg.textContent = dryRun ? 'smart dry-run…' : 'smart reprocess running…';
+  fetch('/api/cam/archive/reprocess', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({minutes: minutes, max_rows: 300, oracle_budget: 12, dry_run: dryRun})
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    b1.disabled = false; b2.disabled = false;
+    if (!d.ok){
+      msg.textContent = d.error || 'smart reprocess failed';
+      return;
+    }
+    var changed = dryRun ? Number(d.would_update||0) : Number(d.updated||0);
+    msg.textContent = (dryRun ? 'dry-run: ' : 'updated: ') + changed
+      + ' rows · oracle ' + Number(d.oracle_calls||0)
+      + ' · uncertain ' + Number(d.uncertain||0);
+    if (!dryRun){
+      loadUsage();
+      loadList(true);
+    }
+  })
+  .catch(function(){
+    b1.disabled = false; b2.disabled = false;
+    msg.textContent = 'smart reprocess failed';
+  });
+}
+
 function loadMore(){ loadList(false); }
 function toggleUnrev(){ unrev=!unrev; document.getElementById('tgUnrev').classList.toggle('on',unrev); loadList(true); }
 function toggleOrder(){ order = order==='desc'?'asc':'desc';
@@ -254,8 +339,9 @@ function toggleOrder(){ order = order==='desc'?'asc':'desc';
   document.getElementById('tgOrder').textContent = order==='asc'?'Oldest first':'Newest first';
   loadList(true); }
 
-function refresh(){ chips(); loadUsage(); loadList(true); }
+function refresh(){ chips(); loadUsage(); loadAccuracyBudget(); loadList(true); }
 refresh();
+setInterval(loadAccuracyBudget, 30000);
 </script>
 </body>
 </html>

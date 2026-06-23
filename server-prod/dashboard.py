@@ -2829,6 +2829,18 @@ def create_app(config, engine, weather, billing):
         os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.55"))
     ARCHIVE_REPROCESS_CONSENSUS_COUNTS = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS", "80"))
+    # Strict inference mode: use tower CPU (CNN constrained reads over real
+    # archived frames) to infer rows between trusted anchors automatically.
+    STRICT_BACKFILL_ENABLED = (
+        os.environ.get("METER_STRICT_BACKFILL_ENABLED", "1") == "1")
+    STRICT_BACKFILL_LOOKBACK_MINUTES = int(
+        os.environ.get("METER_STRICT_BACKFILL_LOOKBACK_MINUTES", "240"))
+    STRICT_BACKFILL_MAX_ROWS = int(
+        os.environ.get("METER_STRICT_BACKFILL_MAX_ROWS", "480"))
+    STRICT_BACKFILL_ORACLE_BUDGET = int(
+        os.environ.get("METER_STRICT_BACKFILL_ORACLE_BUDGET", "0"))
+    STRICT_BACKFILL_MIN_INTERVAL_S = float(
+        os.environ.get("METER_STRICT_BACKFILL_MIN_INTERVAL_S", "45"))
     # Reconnect recovery: after a long cam gap, automatically reconcile the
     # affected archive window so held/propagated rows are backfilled once
     # trusted anchors are available.
@@ -2847,6 +2859,12 @@ def create_app(config, engine, weather, billing):
         "start_ts": None,
         "gap_s": 0.0,
         "attempts": 0,
+    }
+    _strict_backfill = {
+        "running": False,
+        "last_run_ts": 0.0,
+        "last_reason": None,
+        "last_result": None,
     }
     _archive_lock = _threading.Lock()
 
@@ -2875,6 +2893,85 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             _archive_state["files"] = _deque()
             log.warning("archive init failed: %s", e)
+
+    def _run_strict_backfill(start_ts, end_ts, reason):
+        """Background strict inference pass over an archive window.
+
+        Uses the smart window reprocessor (CNN-first on real archived frames,
+        bounded by monotonic + physics). Runs in a thread so uploads stay fast.
+        """
+        try:
+            out = _smart_archive_reprocess(
+                start_ts, end_ts,
+                max_rows=max(20, int(STRICT_BACKFILL_MAX_ROWS)),
+                oracle_budget=max(0, int(STRICT_BACKFILL_ORACLE_BUDGET)),
+                commit=True,
+            )
+            _strict_backfill["last_result"] = {
+                "start": start_ts,
+                "end": end_ts,
+                "reason": reason,
+                "processed": int(out.get("processed", 0)),
+                "updated": int(out.get("updated", 0)),
+                "oracle_calls": int(out.get("oracle_calls", 0)),
+                "uncertain": int(out.get("uncertain", 0)),
+                "interpolated": int(out.get("interpolated", 0)),
+            }
+            log.info(
+                "strict backfill %s: window=%s..%s processed=%s updated=%s uncertain=%s",
+                reason, start_ts, end_ts,
+                out.get("processed", 0), out.get("updated", 0),
+                out.get("uncertain", 0))
+
+            if reason == "reconnect":
+                _reconnect_backfill["attempts"] = int(
+                    _reconnect_backfill.get("attempts", 0)) + 1
+                if int(out.get("updated", 0)) > 0:
+                    _reconnect_backfill["pending"] = False
+                    log.info(
+                        "reconnect strict backfill applied after gap %.1fs",
+                        float(_reconnect_backfill.get("gap_s") or 0.0))
+                elif _reconnect_backfill["attempts"] >= max(1, RECONNECT_BACKFILL_MAX_ATTEMPTS):
+                    _reconnect_backfill["pending"] = False
+                    log.info(
+                        "reconnect strict backfill expired after %s attempts",
+                        _reconnect_backfill["attempts"])
+        except Exception as e:
+            _strict_backfill["last_result"] = {
+                "start": start_ts,
+                "end": end_ts,
+                "reason": reason,
+                "error": str(e),
+            }
+            log.warning("strict backfill %s failed: %s", reason, e)
+            if reason == "reconnect":
+                _reconnect_backfill["attempts"] = int(
+                    _reconnect_backfill.get("attempts", 0)) + 1
+                if _reconnect_backfill["attempts"] >= max(1, RECONNECT_BACKFILL_MAX_ATTEMPTS):
+                    _reconnect_backfill["pending"] = False
+        finally:
+            _strict_backfill["running"] = False
+            _strict_backfill["last_run_ts"] = time.time()
+
+    def _queue_strict_backfill(start_ts, end_ts, reason):
+        """Queue a strict backfill pass if one is not already running."""
+        if not STRICT_BACKFILL_ENABLED:
+            return False
+        now = time.time()
+        if _strict_backfill.get("running"):
+            return False
+        if ((now - float(_strict_backfill.get("last_run_ts", 0.0)))
+                < float(STRICT_BACKFILL_MIN_INTERVAL_S)):
+            return False
+        _strict_backfill["running"] = True
+        _strict_backfill["last_reason"] = reason
+        _threading.Thread(
+            target=_run_strict_backfill,
+            args=(start_ts, end_ts, reason),
+            daemon=True,
+            name="archive-strict-backfill",
+        ).start()
+        return True
 
     def _archive_try_stale_reread(frame, prev_value):
         """Best-effort, bounded reread for stale-lock archive plateaus.
@@ -3104,10 +3201,25 @@ def create_app(config, engine, weather, billing):
                         reading=arc_reading,
                         confidence=arc_conf, source=arc_source)
 
+                    trusted_anchor = (
+                        arc_reading is not None
+                        and (arc_source in ("manual", "oracle")
+                             or (arc_source == "cnn" and arc_conf == "high"))
+                    )
+
+                    # Strict mode: whenever a trusted anchor lands, run a
+                    # bounded CNN-first pass over recent archive rows so
+                    # in-between values are inferred from actual frames.
+                    if trusted_anchor:
+                        st_anchor = (
+                            captured_dt
+                            - timedelta(minutes=max(5, STRICT_BACKFILL_LOOKBACK_MINUTES))
+                        ).isoformat(timespec="seconds")
+                        _queue_strict_backfill(st_anchor, ts_iso, reason="anchor")
+
                     # If we recently detected a long upload gap (cam
-                    # disconnect/reconnect), re-run interpolation in the
-                    # affected window automatically so stale propagated rows
-                    # self-heal once trusted anchors exist.
+                    # disconnect/reconnect), queue strict window repair over the
+                    # affected range until it applies (or retries are exhausted).
                     if RECONNECT_BACKFILL_ENABLED and _reconnect_backfill.get("pending"):
                         try:
                             start_ts = _reconnect_backfill.get("start_ts")
@@ -3116,20 +3228,12 @@ def create_app(config, engine, weather, billing):
                                     captured_dt
                                     - timedelta(minutes=max(1, RECONNECT_LOOKBACK_MINUTES))
                                 ).isoformat(timespec="seconds")
-                            rec = meter_archive.reconcile_window(start_ts, ts_iso)
-                            _reconnect_backfill["attempts"] = int(
-                                _reconnect_backfill.get("attempts", 0)) + 1
-                            if int(rec.get("updated", 0)) > 0:
+                            _queue_strict_backfill(start_ts, ts_iso, reason="reconnect")
+                            if (int(_reconnect_backfill.get("attempts", 0))
+                                    >= max(1, RECONNECT_BACKFILL_MAX_ATTEMPTS)):
                                 _reconnect_backfill["pending"] = False
                                 log.info(
-                                    "reconnect backfill applied: gap=%.1fs window=%s..%s updated=%s anchors=%s",
-                                    float(_reconnect_backfill.get("gap_s") or 0.0),
-                                    start_ts, ts_iso,
-                                    rec.get("updated", 0), rec.get("anchors", 0))
-                            elif _reconnect_backfill["attempts"] >= max(1, RECONNECT_BACKFILL_MAX_ATTEMPTS):
-                                _reconnect_backfill["pending"] = False
-                                log.info(
-                                    "reconnect backfill expired after %s attempts (no updates)",
+                                    "reconnect strict backfill expired after %s attempts",
                                     _reconnect_backfill["attempts"])
                         except Exception as _re:
                             log.debug("reconnect backfill failed: %s", _re)
@@ -4373,6 +4477,12 @@ def create_app(config, engine, weather, billing):
                     "start_ts": _reconnect_backfill.get("start_ts"),
                     "gap_s": _reconnect_backfill.get("gap_s"),
                     "attempts": int(_reconnect_backfill.get("attempts", 0)),
+                },
+                "strict_backfill": {
+                    "enabled": bool(STRICT_BACKFILL_ENABLED),
+                    "running": bool(_strict_backfill.get("running")),
+                    "last_reason": _strict_backfill.get("last_reason"),
+                    "last_result": _strict_backfill.get("last_result"),
                 },
             },
         })

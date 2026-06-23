@@ -243,6 +243,20 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
    - temp-db outage sequence test produced inferred middle rows automatically
    - live status API shows reconnect_backfill state fields.
 
+**2026-06-23 strict inference mode (tower CPU-first between AI anchors):**
+- Upgraded reconnect/anchor recovery to run strict smart-window backfill in a background worker instead of interpolation-only reconciliation.
+- New behavior:
+   - whenever a trusted anchor lands, queue a bounded strict window pass over recent archive rows
+   - after reconnect gaps, queue strict passes over the reconnect window until applied/expired
+   - strict pass uses constrained CNN on the real archived frames (`_smart_archive_reprocess`) and keeps oracle budget configurable (default 0 for this strict mode path)
+- New config knobs:
+   - `METER_STRICT_BACKFILL_ENABLED` (default 1)
+   - `METER_STRICT_BACKFILL_LOOKBACK_MINUTES` (default 240)
+   - `METER_STRICT_BACKFILL_MAX_ROWS` (default 480)
+   - `METER_STRICT_BACKFILL_ORACLE_BUDGET` (default 0)
+   - `METER_STRICT_BACKFILL_MIN_INTERVAL_S` (default 45)
+- `/api/cam/status` now reports `archive.strict_backfill` runtime state (`enabled`, `running`, `last_reason`, `last_result`).
+
 **Azure-side guardrail attempt:**
 - Tried creating a subscription budget via CLI + REST for `f94c002c-2212-4bfb-b7a4-f8898b7ea4e5`.
 - Blocked by RBAC (`RBACAccessDenied`) on Cost Management budget write at current account permissions.

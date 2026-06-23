@@ -342,6 +342,48 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
 - Strict backfill is now autonomous on a fixed cadence and still event-aware for reconnects.
 - CNN improvement telemetry is exposed via API and can be graphed/alerted without manual SQL.
 
+## 2026-06-23 — CNN retrain moved to near-real-time checks + full ground-truth replay metrics
+
+**Context:** James asked to stop waiting for a daily 3:20 AM job and instead improve the CNN as soon as enough new data is available, while continuously tracking improvement quality.
+
+**What changed (tower retrain system):**
+- `meter-cnn-retrain.timer` changed from clock-based nightly run to frequent polling:
+   - old: `OnCalendar=*-*-* 03:20:00`
+   - new: `OnUnitActiveSec=10min`, `OnBootSec=2min`, `RandomizedDelaySec=60`
+- Gate remains data-driven in `retrain.py`:
+   - train only when `(new_frames + new_manual) >= MIN_NEW_FRAMES` (still 25)
+   - otherwise skip quickly (cheap check cycle)
+
+**Continuous improvement tracking (new):**
+- `retrain.py` now evaluates champion and challenger on:
+   - held-out benchmark (existing gate)
+   - **all trusted ground truth** (`clean` label set after audit/manual/propagation overlay)
+- Added new status fields in `~/meter-cnn/retrain_status.json`:
+   - `champion_ground_truth_full9`
+   - `challenger_ground_truth_full9`
+   - `champion_ground_truth_perdigit`
+   - `challenger_ground_truth_perdigit`
+   - `trusted_ground_truth_n`
+- Added append-only per-run history log:
+   - `~/meter-cnn/retrain_history.jsonl`
+   - includes both skipped and completed runs for trend analysis over time.
+
+**Validation on tower (live):**
+- Timer active with 10-minute cadence (`meter-cnn-retrain.timer` waiting, next trigger ~10 min).
+- Forced smoke run (`--force --epochs 2`) completed and status included new ground-truth fields.
+- Sample result from live run:
+   - champion held-out full-9: `0.6552`
+   - champion ground-truth full-9: `0.7741`
+   - trusted ground truth size: `1111`
+- History file appended both:
+   - skipped run record (below threshold)
+   - completed run record (full metric payload)
+
+**Current state:**
+- Retrain checks are now near-real-time and no longer tied to once-daily timing.
+- Actual training still only starts when enough new data exists (25 threshold), preserving stability and cost.
+- Improvement tracking now includes benchmark + full trusted-ground-truth replay each run.
+
 ## 2026-06-13 — Dedicated Sensor History page + unified compact mobile nav + cam-cutoff fix
 
 **Context:** James couldn't see soil-sensor history anywhere (the existing charts are buried in the index History panel's drilldowns), and the mobile bottom nav was broken: 11 items jammed into a `justify-content:space-around` row wrapped onto 2–3 lines on a phone — so the bar was huge, items were cut off, and **the Water Meter Cam panel got hidden behind the over-tall nav** ("camera cut off"). Each page also hardcoded a *different* nav subset (forecast/calibrate showed fewer items than home) because the in-page SPA panels (Zones/History/Cam/Deer) only exist on index.html.

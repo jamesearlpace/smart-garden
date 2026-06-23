@@ -8,6 +8,8 @@ Type=oneshot
 User=jack
 WorkingDirectory=/home/jack/meter-cnn
 # Train politely so the live CNN service + RapidOCR stay responsive.
+# This unit may run frequently; retrain.py exits quickly when MIN_NEW_FRAMES
+# is not met, so frequent checks stay cheap.
 Nice=10
 IOSchedulingClass=idle
 ExecStart=/home/jack/meter-ocr/.venv/bin/python /home/jack/meter-cnn/retrain.py

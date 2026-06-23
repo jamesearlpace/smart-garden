@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Nightly GATED retrain for the meter-digit CNN — runs on the tower (jackmint).
+"""GATED retrain for the meter-digit CNN — runs on the tower (jackmint).
 
 Self-contained: bundles the model, preprocessing, monotonic audit, dataset
 build, champion/challenger train, and gated promotion. No sibling imports, so it
 runs cleanly as a systemd job.
 
-Flow each night:
+Flow each run:
   1. SYNC frames + the baseline verified label set from the Acer (rsync).
   2. AUDIT — drop physically-impossible labels (monotonic LNDS over time).
   3. GATE on volume — skip if too few NEW oracle frames since the last train
@@ -16,7 +16,7 @@ Flow each night:
   5. TRAIN a challenger; EVAL champion + challenger on the SAME held-out test.
   6. PROMOTE the challenger ONLY if it strictly beats the champion's full-9 on
      the held-out test. Bump VERSION, back up the old model, restart meter-cnn.
-  7. Write retrain_status.json (for the dashboard) + log.
+    7. Write retrain_status.json + append retrain_history.jsonl for trends.
 
 Guardrails preserved: independent-verified labels only (oracle/manual/consensus),
 gated promotion (never auto-ship a worse model), monotonic audit as the floor.
@@ -49,6 +49,7 @@ BASELINE_JSONL = os.path.join(WORK, "cnn_train.jsonl")
 MODEL_LIVE = os.path.join(BASE, "meter_cnn.pt")    # the champion the service runs
 VERSION_FILE = os.path.join(BASE, "VERSION")
 STATUS = os.path.join(BASE, "retrain_status.json")
+HISTORY = os.path.join(BASE, "retrain_history.jsonl")
 MARKER = os.path.join(BASE, "last_retrain_maxts")  # max captured_ts trained on
 MANUAL_MARKER = os.path.join(BASE, "last_retrain_manual")  # # manual edits trained on
 CLEAN_REGIME = os.path.join(BASE, "clean_regime")  # set once the baseline is fair
@@ -755,6 +756,15 @@ def write_status(d):
         pass
 
 
+def append_history(d):
+    """Append one run record for long-term trend analysis."""
+    try:
+        with open(HISTORY, "a") as f:
+            f.write(json.dumps(d) + "\n")
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true",
@@ -791,9 +801,12 @@ def main():
             f"(total {manual_total}) — counts toward the gate")
     if (n_new + n_manual_new) < MIN_NEW_FRAMES and not args.force:
         log("SKIP: too few new frames/corrections — not worth a retrain tonight")
-        write_status({"ts": time.time(), "skipped": True, "new_frames": n_new,
-                      "new_manual": n_manual_new,
-                      "reason": "below MIN_NEW_FRAMES"})
+        status = {"ts": time.time(), "skipped": True,
+                  "new_frames": n_new, "new_manual": n_manual_new,
+                  "reason": "below MIN_NEW_FRAMES",
+                  "trusted_ground_truth_n": len(clean)}
+        write_status(status)
+        append_history(status)
         return
 
     train_rows, test_rows = build_rows(clean, trust, set(regression), hard)
@@ -810,8 +823,11 @@ def main():
             f"— falling back to plain hash holdout")
     if len(test_rows) < MIN_TEST:
         log(f"ABORT: held-out test too small ({len(test_rows)} < {MIN_TEST})")
-        write_status({"ts": time.time(), "skipped": True,
-                      "reason": "test set too small"})
+        status = {"ts": time.time(), "skipped": True,
+                  "reason": "test set too small",
+                  "trusted_ground_truth_n": len(clean)}
+        write_status(status)
+        append_history(status)
         return
 
     # Synthetic recombination: teach every digit at every position (especially
@@ -842,6 +858,19 @@ def main():
     chall = train_challenger(train_rows, test_loader, device)
     h_d, h_f = evaluate(chall, test_loader, device)
     log(f"CHALLENGER {nxt_ver}: per-digit {h_d:.3f}  full-9 {h_f:.3f}")
+
+    # FULL trusted ground-truth replay (not just holdout): this gives a
+    # continuous signal of how each run tracks against all currently trusted
+    # labels (manual + propagated-confirmed/repaired + validated baseline).
+    gt_rows = [{"file": f, "label": lbl, "w": trust.get(f, 1.0)}
+               for f, lbl in sorted(clean.items())]
+    gt_loader = DataLoader(MeterDigits(gt_rows, train=False),
+                           batch_size=64, shuffle=False, num_workers=0)
+    c_gt_d, c_gt_f = evaluate(champ, gt_loader, device)
+    h_gt_d, h_gt_f = evaluate(chall, gt_loader, device)
+    log("GROUND-TRUTH replay: champion %.3f/%.3f  challenger %.3f/%.3f "
+        "(digit/full-9 over %d trusted labels)"
+        % (c_gt_d, c_gt_f, h_gt_d, h_gt_f, len(gt_rows)))
 
     # HARD-FRAME EVAL: the clean held-out benchmark is mostly easy historical
     # frames, so a glare/aug improvement can be invisible there. Compare the two
@@ -926,19 +955,26 @@ def main():
         open(MANUAL_MARKER, "w").write(str(manual_total))
         log(f"KEEP {cur_ver}: {reason}")
 
-    write_status({
+    status = {
         "ts": time.time(), "skipped": False, "promoted": promoted,
         "bootstrap": bootstrap,
         "champion_version": cur_ver, "challenger_version": nxt_ver,
         "champion_full9": round(c_f, 4), "challenger_full9": round(h_f, 4),
         "champion_perdigit": round(c_d, 4), "challenger_perdigit": round(h_d, 4),
+        "champion_ground_truth_full9": round(c_gt_f, 4),
+        "challenger_ground_truth_full9": round(h_gt_f, 4),
+        "champion_ground_truth_perdigit": round(c_gt_d, 4),
+        "challenger_ground_truth_perdigit": round(h_gt_d, 4),
+        "trusted_ground_truth_n": len(gt_rows),
         "champion_regression": round(champ_reg, 4) if champ_reg is not None else None,
         "challenger_regression": round(chall_reg, 4) if chall_reg is not None else None,
         "regression_n": len(reg_rows),
         "train_n": len(train_rows), "test_n": len(test_rows),
         "new_frames": n_new, "new_manual": n_manual_new,
         "secs": int(time.time() - t0),
-    })
+    }
+    write_status(status)
+    append_history(status)
     log(f"done in {int(time.time() - t0)}s")
 
 

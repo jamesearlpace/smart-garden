@@ -1,12 +1,16 @@
 [Unit]
-Description=Run the meter-CNN gated retrain nightly
+Description=Run the meter-CNN gated retrain frequently
 
 [Timer]
-# 3:20 AM local — tower is idle, meter is static overnight (clean frames).
-OnCalendar=*-*-* 03:20:00
-# If the box was asleep/off at 3:20, run at next boot instead of skipping.
+# Near-real-time retrain checks: run often; retrain.py still gates on
+# MIN_NEW_FRAMES, so most cycles are lightweight skips until enough new data
+# arrives.
+OnUnitActiveSec=10min
+# If the box was asleep/off, run soon after boot instead of waiting for a
+# clock time.
+OnBootSec=2min
 Persistent=true
-RandomizedDelaySec=600
+RandomizedDelaySec=60
 
 [Install]
 WantedBy=timers.target

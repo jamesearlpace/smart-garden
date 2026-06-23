@@ -54,6 +54,36 @@
 
 ---
 
+## 2026-06-23 — Truth-guard latch deployed (manual review mode + bank pause)
+
+**Context:** Meter values could still be smooth/plausible while wrong, and we needed a hard runtime latch that pauses training-label banking until a human confirms truth.
+
+**What changed in code (`server-prod/dashboard.py`):**
+- Added persistent truth-guard state (`~/meter-truth-guard.json`) with flag/clear history, counters, and status snapshot.
+- Added banking gate: when truth-guard is active, both local and oracle banking paths skip writing labels.
+- Wired physics blockers to auto-flag truth-guard on impossible forward/down moves (so suspicious jumps immediately pause banking).
+- Extended `/api/cam/status` with a `truth_guard` block for live observability.
+- Added manual endpoints:
+   - `GET /api/cam/truth-guard`
+   - `POST /api/cam/truth-guard/flag`
+   - `POST /api/cam/truth-guard/clear`
+- Manual correction/reanchor flows now auto-clear truth-guard on successful re-anchor.
+
+**Deployment + verification (Acer `192.168.0.109`):**
+- Backed up live file: `~/smart-garden-server/dashboard.py.bak.truthguard-20260623-141940`.
+- Deployed updated `dashboard.py`, restarted `smart-garden-server`, confirmed active start timestamp `2026-06-23 14:19:50 PDT`.
+- Authenticated smoke tests passed:
+   - `GET /api/cam/truth-guard` returned `ok=true` and full state object.
+   - `GET /api/cam/status` includes `truth_guard` payload.
+   - `POST /api/cam/truth-guard/flag` and `/clear` both operational.
+- Runtime log confirmed a real protection event right after deploy:
+   - physics guard blocked `094790541` as impossible (`+50457 > phys_max 11770`) and auto-flagged truth-guard.
+   - final state left clean with `truth_guard.active=false`.
+
+**Current state:** Truth-before-training guardrail is live in production and observable; suspicious meter jumps now pause label banking until manual review/clear.
+
+---
+
 ## Plumbing Permit — Irrigation Water Tap
 
 **Status:** Application submitted 2026-05-21 via Duvall permit portal. **Permit #26-175.** Currently in Administrative Review.

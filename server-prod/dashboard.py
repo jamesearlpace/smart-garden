@@ -2026,6 +2026,11 @@ def create_app(config, engine, weather, billing):
             if frame_ms and (int(time.time() * 1000) - frame_ms) <= 15 * 60 * 1000:
                 reanchored = bool(
                     meter_reader.reanchor(int(lbl), source="manual-correction"))
+                if reanchored:
+                    _truth_guard_clear(
+                        "manual correction re-anchor applied",
+                        source="manual-correction",
+                        details={"value": int(lbl), "file": fname})
         except Exception as e:
             log.debug("correction re-anchor skipped: %s", e)
         # Smart-update the surrounding frames: re-run Anchor & Propagate so every
@@ -2762,6 +2767,175 @@ def create_app(config, engine, weather, billing):
                      "banked": 0, "cnn_used": 0, "cnn_fellback": 0,
                      "reader": "?"}
     _bank_state = {"last_ts": 0.0, "last_label": None}
+    # Truth-guard latch: when physics or a human flags suspicious drift, keep
+    # reading the meter but PAUSE auto-banking labels until explicitly cleared.
+    # This prevents plausible-but-wrong values from poisoning the training set.
+    TRUTH_GUARD_ENABLED = (
+        os.environ.get("METER_TRUTH_GUARD_ENABLED", "1") == "1")
+    TRUTH_GUARD_STATE_PATH = os.environ.get(
+        "METER_TRUTH_GUARD_STATE_PATH",
+        os.path.expanduser("~/meter-truth-guard.json"))
+    TRUTH_GUARD_HISTORY_MAX = int(
+        os.environ.get("METER_TRUTH_GUARD_HISTORY_MAX", "40"))
+    _truth_guard_lock = _threading.Lock()
+    _truth_guard = {
+        "active": False,
+        "reason": None,
+        "source": None,
+        "details": {},
+        "last_event_ts": None,
+        "last_flag_ts": None,
+        "last_clear_ts": None,
+        "flags": 0,
+        "clears": 0,
+        "bank_skips": 0,
+        "last_skip_log_ts": 0.0,
+        "history": [],
+    }
+
+    def _truth_guard_persist_locked():
+        """Persist truth-guard latch state so alerts survive restarts."""
+        if not TRUTH_GUARD_ENABLED:
+            return
+        try:
+            payload = {
+                "active": bool(_truth_guard.get("active")),
+                "reason": _truth_guard.get("reason"),
+                "source": _truth_guard.get("source"),
+                "details": dict(_truth_guard.get("details") or {}),
+                "last_event_ts": _truth_guard.get("last_event_ts"),
+                "last_flag_ts": _truth_guard.get("last_flag_ts"),
+                "last_clear_ts": _truth_guard.get("last_clear_ts"),
+                "flags": int(_truth_guard.get("flags", 0)),
+                "clears": int(_truth_guard.get("clears", 0)),
+                "history": list(_truth_guard.get("history") or []),
+            }
+            parent = os.path.dirname(TRUTH_GUARD_STATE_PATH)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp_path = TRUTH_GUARD_STATE_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, separators=(",", ":"), sort_keys=True)
+            os.replace(tmp_path, TRUTH_GUARD_STATE_PATH)
+        except Exception as e:
+            log.debug("truth guard persist failed: %s", e)
+
+    def _truth_guard_load():
+        """Load persisted truth-guard state during app startup."""
+        if not TRUTH_GUARD_ENABLED:
+            return
+        try:
+            if not os.path.exists(TRUTH_GUARD_STATE_PATH):
+                return
+            with open(TRUTH_GUARD_STATE_PATH, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as e:
+            log.debug("truth guard load failed: %s", e)
+            return
+        with _truth_guard_lock:
+            _truth_guard["active"] = bool(payload.get("active"))
+            _truth_guard["reason"] = payload.get("reason")
+            _truth_guard["source"] = payload.get("source")
+            _truth_guard["details"] = dict(payload.get("details") or {})
+            _truth_guard["last_event_ts"] = payload.get("last_event_ts")
+            _truth_guard["last_flag_ts"] = payload.get("last_flag_ts")
+            _truth_guard["last_clear_ts"] = payload.get("last_clear_ts")
+            _truth_guard["flags"] = int(payload.get("flags", 0) or 0)
+            _truth_guard["clears"] = int(payload.get("clears", 0) or 0)
+            hist = list(payload.get("history") or [])
+            _truth_guard["history"] = hist[-TRUTH_GUARD_HISTORY_MAX:]
+
+    def _truth_guard_snapshot():
+        with _truth_guard_lock:
+            return {
+                "enabled": bool(TRUTH_GUARD_ENABLED),
+                "active": bool(_truth_guard.get("active")),
+                "reason": _truth_guard.get("reason"),
+                "source": _truth_guard.get("source"),
+                "details": dict(_truth_guard.get("details") or {}),
+                "last_event_ts": _truth_guard.get("last_event_ts"),
+                "last_flag_ts": _truth_guard.get("last_flag_ts"),
+                "last_clear_ts": _truth_guard.get("last_clear_ts"),
+                "flags": int(_truth_guard.get("flags", 0)),
+                "clears": int(_truth_guard.get("clears", 0)),
+                "bank_skips": int(_truth_guard.get("bank_skips", 0)),
+                "history": list(_truth_guard.get("history") or []),
+                "state_path": TRUTH_GUARD_STATE_PATH,
+            }
+
+    def _truth_guard_flag(reason, source="system", details=None):
+        if not TRUTH_GUARD_ENABLED:
+            return False
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        event = {
+            "event": "flag",
+            "ts": now_iso,
+            "reason": str(reason or "truth-check requested")[:160],
+            "source": str(source or "system")[:48],
+            "details": dict(details or {}),
+        }
+        with _truth_guard_lock:
+            _truth_guard["active"] = True
+            _truth_guard["reason"] = event["reason"]
+            _truth_guard["source"] = event["source"]
+            _truth_guard["details"] = event["details"]
+            _truth_guard["last_event_ts"] = now_iso
+            _truth_guard["last_flag_ts"] = now_iso
+            _truth_guard["flags"] = int(_truth_guard.get("flags", 0)) + 1
+            hist = list(_truth_guard.get("history") or [])
+            hist.append(event)
+            _truth_guard["history"] = hist[-TRUTH_GUARD_HISTORY_MAX:]
+            _truth_guard_persist_locked()
+        log.warning("truth guard FLAGGED (%s): %s", event["source"], event["reason"])
+        return True
+
+    def _truth_guard_clear(reason, source="system", details=None):
+        if not TRUTH_GUARD_ENABLED:
+            return False
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        event = {
+            "event": "clear",
+            "ts": now_iso,
+            "reason": str(reason or "manual clear")[:160],
+            "source": str(source or "system")[:48],
+            "details": dict(details or {}),
+        }
+        with _truth_guard_lock:
+            _truth_guard["active"] = False
+            _truth_guard["reason"] = event["reason"]
+            _truth_guard["source"] = event["source"]
+            _truth_guard["details"] = event["details"]
+            _truth_guard["last_event_ts"] = now_iso
+            _truth_guard["last_clear_ts"] = now_iso
+            _truth_guard["clears"] = int(_truth_guard.get("clears", 0)) + 1
+            hist = list(_truth_guard.get("history") or [])
+            hist.append(event)
+            _truth_guard["history"] = hist[-TRUTH_GUARD_HISTORY_MAX:]
+            _truth_guard_persist_locked()
+        log.info("truth guard CLEARED (%s): %s", event["source"], event["reason"])
+        return True
+
+    def _truth_guard_blocks_banking(channel):
+        """Return True when truth-guard latch pauses all auto-banking."""
+        if not TRUTH_GUARD_ENABLED:
+            return False
+        now = time.time()
+        should_log = False
+        reason = None
+        with _truth_guard_lock:
+            if not _truth_guard.get("active"):
+                return False
+            _truth_guard["bank_skips"] = int(_truth_guard.get("bank_skips", 0)) + 1
+            reason = _truth_guard.get("reason")
+            last_log = float(_truth_guard.get("last_skip_log_ts", 0.0) or 0.0)
+            if (now - last_log) >= 60.0:
+                _truth_guard["last_skip_log_ts"] = now
+                should_log = True
+        if should_log:
+            log.warning("%s banking paused by truth guard: %s", channel, reason)
+        return True
+
+    _truth_guard_load()
 
     def _save_frame(rid, frame):
         """Persist a frame under its reading id, pruning the oldest beyond the
@@ -3323,6 +3497,8 @@ def create_app(config, engine, weather, billing):
         """
         if not (BANK_ENABLED and LOCAL_BANK_ENABLED):
             return            # local/circular banking off — oracle is the only banker
+        if _truth_guard_blocks_banking("local"):
+            return
         try:
             if entry.get("confidence") != "high" or entry.get("kind") != "raw":
                 return
@@ -3421,6 +3597,10 @@ def create_app(config, engine, weather, billing):
     # to catch a systematic-misread drift the local pipeline is falsely sure of.
     ORACLE_VERIFY_SECS = float(os.environ.get("METER_ORACLE_VERIFY_SECS", "300"))
     ORACLE_DAILY_CAP = int(os.environ.get("METER_ORACLE_DAILY_CAP", "3000"))
+    # If provider returns insufficient_quota, pause oracle calls for a while
+    # instead of hammering every few seconds.
+    ORACLE_QUOTA_BACKOFF_SECS = float(
+        os.environ.get("METER_ORACLE_QUOTA_BACKOFF_SECS", "1800"))
     # Budget-aware pacing: target a monthly spend while dynamically adjusting
     # how many oracle calls are allowed per day.
     ORACLE_BUDGET_ENABLED = (
@@ -3509,6 +3689,7 @@ def create_app(config, engine, weather, billing):
                      "day_calls": 0, "busy": False, "confirmed_val": None,
                      "last_result": None, "last_value": None,
                      "pending_val": None, "pending_ts": 0.0,
+                     "quota_block_until": 0.0,
                      "effective_daily_cap": ORACLE_DAILY_CAP,
                      "budget": {}, "last_budget_refresh": 0.0}
 
@@ -3546,17 +3727,27 @@ def create_app(config, engine, weather, billing):
         """Persist spend for one oracle call (token-based or fallback)."""
         if not isinstance(res, dict):
             return
+        if not res.get("ok"):
+            return
         try:
             import oracle_budget
             tokens = int(res.get("cost_tokens", 0) or 0)
             model = model_name or res.get("model") or ""
+            provider = res.get("provider") or "openai"
             usd = oracle_budget.estimate_usd(
                 tokens=tokens,
                 usd_per_1k_tokens=ORACLE_USD_PER_1K_TOKENS,
                 fallback_call_usd=ORACLE_FALLBACK_CALL_USD)
-            oracle_budget.record_call("openai", model, tokens, usd)
+            oracle_budget.record_call(provider, model, tokens, usd)
         except Exception:
             pass
+
+    def _oracle_insufficient_quota(res):
+        if not isinstance(res, dict):
+            return False
+        err = str(res.get("error") or "").lower()
+        return ("insufficient_quota" in err
+                or "exceeded your current quota" in err)
 
     def _active_gpm():
         """Sum of est_gpm for zones the controller currently has ON (0 if idle).
@@ -3608,6 +3799,8 @@ def create_app(config, engine, weather, billing):
         """
         if not BANK_ENABLED:
             return            # collection turned off — keep reading, stop banking
+        if _truth_guard_blocks_banking("oracle"):
+            return
         try:
             label = f"{int(value):09d}"
             os.makedirs(BANK_DIR, exist_ok=True)
@@ -3683,6 +3876,8 @@ def create_app(config, engine, weather, billing):
         if _oracle_state.get("busy"):
             return
         now = time.time()
+        if now < float(_oracle_state.get("quota_block_until", 0.0) or 0.0):
+            return
         today = time.strftime("%Y-%m-%d")
         if _oracle_state["day"] != today:
             _oracle_state["day"] = today
@@ -3810,6 +4005,13 @@ def create_app(config, engine, weather, billing):
                     "high_prefix": f"{int(lg0):09d}"[:4],
                 }
             res = vision_oracle.read_meter(frame, rotate180=True, hint=hint)
+            if _oracle_insufficient_quota(res):
+                _oracle_state["quota_block_until"] = max(
+                    float(_oracle_state.get("quota_block_until", 0.0) or 0.0),
+                    time.time() + float(ORACLE_QUOTA_BACKOFF_SECS))
+                log.warning(
+                    "oracle provider quota exhausted — backing off oracle calls "
+                    "for %.0fs", float(ORACLE_QUOTA_BACKOFF_SECS))
             _record_oracle_spend(res, model_name=ORACLE_HEARTBEAT_MODEL)
             _oracle_state["calls"] += 1
             _oracle_state["last_result"] = res
@@ -3945,6 +4147,16 @@ def create_app(config, engine, weather, billing):
             if (lg is not None and val is not None and val > lg
                     and (val - lg) > phys_max):
                 _oracle_state["pending_val"] = None
+                _truth_guard_flag(
+                    "physics blocked impossible forward jump",
+                    source="oracle-physics",
+                    details={
+                        "candidate": int(val),
+                        "lock": int(lg),
+                        "delta": int(val - lg),
+                        "phys_max": int(phys_max),
+                        "elapsed_s": int(elapsed),
+                    })
                 log.warning("oracle BLOCKED impossible jump %09d: +%d > phys_max "
                             "%d in %.0fs (lock %s held) — garble, consensus "
                             "ignored", val, val - lg, phys_max, elapsed, lg)
@@ -3962,6 +4174,15 @@ def create_app(config, engine, weather, billing):
             if (lg is not None and val is not None and val < lg
                     and (lg - val) > ORACLE_MAX_ADVANCE):
                 _oracle_state["pending_val"] = None
+                _truth_guard_flag(
+                    "physics blocked impossible down-correction",
+                    source="oracle-physics",
+                    details={
+                        "candidate": int(val),
+                        "lock": int(lg),
+                        "delta": int(lg - val),
+                        "down_cap": int(ORACLE_MAX_ADVANCE),
+                    })
                 log.warning("oracle BLOCKED impossible down-correction %09d: -%d > "
                             "cap %d (lock %s held) — garbled-low read, consensus "
                             "ignored", val, lg - val, ORACLE_MAX_ADVANCE, lg)
@@ -4528,6 +4749,7 @@ def create_app(config, engine, weather, billing):
                 "budget_cycle_start_day": int(ORACLE_BUDGET_CYCLE_START_DAY),
                 "budget": _oracle_state.get("budget", {}),
             },
+            "truth_guard": _truth_guard_snapshot(),
             "archive": {
                 "enabled": ARCHIVE_ENABLED,
                 "dir": ARCHIVE_DIR,
@@ -4557,6 +4779,38 @@ def create_app(config, engine, weather, billing):
                 },
             },
         })
+
+    @app.route("/api/cam/truth-guard")
+    def cam_truth_guard_status():
+        """Current truth-guard latch state (manual-review mode)."""
+        return jsonify({"ok": True, "truth_guard": _truth_guard_snapshot()})
+
+    @app.route("/api/cam/truth-guard/flag", methods=["POST"])
+    def cam_truth_guard_flag():
+        """Manually latch truth guard (pauses all auto-banking labels)."""
+        data = request.get_json(silent=True) or {}
+        reason = str(data.get("reason") or "manual truth check requested").strip()
+        source = str(data.get("source") or "manual").strip() or "manual"
+        details = {}
+        for key in ("note", "expected", "observed", "frame_id", "reading", "operator"):
+            val = data.get(key)
+            if val not in (None, ""):
+                details[key] = val
+        _truth_guard_flag(reason[:160], source=source[:48], details=details)
+        return jsonify({"ok": True, "truth_guard": _truth_guard_snapshot()})
+
+    @app.route("/api/cam/truth-guard/clear", methods=["POST"])
+    def cam_truth_guard_clear():
+        """Clear truth guard after a trusted manual re-anchor/check."""
+        data = request.get_json(silent=True) or {}
+        reason = str(data.get("reason") or "manual truth check complete").strip()
+        source = str(data.get("source") or "manual").strip() or "manual"
+        details = {}
+        note = data.get("note")
+        if note not in (None, ""):
+            details["note"] = note
+        _truth_guard_clear(reason[:160], source=source[:48], details=details)
+        return jsonify({"ok": True, "truth_guard": _truth_guard_snapshot()})
 
     @app.route("/api/cam-telemetry")
     def cam_telemetry_api():
@@ -5562,6 +5816,11 @@ def create_app(config, engine, weather, billing):
         applied = False
         if res.get("ok") and res.get("readable") and res.get("confidence") != "low":
             applied = meter_reader.reanchor(res["value"], source="manual-oracle")
+            if applied:
+                _truth_guard_clear(
+                    "manual oracle re-anchor applied",
+                    source="manual-oracle",
+                    details={"value": int(res["value"])})
         return jsonify({"ok": res.get("ok"), "value": res.get("value"),
                         "confidence": res.get("confidence"),
                         "readable": res.get("readable"),
@@ -5580,6 +5839,11 @@ def create_app(config, engine, weather, billing):
         if len(v) != 9:
             return jsonify({"ok": False, "error": "value must be 9 digits"}), 400
         applied = meter_reader.reanchor(int(v), source="manual")
+        if applied:
+            _truth_guard_clear(
+                "manual re-anchor applied",
+                source="manual",
+                details={"value": int(v)})
         return jsonify({"ok": True, "value": v, "reanchored": bool(applied),
                         "last_good": getattr(meter_reader, "last_good", None)})
 

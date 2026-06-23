@@ -2781,6 +2781,89 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             log.debug("save_frame failed: %s", e)
 
+    # ── Long-term frame archive ─────────────────────────────────────────────
+    # Independent of the small inspection ring (FRAME_DIR, ~720 frames) and the
+    # training bank (BANK_DIR): a rolling, DISK-CAPPED archive that keeps a long
+    # history of raw cam frames. Saves at most one frame per ARCHIVE_INTERVAL
+    # seconds (the cam keeps pushing every ~5s for OCR; we only archive 1/min)
+    # and evicts the OLDEST files once the total exceeds ARCHIVE_MAX_BYTES.
+    # Lives under ~/ (persists across reboots) — NOT /tmp.
+    ARCHIVE_ENABLED = os.environ.get("METER_ARCHIVE_ENABLED", "1") == "1"
+    ARCHIVE_DIR = os.environ.get(
+        "METER_ARCHIVE_DIR", os.path.expanduser("~/meter-archive"))
+    ARCHIVE_INTERVAL = float(os.environ.get("METER_ARCHIVE_INTERVAL", "60"))
+    # 30 GiB default cap. Average frame ~48KB → ~640k images ≈ 440 days at 1/min.
+    ARCHIVE_MAX_BYTES = int(
+        os.environ.get("METER_ARCHIVE_MAX_BYTES", str(30 * 1024 ** 3)))
+    _archive_state = {"last_ts": 0.0, "bytes": 0, "files": None, "saved": 0,
+                      "evicted": 0}
+    _archive_lock = _threading.Lock()
+
+    def _archive_init():
+        """Scan the archive dir once to seed the size counter + an oldest-first
+        file list, so eviction is FIFO by capture time. Filenames are timestamped
+        so a lexical sort == chronological sort."""
+        try:
+            os.makedirs(ARCHIVE_DIR, exist_ok=True)
+            files = []
+            total = 0
+            for name in os.listdir(ARCHIVE_DIR):
+                if not name.endswith(".jpg"):
+                    continue
+                try:
+                    sz = os.path.getsize(os.path.join(ARCHIVE_DIR, name))
+                except OSError:
+                    continue
+                files.append((name, sz))
+                total += sz
+            files.sort(key=lambda x: x[0])
+            _archive_state["files"] = _deque(files)
+            _archive_state["bytes"] = total
+            log.info("archive: %d files, %.2f GB at %s",
+                     len(files), total / 1024 ** 3, ARCHIVE_DIR)
+        except Exception as e:
+            _archive_state["files"] = _deque()
+            log.warning("archive init failed: %s", e)
+
+    def _archive_frame(frame, captured_dt):
+        """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
+        the oldest files when the total exceeds ARCHIVE_MAX_BYTES. Best-effort —
+        never let a disk hiccup break the upload path."""
+        if not ARCHIVE_ENABLED or not frame:
+            return
+        now = time.time()
+        if now - _archive_state["last_ts"] < ARCHIVE_INTERVAL:
+            return
+        with _archive_lock:
+            if now - _archive_state["last_ts"] < ARCHIVE_INTERVAL:
+                return
+            if _archive_state["files"] is None:
+                _archive_init()
+            _archive_state["last_ts"] = now
+            try:
+                stem = captured_dt.strftime("%Y%m%d-%H%M%S")
+                name = f"{stem}.jpg"
+                if (_archive_state["files"]
+                        and _archive_state["files"][-1][0] == name):
+                    name = f"{stem}-{int(now * 1000) % 1000:03d}.jpg"
+                with open(os.path.join(ARCHIVE_DIR, name), "wb") as f:
+                    f.write(frame)
+                sz = len(frame)
+                _archive_state["files"].append((name, sz))
+                _archive_state["bytes"] += sz
+                _archive_state["saved"] += 1
+                # Evict oldest until back under the cap (keep at least 1 file).
+                while (_archive_state["bytes"] > ARCHIVE_MAX_BYTES
+                       and len(_archive_state["files"]) > 1):
+                    oldn, olds = _archive_state["files"].popleft()
+                    try:
+                        os.remove(os.path.join(ARCHIVE_DIR, oldn))
+                    except OSError:
+                        pass
+                    _archive_state["bytes"] -= olds
+                    _archive_state["evicted"] += 1
+            except Exception as e:
+                log.debug("archive_frame failed: %s", e)
 
     def _bank_sample(frame, entry, captured_ts):
         """Save a high-confidence (frame, label) pair for future model training.
@@ -3765,6 +3848,9 @@ def create_app(config, engine, weather, billing):
         cam_state["timestamp"] = capture_dt.isoformat()
         cam_state["transfer_s"] = round(transfer_s, 2)
         cam_state["ocr_count"] += 1
+        # Long-term rolling archive (1 frame/min, disk-capped). Independent of
+        # the OCR path below — the cam keeps pushing every ~5s for reading.
+        _archive_frame(data, capture_dt)
         # ── Device/WiFi telemetry ──────────────────────────────────────
         # gap = secs since the previous frame landed (~5s ideal; a big gap means
         # the cam dropped off the WiFi). Optional X-RSSI/X-Uptime/X-Reconnects
@@ -3851,6 +3937,18 @@ def create_app(config, engine, weather, billing):
                 "dropped": cam_ocr_stats["dropped"],
                 "banked": cam_ocr_stats.get("banked", 0),
                 "last_ms": cam_ocr_stats["last_ms"],
+            },
+            "archive": {
+                "enabled": ARCHIVE_ENABLED,
+                "dir": ARCHIVE_DIR,
+                "interval_s": ARCHIVE_INTERVAL,
+                "files": (len(_archive_state["files"])
+                          if _archive_state["files"] is not None else 0),
+                "bytes": _archive_state["bytes"],
+                "gb": round(_archive_state["bytes"] / 1024 ** 3, 2),
+                "cap_gb": round(ARCHIVE_MAX_BYTES / 1024 ** 3, 2),
+                "saved_session": _archive_state["saved"],
+                "evicted_session": _archive_state["evicted"],
             },
         })
 

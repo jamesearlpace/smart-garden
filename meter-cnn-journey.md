@@ -338,7 +338,14 @@ Spent the rest of the session honestly stress-testing whether the CNN could be s
   - If oracle value is within the authority match tolerance of the current lock, treat it as same-state jitter and refresh lock time without moving the value.
   - This prevents fake "stale" conditions when blurry frames wobble a few digits around the same reading.
 
-### Why this is the current best path
-- The dominant current failure is ambiguity on blurry frames, not missing guardrails.
+## 2026-06-23 — Long-term frame archive (1/min, 30 GB cap)
+
+- Added a rolling, disk-capped image archive in `dashboard.py` (`_archive_frame` / `_archive_init`, hooked in `cam_upload`).
+- Behavior: saves ONE cam frame per `METER_ARCHIVE_INTERVAL` (default 60s) to `METER_ARCHIVE_DIR` (default `~/meter-archive` on the Acer, persists across reboots), and FIFO-evicts the oldest files once the total exceeds `METER_ARCHIVE_MAX_BYTES` (default 30 GiB).
+- The ESP32-CAM still pushes every ~5s for OCR accuracy; only the long-term archive is throttled to 1/min, so reading resolution is unchanged.
+- Independent of the small inspection ring (`/tmp/meter-frames`, ~720 frames) and the training bank (`~/meter-training`).
+- Surfaced in `/api/cam/status` under `archive` (files, gb, cap_gb, saved/evicted this session).
+- Acer has 313 GB free, so 30 GB fits easily; at ~50 KB/frame and 1/min that's ~440 days before the cap starts rotating.
+- Deployed + verified: archive inited "0 files", wrote the first frame on the next upload, and held at 1 file across multiple 5s uploads (throttle confirmed).
 - These changes improve decision quality without reopening the catastrophic jump/crash classes we already closed.
 - Internet-down windows are now explicitly excluded from the quality score so they do not pollute model/arbitration evaluation.

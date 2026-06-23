@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meter Archive — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
+  --blue:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#8b5cf6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.45;padding:16px 16px 60px;max-width:1180px;margin:0 auto}
+a{color:var(--blue);text-decoration:none}
+h1{font-size:1.35rem;margin-bottom:2px}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
+  background:var(--card);cursor:pointer;font-weight:600}
+.chip.on{background:var(--text);color:#fff;border-color:var(--text)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+.card h2{font-size:.95rem;margin-bottom:2px}
+.card .hint{font-size:.78rem;color:var(--text2);margin-bottom:10px}
+.wrap{position:relative;height:280px}
+.stat{display:inline-block;margin-right:18px;font-size:.85rem;color:var(--text2)}
+.stat b{color:var(--text);font-size:1.05rem;font-family:ui-monospace,monospace}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.toggle{font-size:.76rem;padding:5px 10px;border-radius:7px;border:1px solid var(--border);
+  background:var(--card);cursor:pointer}
+.toggle.on{background:var(--purple);color:#fff;border-color:var(--purple)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.cell{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#0b1117}
+.cell img{width:100%;display:block;transform:rotate(180deg);background:#11181f;cursor:pointer}
+.cell .body{padding:7px 9px;background:var(--card)}
+.cell .t{font-size:.72rem;color:var(--text2);font-family:ui-monospace,monospace}
+.cell .rd{font-size:1.05rem;font-weight:700;font-family:ui-monospace,monospace;margin:2px 0}
+.cell .rd small{font-size:.7rem;color:var(--text2);font-weight:400}
+.badge{display:inline-block;font-size:.64rem;padding:1px 7px;border-radius:10px;font-weight:600;vertical-align:middle}
+.b-lock{background:#eef2f6;color:#5f7082}
+.b-oracle{background:#dbeafe;color:#1d4ed8}
+.b-manual{background:#ede9fe;color:#6d28d9}
+.b-rev{background:#dcfce7;color:#15803d}
+.row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.btn{font-size:.68rem;padding:3px 8px;border:1px solid var(--border);border-radius:6px;
+  background:var(--bg);cursor:pointer;color:var(--blue)}
+.btn.ai{color:var(--blue)} .btn.fix{color:var(--purple)}
+.inp{font-family:ui-monospace,monospace;font-size:.78rem;padding:2px 5px;width:96px;
+  border:1px solid var(--blue);border-radius:6px}
+.save{font-size:.68rem;padding:3px 9px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer}
+.msg{font-size:.7rem;color:var(--text2);margin-top:4px;min-height:1em}
+.more{display:block;margin:16px auto 0;font-size:.85rem;padding:9px 22px;border:1px solid var(--border);
+  border-radius:9px;background:var(--card);cursor:pointer;font-weight:600}
+.empty{color:var(--text2);font-size:.9rem;padding:30px;text-align:center}
+</style>
+</head>
+<body>
+<a href="/#cam" style="font-size:.85rem">&larr; Back to dashboard</a>
+<h1>🗂️ Meter Archive &amp; History</h1>
+<div class="sub" id="sub">Loading…</div>
+
+<div class="bar" id="chips"></div>
+
+<div class="card">
+  <h2>💧 Water used over this window</h2>
+  <div class="hint">Built from the <b>per-minute archived readings</b> — monotonic, physically-capped deltas only, so a single bad image can't fabricate usage. Fix any wrong readings below and this graph gets more accurate.</div>
+  <div style="margin-bottom:8px">
+    <span class="stat">Total: <b id="st-total">—</b> gal</span>
+    <span class="stat">Buckets: <b id="st-buckets">—</b></span>
+    <span class="stat">Readings: <b id="st-readings">—</b></span>
+  </div>
+  <div class="wrap"><canvas id="barChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>Cumulative gallons</h2>
+  <div class="hint">Running total across the window. Flat = no water moving; steady slope = continuous flow.</div>
+  <div class="wrap"><canvas id="lineChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>🖼️ Image history</h2>
+  <div class="hint">Every archived photo with the reading derived for it. <b>Re-read (AI)</b> asks GPT-4o to read that exact image; <b>Fix</b> lets you type the true value. Corrections feed the graph above.</div>
+  <div class="toolbar">
+    <span class="toggle" id="tgUnrev" onclick="toggleUnrev()">Only unreviewed</span>
+    <span class="toggle" id="tgOrder" onclick="toggleOrder()">Newest first</span>
+    <span class="msg" id="listMsg"></span>
+  </div>
+  <div class="grid" id="grid"></div>
+  <button class="more" id="moreBtn" onclick="loadMore()" style="display:none">Load more</button>
+  <div class="empty" id="empty" style="display:none">No archived images in this window yet. The archive saves one image per minute — check back soon.</div>
+</div>
+
+<script>
+var RANGES = [[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
+var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 120;
+var barC = null, lineC = null, loading = false, exhausted = false;
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function tlabel(ts){ return ts ? ts.slice(5,16).replace('T',' ') : ''; }
+function cf(v){ return v==null ? '—' : (v).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3}); }
+function fmtReading(v){ return v==null ? '—' : String(v).padStart(9,'0'); }
+
+function chips(){
+  var c = document.getElementById('chips');
+  c.innerHTML = '';
+  RANGES.forEach(function(r){
+    var el = document.createElement('span');
+    el.className = 'chip' + (r[0]===minutes?' on':'');
+    el.textContent = r[1];
+    el.onclick = function(){ minutes = r[0]; refresh(); };
+    c.appendChild(el);
+  });
+}
+
+function loadUsage(){
+  fetch('/api/cam/archive/usage?minutes=' + minutes + '&points=60')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      document.getElementById('st-total').textContent = (d.total_gal||0).toFixed(1);
+      document.getElementById('st-buckets').textContent = (d.usage||[]).length;
+      document.getElementById('st-readings').textContent = d.readings||0;
+      var usage = d.usage||[], line = d.line||[];
+      var labels = usage.map(function(u){ return tlabel(u.t); });
+      var gph = usage.map(function(u){ return u.gallons; });
+      if (barC) barC.destroy();
+      barC = new Chart(document.getElementById('barChart'), {
+        type:'bar',
+        data:{labels:labels, datasets:[{label:'Gallons / '+(d.bucket_label||'bucket'),
+          data:gph, backgroundColor:'#3b82f6', borderRadius:3}]},
+        options:{responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false}},
+          scales:{y:{beginAtZero:true,title:{display:true,text:'gallons'}},
+                  x:{ticks:{maxTicksLimit:12,autoSkip:true}}}}
+      });
+      var ll = line.map(function(p){ return tlabel(p.t); });
+      var lv = line.map(function(p){ return p.gal; });
+      if (lineC) lineC.destroy();
+      lineC = new Chart(document.getElementById('lineChart'), {
+        type:'line',
+        data:{labels:ll, datasets:[{label:'Cumulative gal', data:lv,
+          borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.12)', fill:true,
+          tension:.2, pointRadius:0, borderWidth:2}]},
+        options:{responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false}},
+          scales:{y:{beginAtZero:true,title:{display:true,text:'gallons'}},
+                  x:{ticks:{maxTicksLimit:12,autoSkip:true}}}}
+      });
+    });
+}
+
+function cellHTML(it){
+  var src = it.source||'lock';
+  var badge = src==='oracle' ? '<span class="badge b-oracle">AI</span>'
+            : src==='manual' ? '<span class="badge b-manual">manual</span>'
+            : '<span class="badge b-lock">lock</span>';
+  var rev = it.reviewed ? ' <span class="badge b-rev">✓</span>' : '';
+  return '<div class="cell" data-ts="'+esc(it.ts)+'">'
+    + '<img loading="lazy" src="/api/cam/archive/img?file='+encodeURIComponent(it.filename)+'" '
+    +   'onclick="window.open(this.src)">'
+    + '<div class="body">'
+    +   '<div class="t">'+esc(tlabel(it.ts))+'</div>'
+    +   '<div class="rd">'+fmtReading(it.reading)+' '+badge+rev+'</div>'
+    +   '<div class="rd"><small>'+cf(it.reading_cf)+' ft³</small></div>'
+    +   '<div class="row">'
+    +     '<button class="btn ai" onclick="reread(this)">Re-read (AI)</button>'
+    +     '<button class="btn fix" onclick="showFix(this)">Fix</button>'
+    +   '</div>'
+    +   '<div class="msg"></div>'
+    + '</div></div>';
+}
+
+function reread(btn){
+  var cell = btn.closest('.cell'), ts = cell.getAttribute('data-ts');
+  var msg = cell.querySelector('.msg');
+  btn.disabled = true; msg.textContent = 'asking GPT-4o…';
+  fetch('/api/cam/archive/reread', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ts:ts})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.disabled = false;
+      if (d.ok && d.value!=null){
+        cell.querySelector('.rd').innerHTML = fmtReading(d.value)
+          + ' <span class="badge b-oracle">AI</span>';
+        cell.querySelectorAll('.rd')[1].innerHTML = '<small>'+cf(d.reading_cf)+' ft³</small>';
+        msg.innerHTML = '<span style="color:var(--green)">✓ '+esc(d.confidence||'')+'</span>';
+        loadUsage();
+      } else { msg.textContent = d.error || 'could not read'; }
+    })
+    .catch(function(){ btn.disabled=false; msg.textContent='failed'; });
+}
+
+function showFix(btn){
+  var cell = btn.closest('.cell'), row = btn.parentNode;
+  var cur = (cell.querySelector('.rd').textContent||'').replace(/\D/g,'').slice(0,9);
+  row.innerHTML = '<input class="inp" maxlength="9" inputmode="numeric" value="'+esc(cur)+'">'
+    + '<button class="save" onclick="saveFix(this)">Save</button>'
+    + '<button class="btn" onclick="window.location.reload()">✕</button>';
+  row.querySelector('.inp').focus();
+}
+
+function saveFix(btn){
+  var cell = btn.closest('.cell'), ts = cell.getAttribute('data-ts');
+  var inp = cell.querySelector('.inp'), msg = cell.querySelector('.msg');
+  var v = (inp.value.match(/\d/g)||[]).join('');
+  if (v.length !== 9){ inp.style.borderColor='var(--red)'; msg.textContent='need 9 digits'; return; }
+  btn.disabled = true; msg.textContent = 'saving…';
+  fetch('/api/cam/archive/correct', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ts:ts, value:v})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok){
+        cell.querySelector('.rd').innerHTML = fmtReading(d.value)
+          + ' <span class="badge b-manual">manual</span> <span class="badge b-rev">✓</span>';
+        cell.querySelectorAll('.rd')[1].innerHTML = '<small>'+cf(d.reading_cf)+' ft³</small>';
+        msg.innerHTML = '<span style="color:var(--green)">✓ saved</span>';
+        loadUsage();
+      } else { btn.disabled=false; msg.textContent = d.error || 'failed'; }
+    })
+    .catch(function(){ btn.disabled=false; msg.textContent='failed'; });
+}
+
+function loadList(reset){
+  if (loading) return;
+  loading = true;
+  if (reset){ offset = 0; exhausted = false; document.getElementById('grid').innerHTML = ''; }
+  document.getElementById('listMsg').textContent = 'loading…';
+  var url = '/api/cam/archive?minutes='+minutes+'&limit='+LIMIT+'&offset='+offset
+          + '&order='+order + (unrev?'&unreviewed=1':'');
+  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+    loading = false;
+    var items = d.items||[];
+    document.getElementById('listMsg').textContent =
+      (d.count||0) + ' images in window' + (unrev?' (unreviewed)':'');
+    var grid = document.getElementById('grid');
+    grid.insertAdjacentHTML('beforeend', items.map(cellHTML).join(''));
+    offset += items.length;
+    exhausted = items.length < LIMIT;
+    document.getElementById('moreBtn').style.display = exhausted ? 'none' : 'block';
+    document.getElementById('empty').style.display =
+      (offset===0 && items.length===0) ? 'block' : 'none';
+    var b = d.bounds||{};
+    document.getElementById('sub').innerHTML =
+      'Archive holds <b>'+(b.total||0).toLocaleString()+'</b> images'
+      + (b.min ? ' · oldest '+esc(tlabel(b.min)) : '')
+      + (b.max ? ' · newest '+esc(tlabel(b.max)) : '');
+  }).catch(function(){ loading=false; document.getElementById('listMsg').textContent='failed'; });
+}
+
+function loadMore(){ loadList(false); }
+function toggleUnrev(){ unrev=!unrev; document.getElementById('tgUnrev').classList.toggle('on',unrev); loadList(true); }
+function toggleOrder(){ order = order==='desc'?'asc':'desc';
+  document.getElementById('tgOrder').classList.toggle('on', order==='asc');
+  document.getElementById('tgOrder').textContent = order==='asc'?'Oldest first':'Newest first';
+  loadList(true); }
+
+function refresh(){ chips(); loadUsage(); loadList(true); }
+refresh();
+</script>
+</body>
+</html>

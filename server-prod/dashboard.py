@@ -2852,6 +2852,19 @@ def create_app(config, engine, weather, billing):
                 _archive_state["files"].append((name, sz))
                 _archive_state["bytes"] += sz
                 _archive_state["saved"] += 1
+                # Index this image with the current lock reading as a free
+                # baseline (the live 5s OCR keeps the lock current). The value
+                # can be refined later by a re-read or manual correction from the
+                # archive page — accurate history without paying per image.
+                try:
+                    import meter_archive
+                    lg = getattr(meter_reader, "last_good", None)
+                    meter_archive.record(
+                        captured_dt.isoformat(timespec="seconds"), name,
+                        reading=int(lg) if lg is not None else None,
+                        confidence="lock", source="lock")
+                except Exception as _ae:
+                    log.debug("archive index failed: %s", _ae)
                 # Evict oldest until back under the cap (keep at least 1 file).
                 while (_archive_state["bytes"] > ARCHIVE_MAX_BYTES
                        and len(_archive_state["files"]) > 1):
@@ -2859,6 +2872,11 @@ def create_app(config, engine, weather, billing):
                     try:
                         os.remove(os.path.join(ARCHIVE_DIR, oldn))
                     except OSError:
+                        pass
+                    try:
+                        import meter_archive
+                        meter_archive.delete_by_filename(oldn)
+                    except Exception:
                         pass
                     _archive_state["bytes"] -= olds
                     _archive_state["evicted"] += 1
@@ -3765,6 +3783,15 @@ def create_app(config, engine, weather, billing):
         cnn_metrics.ensure_schema()
     except Exception as e:
         log.warning("cnn_metrics init failed: %s", e)
+
+    # Archive index: one row per long-term archived image + its derived reading,
+    # for the history browser + accurate historical consumption graphs. Isolated
+    # own DB (meter_archive.db); rows are written by _archive_frame.
+    try:
+        import meter_archive
+        meter_archive.ensure_schema()
+    except Exception as e:
+        log.warning("meter_archive init failed: %s", e)
 
     # ── ESP32-CAM background pinger ────────────────────────────────────
     # Frame telemetry covers the cam while it's uploading, but if it drops off
@@ -4867,6 +4894,142 @@ def create_app(config, engine, weather, billing):
         applied = meter_reader.reanchor(int(v), source="manual")
         return jsonify({"ok": True, "value": v, "reanchored": bool(applied),
                         "last_good": getattr(meter_reader, "last_good", None)})
+
+    # ── Long-term archive: history browser + per-image review + usage graphs ──
+    def _archive_range_args():
+        """Resolve a time window from ?minutes=N (relative) or ?start=&end=
+        (absolute ISO). Stored ts is local ISO 'YYYY-MM-DDTHH:MM:SS' (sortable)."""
+        minutes = request.args.get("minutes", type=int)
+        if minutes:
+            end = datetime.now()
+            start = end - timedelta(minutes=minutes)
+            return (start.isoformat(timespec="seconds"),
+                    end.isoformat(timespec="seconds"))
+        return request.args.get("start"), request.args.get("end")
+
+    @app.route("/cam/archive")
+    def cam_archive_page():
+        return render_template("cam_archive.html")
+
+    @app.route("/api/cam/archive")
+    def cam_archive_list():
+        """Paginated list of archived images + their derived readings."""
+        import meter_archive
+        start, end = _archive_range_args()
+        if not start and not end:                  # default: most recent 24h
+            end = datetime.now().isoformat(timespec="seconds")
+            start = (datetime.now() - timedelta(hours=24)).isoformat(
+                timespec="seconds")
+        limit = query_int("limit", 200, min_value=1, max_value=1000)
+        offset = query_int("offset", 0, min_value=0, max_value=10_000_000)
+        order = "asc" if request.args.get("order") == "asc" else "desc"
+        unreviewed = request.args.get("unreviewed") in ("1", "true", "yes")
+        mn, mx, total = meter_archive.bounds()
+        items = meter_archive.list_range(
+            start=start, end=end, limit=limit, offset=offset, order=order,
+            only_unreviewed=unreviewed)
+        return jsonify({
+            "items": items,
+            "count": meter_archive.count_range(start, end, unreviewed),
+            "window": {"start": start, "end": end, "limit": limit,
+                       "offset": offset, "order": order, "unreviewed": unreviewed},
+            "bounds": {"min": mn, "max": mx, "total": total},
+        })
+
+    @app.route("/api/cam/archive/img")
+    def cam_archive_img():
+        """Serve an archived JPEG by basename (sanitised — no traversal)."""
+        name = os.path.basename(request.args.get("file", ""))
+        if not name.endswith(".jpg"):
+            return jsonify({"error": "bad name"}), 400
+        path = os.path.join(ARCHIVE_DIR, name)
+        if not os.path.exists(path):
+            return jsonify({"error": "not found (evicted?)"}), 404
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            return jsonify({"error": str(e)}), 500
+        return Response(data, mimetype="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    @app.route("/api/cam/archive/reread", methods=["POST"])
+    def cam_archive_reread():
+        """Re-derive the reading for ONE archived image with the LLM (gpt-4o,
+        the accurate reader) — used when a value looks off. Updates the stored
+        reading; does NOT touch the live lock."""
+        import meter_archive
+        try:
+            import vision_oracle
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"oracle import: {e}"}), 500
+        if not vision_oracle.available():
+            return jsonify({"ok": False, "error": "no OPENAI_API_KEY"}), 400
+        data = request.get_json(silent=True) or {}
+        ts = str(data.get("ts", ""))
+        row = meter_archive.get(ts)
+        if not row:
+            return jsonify({"ok": False, "error": "unknown ts"}), 404
+        path = os.path.join(ARCHIVE_DIR, os.path.basename(row["filename"]))
+        if not os.path.exists(path):
+            return jsonify({"ok": False, "error": "image evicted"}), 404
+        try:
+            with open(path, "rb") as f:
+                frame = f.read()
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        # Soft context: the nearest known reading (prefix only, no hard floor) so
+        # glare on the high digits is disambiguated without forcing the answer.
+        nb = meter_archive.neighbor_reading(ts)
+        hint = ({"last_value": int(nb), "high_prefix": f"{int(nb):09d}"[:4]}
+                if nb is not None else None)
+        res = vision_oracle.read_meter(
+            frame, rotate180=True, hint=hint, model=ORACLE_AUTHORITY_MODEL)
+        updated = False
+        if (res.get("ok") and res.get("readable")
+                and res.get("confidence") != "low"):
+            updated = meter_archive.update_reading(
+                ts, res["value"], res.get("confidence"), source="oracle",
+                reviewed=False)
+        return jsonify({"ok": res.get("ok"), "value": res.get("value"),
+                        "reading_cf": (res["value"] / 1000.0
+                                       if res.get("value") is not None else None),
+                        "confidence": res.get("confidence"),
+                        "readable": res.get("readable"), "updated": updated,
+                        "model": res.get("model"),
+                        "cost_tokens": res.get("cost_tokens"),
+                        "error": res.get("error")})
+
+    @app.route("/api/cam/archive/correct", methods=["POST"])
+    def cam_archive_correct():
+        """Set the reading for ONE archived image to a human-typed 9-digit value
+        (marks it reviewed). Pure history correction — never moves the live lock."""
+        import meter_archive
+        data = request.get_json(silent=True) or {}
+        ts = str(data.get("ts", ""))
+        v = "".join(c for c in str(data.get("value", "")) if c.isdigit())
+        if len(v) != 9:
+            return jsonify({"ok": False, "error": "value must be 9 digits"}), 400
+        if not meter_archive.get(ts):
+            return jsonify({"ok": False, "error": "unknown ts"}), 404
+        ok = meter_archive.update_reading(
+            ts, int(v), "manual", source="manual", reviewed=True)
+        return jsonify({"ok": ok, "value": v, "reading_cf": int(v) / 1000.0})
+
+    @app.route("/api/cam/archive/usage")
+    def cam_archive_usage():
+        """Accurate historical consumption from the corrected per-minute archive
+        readings (monotonic positive deltas → gallons, bucketed over the window)."""
+        import meter_archive
+        start, end = _archive_range_args()
+        if not start or not end:
+            end = datetime.now().isoformat(timespec="seconds")
+            start = (datetime.now() - timedelta(hours=24)).isoformat(
+                timespec="seconds")
+        points = query_int("points", 60, min_value=10, max_value=300)
+        out = meter_archive.usage_series(start, end, target_points=points)
+        out["start"], out["end"] = start, end
+        return jsonify(out)
 
     @app.route("/api/cam/capture")
     def cam_capture():

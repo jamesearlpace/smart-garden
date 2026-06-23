@@ -347,5 +347,20 @@ Spent the rest of the session honestly stress-testing whether the CNN could be s
 - Surfaced in `/api/cam/status` under `archive` (files, gb, cap_gb, saved/evicted this session).
 - Acer has 313 GB free, so 30 GB fits easily; at ~50 KB/frame and 1/min that's ~440 days before the cap starts rotating.
 - Deployed + verified: archive inited "0 files", wrote the first frame on the next upload, and held at 1 file across multiple 5s uploads (throttle confirmed).
+
+## 2026-06-23 — Archive history browser + per-image review + accurate usage graphs
+
+James shifted the focus from real-time to **accurate historical insights**: show the full archived image history, let him review/refresh the value derived for any image, and graph water consumption accurately over time.
+
+- **New module `meter_archive.py`** (isolated, own `meter_archive.db`, like `meter_audit.py`): one row per archived image — `ts, filename, reading, reading_cf, confidence, source, reviewed`. Helpers: `record`, `update_reading`, `delete_by_filename`, `get`, `neighbor_reading`, `bounds`, `list_range`, `count_range`, and `usage_series` (monotonic, physically-capped positive deltas → gallons, bucketed).
+- **Free baseline reading per image:** `_archive_frame` now indexes each archived frame with the **live lock value at capture time** (`source=lock`). No per-image API cost — the live 5s OCR keeps the lock current; the archive just snapshots it once a minute. Evicted images' rows are pruned (`delete_by_filename`) so the DB tracks the rolling files.
+- **On-demand refine** (the "review if something seems off" path):
+  - `POST /api/cam/archive/reread {ts}` → reads that exact image with **gpt-4o** (accurate reader) + soft neighbor hint, updates the stored reading (`source=oracle`). Does NOT touch the live lock.
+  - `POST /api/cam/archive/correct {ts, value}` → human 9-digit correction (`source=manual`, `reviewed=1`).
+- **Accurate history graph:** `GET /api/cam/archive/usage?minutes=N` → `usage_series` sums only monotonic, plausibility-capped deltas (a single bad image can't fabricate usage), so correcting wrong readings makes the graph more accurate.
+- **New page `/cam/archive`** (`cam_archive.html`): range chips (1h–30d), a gallons-per-bucket bar chart + cumulative line (Chart.js), and an image-history grid where each photo shows its derived reading with **Re-read (AI)** and **Fix** buttons. Nav link "🗂️ Meter Archive" added to `index.html`.
+- `/api/cam/archive` lists images paginated (window/limit/offset/order, optional unreviewed filter) + archive bounds (total/oldest/newest).
+- Deployed + verified: schema created, first frame indexed (`94740084` = 94740.084 ft³, source lock), `usage_series` runs clean, all routes return 200.
+- NOTE: only images archived AFTER this deploy are indexed (the ~13 min of pre-index archive frames have no reading rows — negligible). Going forward every 1/min image is indexed.
 - These changes improve decision quality without reopening the catastrophic jump/crash classes we already closed.
 - Internet-down windows are now explicitly excluded from the quality score so they do not pollute model/arbitration evaluation.

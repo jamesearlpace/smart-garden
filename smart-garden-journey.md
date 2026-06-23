@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (archive evidence-clarity filter/toggle + inferred-row labeling)
+**Last Updated:** 2026-06-23 (auto-heal hardening: episode-scoped confirms + guard-preserving clear)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -81,6 +81,29 @@
    - final state left clean with `truth_guard.active=false`.
 
 **Current state:** Truth-before-training guardrail is live in production and observable; suspicious meter jumps now pause label banking until manual review/clear.
+
+---
+
+## 2026-06-23 — Auto-heal hardening patch (no-manual objective guardrails)
+
+**Context:** Follow-up audit found two subtle safety gaps in the first auto-heal release:
+- authority confirmations could carry across unrelated disagreement episodes,
+- successful auto-heal always cleared truth-guard, even if the latch came from a non-oracle/manual investigation reason.
+
+**What changed (`server-prod/dashboard.py`):**
+- **Episode-scoped confirmations:** added `auto_heal.confirm_signature` and reset confirm streak whenever the disagreement episode signature changes (direction + disagreement band + lock band). This prevents confirmation carry-over between unrelated incidents.
+- **Reason-scoped guard clear:** auto-heal now clears truth-guard **only** when latch source is oracle-related (`oracle-physics` / `auto-heal`). If truth-guard source is manual/other, auto-heal preserves it and logs why.
+- Added observability field in `/api/cam/status`:
+   - `auto_heal.confirm_signature` for live debugging and audit traceability.
+
+**Deployment + verification:**
+- Backed up live file: `~/smart-garden-server/dashboard.py.bak.healpatch2-20260623-144805`.
+- Restarted `smart-garden-server` successfully (`active`, new `ActiveEnterTimestamp`).
+- Verified `/api/cam/status` includes the new field and runtime state:
+   - `auto_heal.confirm_signature: null` (clean start),
+   - truth-guard state available and readable post-patch.
+
+**Outcome:** The auto-heal system remains fully automated, but now with stronger episode isolation and no accidental clearing of unrelated manual safety latches.
 
 ---
 

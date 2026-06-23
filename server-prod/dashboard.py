@@ -3733,6 +3733,9 @@ def create_app(config, engine, weather, billing):
     _heal_state = {
         "samples": _deque(maxlen=HEAL_MAX_SAMPLES),  # (ts, blocked_candidate)
         "confirms": 0,            # consecutive agreeing authority reads
+        # Signature of the current disagreement episode being confirmed.
+        # Prevents confirm carry-over across unrelated lock disagreements.
+        "confirm_signature": None,
         "last_confirm_ts": 0.0,   # cooldown gate for the costly authority read
         "last_heal_ts": 0.0,
         "heals": 0,
@@ -4076,6 +4079,18 @@ def create_app(config, engine, weather, billing):
         if (max(vals) - min(vals)) > HEAL_CLUSTER_TOL:
             return False  # erratic → looks like garble, not a stable stale value
 
+        # Scope authority confirms to THIS disagreement episode so a prior
+        # episode cannot contribute toward a later, different heal decision.
+        sig = (
+            int(direction),
+            int(min(vals) // max(1, HEAL_CLUSTER_TOL)),
+            int(max(vals) // max(1, HEAL_CLUSTER_TOL)),
+            int(lg // max(1, ORACLE_MAX_ADVANCE)),
+        )
+        if _heal_state.get("confirm_signature") != sig:
+            _heal_state["confirm_signature"] = sig
+            _heal_state["confirms"] = 0
+
         # Costly authority confirmation is rate-limited.
         if now - float(_heal_state.get("last_confirm_ts", 0.0)) \
                 < HEAL_CONFIRM_INTERVAL:
@@ -4103,6 +4118,7 @@ def create_app(config, engine, weather, billing):
                 and abs(int(aval) - consensus) <= HEAL_CLUSTER_TOL)
         if not a_ok:
             _heal_state["confirms"] = 0      # any disagreement breaks the streak
+            _heal_state["confirm_signature"] = None
             log.info("auto-heal: authority did NOT confirm consensus ~%09d "
                      "(got %s) — streak reset", consensus, aval)
             return False
@@ -4122,6 +4138,7 @@ def create_app(config, engine, weather, billing):
             _oracle_state["pending_val"] = None
             cam_ocr_stats["oracle_reanchors"] = _oracle_state["reanchors"]
             _heal_state["confirms"] = 0
+            _heal_state["confirm_signature"] = None
             _heal_state["samples"].clear()
             _heal_state["heals"] = int(_heal_state.get("heals", 0)) + 1
             _heal_state["last_heal_ts"] = now
@@ -4134,14 +4151,24 @@ def create_app(config, engine, weather, billing):
                     _save_frame(oentry["id"], frame)
             except Exception as e:
                 log.debug("auto-heal record_oracle_reading failed: %s", e)
-            _truth_guard_clear(
-                "auto-healed: sustained multi-read + authority consensus "
-                "re-anchored a stale lock",
-                source="auto-heal",
-                details={"healed_to": heal_val, "was_lock": lg,
-                         "delta": heal_val - lg,
-                         "reads": len(vals),
-                         "authority_confirms": HEAL_AUTHORITY_CONFIRMS})
+            # Clear only oracle-related latches; preserve a manual/other guard.
+            tg = _truth_guard_snapshot()
+            if tg.get("active"):
+                tgs = str(tg.get("source") or "")
+                if tgs in ("oracle-physics", "auto-heal"):
+                    _truth_guard_clear(
+                        "auto-healed: sustained multi-read + authority "
+                        "consensus re-anchored a stale lock",
+                        source="auto-heal",
+                        details={"healed_to": heal_val, "was_lock": lg,
+                                 "delta": heal_val - lg,
+                                 "reads": len(vals),
+                                 "authority_confirms":
+                                 HEAL_AUTHORITY_CONFIRMS})
+                else:
+                    log.info("auto-heal preserved existing truth guard: "
+                             "source=%s reason=%s", tg.get("source"),
+                             tg.get("reason"))
             log.warning("AUTO-HEAL: lock %s -> %09d (%d agreeing reads + %d "
                         "authority confirms over %.0fs) — stuck lock recovered "
                         "with NO manual step", lg, heal_val, len(vals),
@@ -4931,6 +4958,7 @@ def create_app(config, engine, weather, billing):
                 "heals": int(_heal_state.get("heals", 0)),
                 "pending_samples": len(_heal_state.get("samples") or []),
                 "confirms": int(_heal_state.get("confirms", 0)),
+                "confirm_signature": _heal_state.get("confirm_signature"),
                 "confirms_required": int(HEAL_AUTHORITY_CONFIRMS),
                 "last_heal_ts": _heal_state.get("last_heal_ts") or None,
                 "last_heal_from": _heal_state.get("last_heal_from"),

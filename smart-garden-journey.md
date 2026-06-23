@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (archive-to-lock self-heal: drifted CNN history auto-reconciles to the trusted lock)
+**Last Updated:** 2026-06-23 (exact archive convergence mode: authoritative per-frame anchors + evicted-row retirement)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -131,6 +131,41 @@
 - New frames written after the heal stay correct (`094791096`, source `lock`) — no re-drift.
 
 **Net:** both meter surfaces now self-heal automatically — the **lock** (sustained multi-model consensus) and the **archive/display** (reconcile-to-trusted-lock). Fully programmatic, no manual re-anchor.
+
+---
+
+## 2026-06-23 — Exact archive convergence mode shipped (authoritative rows are now immutable)
+
+**Context:** The previous archive heal stopped catastrophic drift, but history could still remain "mostly right" instead of converging fully to per-image truth. Goal was to finish Option B: exact convergence with no manual steps.
+
+**What changed:**
+- Added convergence-mode candidate APIs in `meter_archive.py`:
+   - `reread_candidates(..., mode='converge')`
+   - `count_reread_candidates(..., mode='converge')`
+   - `retire_missing(ts)` to mark evicted-image rows as non-actionable (`source='evicted'`) so backlog can reach zero.
+- Added runtime mode control in `dashboard.py`:
+   - `METER_ARCHIVE_REREAD_MODE` (defaults to `converge`, accepts `suspect` for legacy behavior).
+- Updated archive reread worker:
+   - uses convergence candidate set,
+   - retires missing-image rows automatically,
+   - refreshes pending count at worker exit,
+   - reports mode and retirement counters.
+- Hardened immutability of truth anchors in strict backfill/reprocess:
+   - reviewed rows, manual rows, and oracle rows are never rewritten,
+   - one-off `/api/cam/archive/reread` oracle reads now persist as reviewed anchors.
+- Extended `/api/cam/status` `archive_heal` payload with:
+   - `mode`, `retired_missing`, `converged`.
+
+**Deployment + verification:**
+- Deployed `dashboard.py` and `meter_archive.py` to Acer, restarted `smart-garden-server`, verified `active`.
+- Authenticated status confirms new fields are live:
+   - `archive_heal.mode = "converge"`
+   - `archive_heal.converged = false` (worker actively draining)
+   - `archive_heal.running = true`
+   - `archive_heal.pending` reported non-zero backlog (expected at start of convergence run).
+- Recent 6h DB snapshot right after deploy showed large remaining uncertain backlog dominated by propagated rows (expected on first convergence pass): `pending_like_converge=647`, sources mostly `propagated`.
+
+**Current state:** exact-convergence machinery is now in production. The system no longer depends on a near-truth plateau; it is configured to keep converting uncertain history into authoritative per-frame truth while retiring non-recoverable evicted-image rows.
 
 ---
 

@@ -338,15 +338,42 @@ def suspect_rows(start, end, threshold, limit=50):
     Never returns ``manual`` rows (human corrections are authoritative). NEWEST
     first so the visible/recent history (whose images still exist) is fixed
     before older rows that may have been evicted. Returns row dicts."""
+    return reread_candidates(
+        start, end, threshold, limit=limit, mode="suspect")
+
+
+def reread_candidates(start, end, threshold, limit=50, mode="converge"):
+    """Rows in [start, end] eligible for per-frame truth re-read.
+
+    Modes:
+      * "suspect": only impossible-high/reconciled rows (legacy behavior).
+      * "converge": gradually replace uncertain lock/propagated/reconciled
+        history with authoritative per-frame reads, while never touching manual
+        or oracle anchors.
+    """
+    mode = str(mode or "converge").strip().lower()
+    if mode not in ("suspect", "converge"):
+        mode = "converge"
     c = _conn()
     try:
-        rows = c.execute(
-            "SELECT * FROM archive_frame "
-            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
-            "AND source!='manual' "
-            "AND (reading>? OR source='reconciled') "
-            "ORDER BY ts DESC LIMIT ?",
-            (start, end, int(threshold), int(limit))).fetchall()
+        if mode == "suspect":
+            rows = c.execute(
+                "SELECT * FROM archive_frame "
+                "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+                "AND source!='manual' "
+                "AND (reading>? OR source='reconciled') "
+                "ORDER BY ts DESC LIMIT ?",
+                (start, end, int(threshold), int(limit))).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM archive_frame "
+                "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+                "AND reviewed=0 "
+                "AND source NOT IN ('manual','oracle','evicted') "
+                "AND (reading>? OR source IN ('reconciled','lock','propagated') "
+                "     OR (source='cnn' AND confidence!='high')) "
+                "ORDER BY ts DESC LIMIT ?",
+                (start, end, int(threshold), int(limit))).fetchall()
         return [dict(r) for r in rows]
     finally:
         c.close()
@@ -354,14 +381,53 @@ def suspect_rows(start, end, threshold, limit=50):
 
 def count_suspect(start, end, threshold):
     """Cheap count of rows needing a per-frame re-read (see suspect_rows)."""
+    return count_reread_candidates(
+        start, end, threshold, mode="suspect")
+
+
+def count_reread_candidates(start, end, threshold, mode="converge"):
+    """Count rows eligible for per-frame reread in the selected mode."""
+    mode = str(mode or "converge").strip().lower()
+    if mode not in ("suspect", "converge"):
+        mode = "converge"
     c = _conn()
     try:
-        r = c.execute(
-            "SELECT COUNT(*) n FROM archive_frame "
-            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
-            "AND source!='manual' AND (reading>? OR source='reconciled')",
-            (start, end, int(threshold))).fetchone()
+        if mode == "suspect":
+            r = c.execute(
+                "SELECT COUNT(*) n FROM archive_frame "
+                "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+                "AND source!='manual' AND (reading>? OR source='reconciled')",
+                (start, end, int(threshold))).fetchone()
+        else:
+            r = c.execute(
+                "SELECT COUNT(*) n FROM archive_frame "
+                "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+                "AND reviewed=0 "
+                "AND source NOT IN ('manual','oracle','evicted') "
+                "AND (reading>? OR source IN ('reconciled','lock','propagated') "
+                "     OR (source='cnn' AND confidence!='high'))",
+                (start, end, int(threshold))).fetchone()
         return int(r["n"]) if r else 0
+    finally:
+        c.close()
+
+
+def retire_missing(ts):
+    """Retire one unrecoverable row from future reread queues.
+
+    Used when the archived image file has already been evicted by the disk cap.
+    This prevents a permanent tail of non-actionable candidates from keeping the
+    convergence queue non-zero forever.
+    """
+    c = _conn()
+    try:
+        cur = c.execute(
+            "UPDATE archive_frame SET source='evicted', confidence='missing_image', "
+            "updated_ts=? WHERE ts=? AND reviewed=0 "
+            "AND source NOT IN ('manual','oracle')",
+            (datetime.now().isoformat(timespec="seconds"), ts))
+        c.commit()
+        return (cur.rowcount or 0) > 0
     finally:
         c.close()
 

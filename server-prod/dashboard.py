@@ -3063,11 +3063,25 @@ def create_app(config, engine, weather, billing):
     # a big drifted backlog is cleaned over several minutes without a cost spike.
     ARCHIVE_REREAD_BUDGET = int(
         os.environ.get("METER_ARCHIVE_REREAD_BUDGET", "25"))
+    # "suspect" = only impossible-high/reconciled rows (legacy).
+    # "converge" = continuously retire uncertain lock/prop rows into
+    # authoritative per-frame reads until pending reaches zero.
+    ARCHIVE_REREAD_MODE = str(
+        os.environ.get("METER_ARCHIVE_REREAD_MODE", "converge")
+    ).strip().lower()
+    if ARCHIVE_REREAD_MODE not in ("suspect", "converge"):
+        ARCHIVE_REREAD_MODE = "converge"
     _archive_heal_state = {
         "reconciles": 0, "rows": 0, "last_ts": 0.0,
         "last_from": None, "last_to": None,
     }
-    _archive_reread_state = {"running": False, "pending": 0, "reread": 0}
+    _archive_reread_state = {
+        "running": False,
+        "pending": 0,
+        "reread": 0,
+        "retired_missing": 0,
+        "mode": ARCHIVE_REREAD_MODE,
+    }
     _reconnect_backfill = {
         "pending": False,
         "start_ts": None,
@@ -3439,24 +3453,36 @@ def create_app(config, engine, weather, billing):
                 minutes=max(5, ARCHIVE_HEAL_LOOKBACK_MIN))).isoformat(
                     timespec="seconds")
             threshold = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
-            pending = meter_archive.count_suspect(start, end, threshold)
+            try:
+                pending = meter_archive.count_reread_candidates(
+                    start, end, threshold, mode=ARCHIVE_REREAD_MODE)
+            except Exception:
+                pending = meter_archive.count_suspect(start, end, threshold)
             if pending <= 0:
                 return
             _archive_reread_state["running"] = True
             _archive_reread_state["pending"] = int(pending)
+            _archive_reread_state["mode"] = ARCHIVE_REREAD_MODE
             _threading.Thread(
                 target=_archive_reread_worker,
-                args=(start, end, int(trusted_lock), int(threshold)),
+                args=(start, end, int(trusted_lock), int(threshold),
+                      ARCHIVE_REREAD_MODE),
                 daemon=True, name="archive-reread").start()
         except Exception as e:
             log.debug("archive reconcile gate failed: %s", e)
 
-    def _archive_reread_worker(start, end, trusted_lock, threshold):
+    def _archive_reread_worker(start, end, trusted_lock, threshold, mode):
         """Background: re-read up to ARCHIVE_REREAD_BUDGET suspect frames with the
         authority model (unbiased — the image is the truth) and write each frame's
         OWN value. Forward-only + bounded by the trusted lock so a glare misread
-        can't push a row backward or above the monotonic ceiling."""
+        can't push a row backward or above the monotonic ceiling.
+
+        In "converge" mode, this targets uncertain lock/propagated/reconciled
+        rows too, so the queue can actually drain to zero instead of stabilizing
+        at "mostly right" history.
+        """
         reread = 0
+        retired_missing = 0
         try:
             import meter_archive
             try:
@@ -3465,8 +3491,14 @@ def create_app(config, engine, weather, billing):
                 return
             if not vision_oracle.available():
                 return
-            suspects = meter_archive.suspect_rows(
-                start, end, threshold, limit=ARCHIVE_REREAD_BUDGET)
+            try:
+                suspects = meter_archive.reread_candidates(
+                    start, end, threshold,
+                    limit=ARCHIVE_REREAD_BUDGET,
+                    mode=mode)
+            except Exception:
+                suspects = meter_archive.suspect_rows(
+                    start, end, threshold, limit=ARCHIVE_REREAD_BUDGET)
             if not suspects:
                 return
             # The unbiased oracle read of each frame IS the truth, so we bound it
@@ -3481,7 +3513,14 @@ def create_app(config, engine, weather, billing):
                 ts = row.get("ts")
                 fpath = os.path.join(
                     ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
-                if not ts or not os.path.exists(fpath):
+                if not ts:
+                    continue
+                if not os.path.exists(fpath):
+                    try:
+                        if meter_archive.retire_missing(ts):
+                            retired_missing += 1
+                    except Exception:
+                        pass
                     continue
                 try:
                     with open(fpath, "rb") as f:
@@ -3522,15 +3561,29 @@ def create_app(config, engine, weather, billing):
                 _archive_heal_state["last_ts"] = time.time()
                 _archive_heal_state["last_to"] = int(trusted_lock)
                 log.warning(
-                    "ARCHIVE-HEAL: re-read %d suspect archive frame(s) to their "
-                    "OWN true value (bounded <= trusted lock %09d) — history "
-                    "matches the images, NO manual step", reread, trusted_lock)
+                    "ARCHIVE-HEAL[%s]: re-read %d archive frame(s) to their "
+                    "OWN true value (bounded <= trusted lock %09d); retired %d "
+                    "evicted row(s)",
+                    mode, reread, trusted_lock, retired_missing)
         except Exception as e:
             log.debug("archive reread worker failed: %s", e)
         finally:
+            try:
+                import meter_archive
+                try:
+                    pending = meter_archive.count_reread_candidates(
+                        start, end, threshold, mode=mode)
+                except Exception:
+                    pending = meter_archive.count_suspect(start, end, threshold)
+                _archive_reread_state["pending"] = int(pending)
+            except Exception:
+                pass
             _archive_reread_state["running"] = False
             _archive_reread_state["reread"] = (
                 int(_archive_reread_state.get("reread", 0)) + reread)
+            _archive_reread_state["retired_missing"] = (
+                int(_archive_reread_state.get("retired_missing", 0))
+                + retired_missing)
 
     def _archive_frame(frame, captured_dt):
         """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
@@ -5181,10 +5234,16 @@ def create_app(config, engine, weather, billing):
             },
             "archive_heal": {
                 "enabled": bool(ARCHIVE_HEAL_ENABLED),
+                "mode": _archive_reread_state.get("mode") or ARCHIVE_REREAD_MODE,
                 "reread_passes": int(_archive_heal_state.get("reconciles", 0)),
                 "rows_reread": int(_archive_heal_state.get("rows", 0)),
                 "running": bool(_archive_reread_state.get("running")),
                 "pending": int(_archive_reread_state.get("pending", 0)),
+                "retired_missing": int(_archive_reread_state.get("retired_missing", 0)),
+                "converged": (
+                    int(_archive_reread_state.get("pending", 0)) == 0
+                    and (not bool(_archive_reread_state.get("running")))
+                ),
                 "last_ts": _archive_heal_state.get("last_ts") or None,
                 "last_to": _archive_heal_state.get("last_to"),
                 "lock_trusted": (_lock_trusted_value() is not None),
@@ -6453,8 +6512,11 @@ def create_app(config, engine, weather, billing):
                 except Exception:
                     cur_val = None
 
-            # Keep reviewed rows as hard anchors.
-            if int(row.get("reviewed") or 0) == 1:
+            # Keep immutable anchors untouched: human-reviewed/manual rows and
+            # authoritative oracle rows.
+            row_src = (row.get("source") or "")
+            row_reviewed = int(row.get("reviewed") or 0)
+            if row_reviewed == 1 or row_src in ("manual", "oracle"):
                 if cur_val is not None:
                     prev_val = cur_val
                     prev_ep = _epoch(ts) or prev_ep
@@ -6794,7 +6856,7 @@ def create_app(config, engine, weather, billing):
                 and res.get("confidence") != "low"):
             updated = meter_archive.update_reading(
                 ts, res["value"], res.get("confidence"), source="oracle",
-                reviewed=False)
+                reviewed=True)
         return jsonify({"ok": res.get("ok"), "value": res.get("value"),
                         "reading_cf": (res["value"] / 1000.0
                                        if res.get("value") is not None else None),

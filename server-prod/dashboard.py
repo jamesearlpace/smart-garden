@@ -5979,15 +5979,25 @@ def create_app(config, engine, weather, billing):
         offset = query_int("offset", 0, min_value=0, max_value=10_000_000)
         order = "asc" if request.args.get("order") == "asc" else "desc"
         unreviewed = request.args.get("unreviewed") in ("1", "true", "yes")
+        include_propagated = request.args.get(
+            "include_propagated", "0") in ("1", "true", "yes")
         mn, mx, total = meter_archive.bounds()
         items = meter_archive.list_range(
             start=start, end=end, limit=limit, offset=offset, order=order,
-            only_unreviewed=unreviewed)
+            only_unreviewed=unreviewed,
+            include_propagated=include_propagated)
+        filtered_count = meter_archive.count_range(
+            start, end, unreviewed, include_propagated=include_propagated)
+        total_count = meter_archive.count_range(
+            start, end, unreviewed, include_propagated=True)
         return jsonify({
             "items": items,
-            "count": meter_archive.count_range(start, end, unreviewed),
+            "count": filtered_count,
+            "count_total": total_count,
             "window": {"start": start, "end": end, "limit": limit,
-                       "offset": offset, "order": order, "unreviewed": unreviewed},
+                       "offset": offset, "order": order,
+                       "unreviewed": unreviewed,
+                       "include_propagated": include_propagated},
             "bounds": {"min": mn, "max": mx, "total": total},
         })
 

@@ -94,9 +94,10 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="card">
   <h2>🖼️ Image history</h2>
-  <div class="hint">Every archived photo with the reading derived for it. <b>Re-read (AI)</b> asks GPT-4o to read that exact image; <b>Fix</b> lets you type the true value. Corrections feed the graph above.</div>
+  <div class="hint">Every archived photo with the reading derived for it. <b>Re-read (AI)</b> asks GPT-4o to read that exact image; <b>Fix</b> lets you type the true value. Corrections feed the graph above. Inferred rows are hidden by default to keep primary evidence clear.</div>
   <div class="toolbar">
     <span class="toggle" id="tgUnrev" onclick="toggleUnrev()">Only unreviewed</span>
+    <span class="toggle" id="tgProp" onclick="toggleProp()">Show inferred (prop)</span>
     <span class="toggle" id="tgOrder" onclick="toggleOrder()">Newest first</span>
     <button class="toolbtn" id="btnSmartDry" onclick="smartReprocess(true)">Smart Reprocess (dry run)</button>
     <button class="toolbtn" id="btnSmartApply" onclick="smartReprocess(false)">Apply Smart Reprocess</button>
@@ -110,11 +111,12 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 var RANGES = [[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
 var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 120;
+var includeProp = false;
 var barC = null, lineC = null, loading = false, exhausted = false;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function tlabel(ts){ return ts ? ts.slice(5,16).replace('T',' ') : ''; }
+function tlabel(ts){ return ts ? ts.slice(5,19).replace('T',' ') : ''; }
 function cf(v){ return v==null ? '—' : (v).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3}); }
 function fmtReading(v){ return v==null ? '—' : String(v).padStart(9,'0'); }
 
@@ -199,7 +201,7 @@ function cellHTML(it){
   var badge = src==='oracle' ? '<span class="badge b-oracle">AI</span>'
             : src==='cnn' ? '<span class="badge b-cnn">cnn</span>'
             : src==='manual' ? '<span class="badge b-manual">manual</span>'
-            : src==='propagated' ? '<span class="badge b-prop">prop</span>'
+            : src==='propagated' ? '<span class="badge b-prop">inferred</span>'
             : '<span class="badge b-lock">lock</span>';
   var rev = it.reviewed ? ' <span class="badge b-rev">✓</span>' : '';
   return '<div class="cell" data-ts="'+esc(it.ts)+'">'
@@ -277,12 +279,17 @@ function loadList(reset){
   if (reset){ offset = 0; exhausted = false; document.getElementById('grid').innerHTML = ''; }
   document.getElementById('listMsg').textContent = 'loading…';
   var url = '/api/cam/archive?minutes='+minutes+'&limit='+LIMIT+'&offset='+offset
-          + '&order='+order + (unrev?'&unreviewed=1':'');
+          + '&order='+order + (unrev?'&unreviewed=1':'')
+          + (includeProp ? '&include_propagated=1' : '');
   fetch(url).then(function(r){ return r.json(); }).then(function(d){
     loading = false;
     var items = d.items||[];
+    var count = Number(d.count||0), countTotal = Number(d.count_total||count);
+    var hidden = Math.max(0, countTotal - count);
     document.getElementById('listMsg').textContent =
-      (d.count||0) + ' images in window' + (unrev?' (unreviewed)':'');
+      count + ' images in window'
+      + (unrev?' (unreviewed)':'')
+      + (!includeProp && hidden>0 ? (' · ' + hidden + ' inferred hidden') : '');
     var grid = document.getElementById('grid');
     grid.insertAdjacentHTML('beforeend', items.map(cellHTML).join(''));
     offset += items.length;
@@ -334,6 +341,7 @@ function smartReprocess(dryRun){
 
 function loadMore(){ loadList(false); }
 function toggleUnrev(){ unrev=!unrev; document.getElementById('tgUnrev').classList.toggle('on',unrev); loadList(true); }
+function toggleProp(){ includeProp=!includeProp; document.getElementById('tgProp').classList.toggle('on',includeProp); loadList(true); }
 function toggleOrder(){ order = order==='desc'?'asc':'desc';
   document.getElementById('tgOrder').classList.toggle('on', order==='asc');
   document.getElementById('tgOrder').textContent = order==='asc'?'Oldest first':'Newest first';

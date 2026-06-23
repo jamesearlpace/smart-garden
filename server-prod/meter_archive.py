@@ -358,7 +358,7 @@ def bounds():
 
 
 def list_range(start=None, end=None, limit=200, offset=0, order="desc",
-               only_unreviewed=False):
+               only_unreviewed=False, include_propagated=True):
     q = "SELECT * FROM archive_frame"
     conds, args = [], []
     if start:
@@ -367,6 +367,8 @@ def list_range(start=None, end=None, limit=200, offset=0, order="desc",
         conds.append("ts<=?"); args.append(end)
     if only_unreviewed:
         conds.append("reviewed=0")
+    if not include_propagated:
+        conds.append("source!='propagated'")
     if conds:
         q += " WHERE " + " AND ".join(conds)
     q += " ORDER BY ts " + ("ASC" if order == "asc" else "DESC")
@@ -379,7 +381,8 @@ def list_range(start=None, end=None, limit=200, offset=0, order="desc",
         c.close()
 
 
-def count_range(start=None, end=None, only_unreviewed=False):
+def count_range(start=None, end=None, only_unreviewed=False,
+                include_propagated=True):
     q = "SELECT COUNT(*) n FROM archive_frame"
     conds, args = [], []
     if start:
@@ -388,6 +391,8 @@ def count_range(start=None, end=None, only_unreviewed=False):
         conds.append("ts<=?"); args.append(end)
     if only_unreviewed:
         conds.append("reviewed=0")
+    if not include_propagated:
+        conds.append("source!='propagated'")
     if conds:
         q += " WHERE " + " AND ".join(conds)
     c = _conn()

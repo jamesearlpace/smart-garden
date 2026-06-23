@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (strict backfill auto-scheduler + cnn-insights endpoint added and deployed)
+**Last Updated:** 2026-06-23 (archive evidence-clarity filter/toggle + inferred-row labeling)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -29,6 +29,28 @@
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (~234KB, all dated session logs through 2026-06-06, hardware build notes, deployment post-mortems). This doc keeps only active reference + the most-recent work. Newest archived batch is under the divider "Archived 2026-06-12 from main journey".
+
+---
+
+## 2026-06-23 — Archive evidence clarity: inferred rows hidden by default
+
+**Context:** The archive view could show two cards that looked like duplicate independent evidence (for example one `cnn` and one `prop`/propagated row at nearly the same displayed time), which made confidence look higher than it really was.
+
+**What changed:**
+- Added API-level filtering in `/api/cam/archive` so propagated rows are excluded by default (`include_propagated=0`) and can be explicitly included when requested.
+- Extended `meter_archive.list_range()` / `count_range()` with `include_propagated` support so filtering is done in SQL, not just in the browser.
+- Updated `cam_archive.html` UX:
+   - new toggle: **Show inferred (prop)**
+   - propagated badge text changed from `prop` to `inferred`
+   - list status now reports how many inferred rows are hidden
+   - timestamp display now includes seconds (not minute-only)
+
+**Why this matters:** primary measured evidence is now visually separated from inferred backfill rows, reducing false confidence during review while preserving access to inferred history when needed.
+
+**Files modified:**
+- `server-prod/dashboard.py`
+- `server-prod/meter_archive.py`
+- `server-prod/templates/cam_archive.html`
 
 ---
 

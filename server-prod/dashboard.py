@@ -11,6 +11,7 @@ Serves a web UI at http://acer:5125 with:
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 import sys
 from datetime import datetime, timedelta
@@ -2841,6 +2842,12 @@ def create_app(config, engine, weather, billing):
         os.environ.get("METER_STRICT_BACKFILL_ORACLE_BUDGET", "0"))
     STRICT_BACKFILL_MIN_INTERVAL_S = float(
         os.environ.get("METER_STRICT_BACKFILL_MIN_INTERVAL_S", "45"))
+    STRICT_BACKFILL_AUTO_ENABLED = (
+        os.environ.get("METER_STRICT_BACKFILL_AUTO_ENABLED", "1") == "1")
+    STRICT_BACKFILL_AUTO_EVERY_S = float(
+        os.environ.get("METER_STRICT_BACKFILL_AUTO_EVERY_S", "180"))
+    STRICT_BACKFILL_AUTO_WINDOW_MINUTES = int(
+        os.environ.get("METER_STRICT_BACKFILL_AUTO_WINDOW_MINUTES", "360"))
     # Reconnect recovery: after a long cam gap, automatically reconcile the
     # affected archive window so held/propagated rows are backfilled once
     # trusted anchors are available.
@@ -2865,6 +2872,7 @@ def create_app(config, engine, weather, billing):
         "last_run_ts": 0.0,
         "last_reason": None,
         "last_result": None,
+        "runs": 0,
     }
     _archive_lock = _threading.Lock()
 
@@ -2901,7 +2909,19 @@ def create_app(config, engine, weather, billing):
         bounded by monotonic + physics). Runs in a thread so uploads stay fast.
         """
         try:
-            out = _smart_archive_reprocess(
+            # During app startup the daemon can fire before all nested helpers
+            # are bound. Wait briefly so first auto run doesn't fail noisily.
+            smart_reprocess = None
+            for _ in range(40):
+                try:
+                    smart_reprocess = _smart_archive_reprocess
+                    break
+                except NameError:
+                    time.sleep(0.25)
+            if smart_reprocess is None:
+                raise RuntimeError("smart archive reprocess helper not ready")
+
+            out = smart_reprocess(
                 start_ts, end_ts,
                 max_rows=max(20, int(STRICT_BACKFILL_MAX_ROWS)),
                 oracle_budget=max(0, int(STRICT_BACKFILL_ORACLE_BUDGET)),
@@ -2952,6 +2972,7 @@ def create_app(config, engine, weather, billing):
         finally:
             _strict_backfill["running"] = False
             _strict_backfill["last_run_ts"] = time.time()
+            _strict_backfill["runs"] = int(_strict_backfill.get("runs", 0)) + 1
 
     def _queue_strict_backfill(start_ts, end_ts, reason):
         """Queue a strict backfill pass if one is not already running."""
@@ -2972,6 +2993,40 @@ def create_app(config, engine, weather, billing):
             name="archive-strict-backfill",
         ).start()
         return True
+
+    def _strict_backfill_auto_window(now_dt=None):
+        end_dt = now_dt or datetime.now()
+        win = max(5, int(STRICT_BACKFILL_AUTO_WINDOW_MINUTES))
+        start_dt = end_dt - timedelta(minutes=win)
+        return (start_dt.isoformat(timespec="seconds"),
+                end_dt.isoformat(timespec="seconds"))
+
+    def _strict_backfill_daemon():
+        """Continuously run strict archive repair in the background.
+
+        Keeps recent windows refreshed without needing manual button clicks.
+        Reconnect windows are prioritized while pending; otherwise runs a rolling
+        auto window every STRICT_BACKFILL_AUTO_EVERY_S.
+        """
+        sleep_s = max(15.0, float(STRICT_BACKFILL_AUTO_EVERY_S or 180.0))
+        while True:
+            try:
+                if STRICT_BACKFILL_ENABLED and STRICT_BACKFILL_AUTO_ENABLED:
+                    end_ts = datetime.now().isoformat(timespec="seconds")
+                    if (RECONNECT_BACKFILL_ENABLED
+                            and _reconnect_backfill.get("pending")):
+                        start_ts = _reconnect_backfill.get("start_ts")
+                        if not start_ts:
+                            start_ts = (datetime.now() - timedelta(
+                                minutes=max(1, RECONNECT_LOOKBACK_MINUTES)
+                            )).isoformat(timespec="seconds")
+                        _queue_strict_backfill(start_ts, end_ts, reason="reconnect")
+                    else:
+                        a_start, a_end = _strict_backfill_auto_window()
+                        _queue_strict_backfill(a_start, a_end, reason="auto")
+            except Exception as e:
+                log.debug("strict backfill daemon failed: %s", e)
+            time.sleep(sleep_s)
 
     def _archive_try_stale_reread(frame, prev_value):
         """Best-effort, bounded reread for stale-lock archive plateaus.
@@ -4298,6 +4353,18 @@ def create_app(config, engine, weather, billing):
     _threading.Thread(target=_cam_pinger, daemon=True, name="cam-pinger").start()
     log.info("cam pinger started -> %s", CAM_PING_HOST)
 
+    if STRICT_BACKFILL_ENABLED and STRICT_BACKFILL_AUTO_ENABLED:
+        _threading.Thread(
+            target=_strict_backfill_daemon,
+            daemon=True,
+            name="strict-backfill-daemon",
+        ).start()
+        log.info(
+            "strict backfill daemon started (every %.0fs, window %s min)",
+            float(STRICT_BACKFILL_AUTO_EVERY_S),
+            int(STRICT_BACKFILL_AUTO_WINDOW_MINUTES),
+        )
+
     @app.route("/api/cam/upload", methods=["POST"])
     def cam_upload():
         """Receive a JPEG push from the ESP32-CAM.
@@ -4480,7 +4547,11 @@ def create_app(config, engine, weather, billing):
                 },
                 "strict_backfill": {
                     "enabled": bool(STRICT_BACKFILL_ENABLED),
+                    "auto_enabled": bool(STRICT_BACKFILL_AUTO_ENABLED),
+                    "auto_every_s": float(STRICT_BACKFILL_AUTO_EVERY_S),
+                    "window_minutes": int(STRICT_BACKFILL_AUTO_WINDOW_MINUTES),
                     "running": bool(_strict_backfill.get("running")),
+                    "runs": int(_strict_backfill.get("runs", 0)),
                     "last_reason": _strict_backfill.get("last_reason"),
                     "last_result": _strict_backfill.get("last_result"),
                 },
@@ -5345,6 +5416,67 @@ def create_app(config, engine, weather, billing):
         """Gallery to review every banked frame + its label + verification status."""
         return render_template("cam_labels.html")
 
+    def _archive_quality_stats(hours):
+        """Quality snapshot from archive_frame for a rolling window."""
+        try:
+            import meter_archive
+            start = (datetime.now() - timedelta(hours=max(1, int(hours)))).isoformat(
+                timespec="seconds")
+            conn = sqlite3.connect(meter_archive.DB_PATH)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT "
+                "COUNT(*) AS total, "
+                "SUM(CASE WHEN source='propagated' THEN 1 ELSE 0 END) AS inferred, "
+                "SUM(CASE WHEN reviewed=1 OR source IN ('manual','oracle') "
+                "          OR (source='cnn' AND confidence='high') "
+                "    THEN 1 ELSE 0 END) AS trusted "
+                "FROM archive_frame WHERE ts >= ?",
+                (start,)
+            ).fetchone()
+            conn.close()
+            total = int((row["total"] or 0) if row else 0)
+            inferred = int((row["inferred"] or 0) if row else 0)
+            trusted = int((row["trusted"] or 0) if row else 0)
+            return {
+                "hours": int(hours),
+                "total": total,
+                "inferred": inferred,
+                "trusted": trusted,
+                "inferred_pct": round(100.0 * inferred / total, 1) if total else 0.0,
+                "trusted_pct": round(100.0 * trusted / total, 1) if total else 0.0,
+            }
+        except Exception as e:
+            return {"hours": int(hours), "error": str(e)}
+
+    def _cnn_trend_summary(daily_rows):
+        """7-day vs prior-7-day CNN accuracy summary from cnn_daily rows."""
+        rows = [r for r in (daily_rows or []) if int(r.get("evals") or 0) > 0]
+        recent = rows[:7]
+        prev = rows[7:14]
+
+        def _acc(chunk):
+            if not chunk:
+                return None
+            evals = sum(int(x.get("evals") or 0) for x in chunk)
+            correct = sum(int(x.get("cnn_correct") or 0) for x in chunk)
+            if evals <= 0:
+                return None
+            return round(100.0 * correct / evals, 1)
+
+        recent_acc = _acc(recent)
+        prev_acc = _acc(prev)
+        delta = (round(recent_acc - prev_acc, 1)
+                 if (recent_acc is not None and prev_acc is not None)
+                 else None)
+        return {
+            "recent_7d_acc_pct": recent_acc,
+            "prev_7d_acc_pct": prev_acc,
+            "delta_pct": delta,
+            "recent_7d_evals": sum(int(x.get("evals") or 0) for x in recent),
+            "prev_7d_evals": sum(int(x.get("evals") or 0) for x in prev),
+        }
+
     @app.route("/api/cam/cnn-report")
     def cam_cnn_report():
         """CNN improvement report: live accuracy over time (from oracle
@@ -5354,10 +5486,52 @@ def create_app(config, engine, weather, billing):
             rep = cnn_metrics.report(days=60)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        _refresh_oracle_budget(force=False)
+        q1 = _archive_quality_stats(1)
+        q6 = _archive_quality_stats(6)
+        q24 = _archive_quality_stats(24)
         rep["stats"] = {k: cam_ocr_stats.get(k) for k in
                         ("cnn_used", "cnn_fellback", "cnn_corrections",
                          "oracle_labels", "reader", "processed")}
+        rep["insights"] = {
+            "cnn_trend": _cnn_trend_summary(rep.get("daily") or []),
+            "archive_quality": {
+                "last_1h": q1,
+                "last_6h": q6,
+                "last_24h": q24,
+            },
+            "strict_backfill": {
+                "enabled": bool(STRICT_BACKFILL_ENABLED),
+                "auto_enabled": bool(STRICT_BACKFILL_AUTO_ENABLED),
+                "auto_every_s": float(STRICT_BACKFILL_AUTO_EVERY_S),
+                "window_minutes": int(STRICT_BACKFILL_AUTO_WINDOW_MINUTES),
+                "running": bool(_strict_backfill.get("running")),
+                "runs": int(_strict_backfill.get("runs", 0)),
+                "last_reason": _strict_backfill.get("last_reason"),
+                "last_result": _strict_backfill.get("last_result"),
+            },
+            "oracle_budget": _oracle_state.get("budget") or {},
+        }
         return jsonify(rep)
+
+    @app.route("/api/cam/cnn-insights")
+    def cam_cnn_insights():
+        """Compact CNN improvement + archive quality snapshot."""
+        rep = cam_cnn_report()
+        if isinstance(rep, tuple):
+            resp = rep[0]
+            code = rep[1]
+            if code != 200:
+                return rep
+            payload = resp.get_json() or {}
+        else:
+            payload = rep.get_json() or {}
+        return jsonify({
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "stats": payload.get("stats") or {},
+            "by_version": payload.get("by_version") or [],
+            "insights": payload.get("insights") or {},
+        })
 
     @app.route("/cam/cnn-report")
     def cam_cnn_report_page():

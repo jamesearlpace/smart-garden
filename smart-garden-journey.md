@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-12 (journey doc archive-split — older dated session logs moved to the archive; this doc now keeps active reference + the 3 most-recent entries)
+**Last Updated:** 2026-06-23 (strict backfill auto-scheduler + cnn-insights endpoint added and deployed)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -302,6 +302,45 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
 **Current state:**
 - Smart window reprocessing is now available from the archive page and via API.
 - Users can run dry-run first, inspect `would_update/oracle_calls/changes`, then apply.
+
+## 2026-06-23 — Fully automatic strict backfill cadence + CNN improvement insights
+
+**Context:** James asked for two concrete outcomes: (1) strict archive repair should run automatically (not only on reconnect/anchor events), and (2) CNN progress should be visible in clear metrics instead of guesswork.
+
+**What shipped (`server-prod/dashboard.py`):**
+- Added periodic strict scheduler controls:
+   - `METER_STRICT_BACKFILL_AUTO_ENABLED` (default `1`)
+   - `METER_STRICT_BACKFILL_AUTO_EVERY_S` (default `180`)
+   - `METER_STRICT_BACKFILL_AUTO_WINDOW_MINUTES` (default `360`)
+- Added background daemon `_strict_backfill_daemon()`:
+   - continuously queues strict passes while enabled
+   - prioritizes reconnect windows when pending
+   - otherwise runs rolling auto windows on cadence
+- Expanded strict status state:
+   - includes `runs`, `auto_enabled`, `auto_every_s`, `window_minutes` in `/api/cam/status`.
+- Added CNN insight helpers and endpoints:
+   - `_archive_quality_stats(hours)` for inferred/trusted percentages in rolling windows
+   - `_cnn_trend_summary(daily_rows)` for recent-7d vs prior-7d CNN accuracy delta
+   - `/api/cam/cnn-report` now includes `insights` block (trend, archive quality, strict state, oracle budget)
+   - new compact `/api/cam/cnn-insights` endpoint for dashboards/automation clients.
+
+**Stability fix (same deploy):**
+- Fixed startup race where the daemon could run before `_smart_archive_reprocess` was bound in `create_app`.
+- `_run_strict_backfill` now waits briefly for helper binding on boot instead of failing the first auto pass.
+
+**Production deploy + validation (Acer):**
+- Deployed `dashboard.py` to `~/smart-garden-server/` and restarted `smart-garden-server` (active).
+- Updated systemd drop-in `oracle-accuracy.conf` to persist:
+   - `METER_STRICT_BACKFILL_AUTO_ENABLED=1`
+   - `METER_STRICT_BACKFILL_AUTO_EVERY_S=120`
+   - `METER_STRICT_BACKFILL_AUTO_WINDOW_MINUTES=360`
+- Verified service env includes `METER_STRICT_BACKFILL_AUTO_EVERY_S=120`.
+- Verified journal startup line: `strict backfill daemon started (every 120s, window 360 min)`.
+- Verified `cnn-insights` payload includes trend + 1h/6h/24h archive quality snapshots.
+
+**Current state:**
+- Strict backfill is now autonomous on a fixed cadence and still event-aware for reconnects.
+- CNN improvement telemetry is exposed via API and can be graphed/alerted without manual SQL.
 
 ## 2026-06-13 — Dedicated Sensor History page + unified compact mobile nav + cam-cutoff fix
 

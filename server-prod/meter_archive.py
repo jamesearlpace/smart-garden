@@ -17,7 +17,7 @@ the live meter lock at capture time (free); it can be refined on demand.
 """
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("METER_ARCHIVE_DB", os.path.join(HERE, "meter_archive.db"))
@@ -170,7 +170,174 @@ def ensure_schema():
             " updated_ts TEXT"
             ")")
         c.execute("CREATE INDEX IF NOT EXISTS ix_arc_ts ON archive_frame(ts)")
+        # Convergence trend: one snapshot row per sample so the monitor can show
+        # "perfectable remaining" trending toward zero over time (the single most
+        # honest progress metric).
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS convergence_snapshot ("
+            " ts TEXT PRIMARY KEY,"            # ISO sample time
+            " total INTEGER,"                  # all archive rows
+            " authoritative INTEGER,"          # manual/oracle/reviewed rows
+            " perfectable_remaining INTEGER,"  # uncertain rows still fixable
+            " unrecoverable INTEGER,"          # evicted-image rows (no fix)
+            " null_readings INTEGER,"          # rows with no reading at all
+            " perfect_pct REAL"                # authoritative / total * 100
+            ")")
+        # Audit-the-monitor log: every blind re-read or human spot-check, so the
+        # dashboard's "perfect" claim can itself be independently checked.
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS audit_result ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " ts TEXT,"               # when the audit happened
+            " frame_ts TEXT,"         # which archive row was audited
+            " kind TEXT,"             # 'blind' (AI re-read) | 'human'
+            " stored INTEGER,"        # value the system currently claims
+            " checked INTEGER,"       # independent value (AI or human typed)
+            " agree INTEGER,"         # 1 = matched, 0 = contradicted
+            " source TEXT,"           # stored row's source at audit time
+            " model TEXT,"            # blind re-read model (NULL for human)
+            " note TEXT"
+            ")")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit_result(ts)")
         c.commit()
+    finally:
+        c.close()
+
+
+def convergence_stats():
+    """Current truth-coverage snapshot of the whole archive.
+
+    * authoritative          = rows we claim are correct (manual/oracle/reviewed)
+    * perfectable_remaining  = uncertain rows that still have a fixable path
+    * unrecoverable          = rows whose image was evicted (can't re-read)
+    * null_readings          = rows with no reading at all
+    """
+    c = _conn()
+    try:
+        total = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame").fetchone()["n"])
+        authoritative = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE source IN ('manual','oracle') OR reviewed=1").fetchone()["n"])
+        perfectable = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE reading IS NOT NULL AND reviewed=0 "
+            "AND source NOT IN ('manual','oracle','evicted')").fetchone()["n"])
+        unrecoverable = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE source='evicted'").fetchone()["n"])
+        nulls = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE reading IS NULL").fetchone()["n"])
+        pct = round((authoritative / total * 100.0), 2) if total else 0.0
+        return {
+            "total": total,
+            "authoritative": authoritative,
+            "perfectable_remaining": perfectable,
+            "unrecoverable": unrecoverable,
+            "null_readings": nulls,
+            "perfect_pct": pct,
+        }
+    finally:
+        c.close()
+
+
+def record_convergence_snapshot():
+    """Compute current convergence stats and persist a trend point."""
+    s = convergence_stats()
+    c = _conn()
+    try:
+        c.execute(
+            "INSERT OR REPLACE INTO convergence_snapshot"
+            "(ts,total,authoritative,perfectable_remaining,unrecoverable,"
+            "null_readings,perfect_pct) VALUES(?,?,?,?,?,?,?)",
+            (datetime.now().isoformat(timespec="seconds"),
+             s["total"], s["authoritative"], s["perfectable_remaining"],
+             s["unrecoverable"], s["null_readings"], s["perfect_pct"]))
+        c.commit()
+    finally:
+        c.close()
+    return s
+
+
+def convergence_history(hours=24, limit=1000):
+    """Snapshot trend over the last ``hours`` (oldest first)."""
+    cutoff = (datetime.now() - timedelta(hours=max(1, int(hours)))
+              ).isoformat(timespec="seconds")
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT * FROM convergence_snapshot WHERE ts>=? "
+            "ORDER BY ts ASC LIMIT ?",
+            (cutoff, int(limit))).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def random_perfect_rows(limit=10):
+    """Random sample of rows the system currently CLAIMS are correct
+    (manual/oracle/reviewed). Used to audit those claims against the images."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT * FROM archive_frame "
+            "WHERE reading IS NOT NULL "
+            "AND (source IN ('manual','oracle') OR reviewed=1) "
+            "ORDER BY RANDOM() LIMIT ?",
+            (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def record_audit_result(frame_ts, stored, checked, agree, kind,
+                        source=None, model=None, note=None):
+    """Log one independent check of a stored value (blind AI or human)."""
+    c = _conn()
+    try:
+        c.execute(
+            "INSERT INTO audit_result"
+            "(ts,frame_ts,kind,stored,checked,agree,source,model,note) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (datetime.now().isoformat(timespec="seconds"),
+             frame_ts, kind,
+             int(stored) if stored is not None else None,
+             int(checked) if checked is not None else None,
+             1 if agree else 0, source, model, note))
+        c.commit()
+    finally:
+        c.close()
+
+
+def audit_summary(hours=168, limit_recent=40):
+    """Agreement stats over recent audits, split by kind, plus recent rows.
+
+    Agreement % = of values we claimed correct, how many an INDEPENDENT check
+    confirmed. This is the metric that audits the monitor itself.
+    """
+    cutoff = (datetime.now() - timedelta(hours=max(1, int(hours)))
+              ).isoformat(timespec="seconds")
+    c = _conn()
+    try:
+        def _grade(kind):
+            r = c.execute(
+                "SELECT COUNT(*) n, SUM(agree) a FROM audit_result "
+                "WHERE ts>=? AND kind=?",
+                (cutoff, kind)).fetchone()
+            n = int(r["n"] or 0)
+            a = int(r["a"] or 0)
+            return {"checked": n, "agreed": a, "disagreed": n - a,
+                    "agreement_pct": round((a / n * 100.0), 1) if n else None}
+        recent = [dict(r) for r in c.execute(
+            "SELECT * FROM audit_result WHERE ts>=? "
+            "ORDER BY ts DESC LIMIT ?",
+            (cutoff, int(limit_recent))).fetchall()]
+        return {
+            "blind": _grade("blind"),
+            "human": _grade("human"),
+            "recent": recent,
+        }
     finally:
         c.close()
 

@@ -3245,6 +3245,13 @@ def create_app(config, engine, weather, billing):
                     else:
                         a_start, a_end = _strict_backfill_auto_window()
                         _queue_strict_backfill(a_start, a_end, reason="auto")
+                # Record a convergence trend point each cycle (~2 min) so the
+                # monitor can show perfectable-remaining trending to zero.
+                try:
+                    import meter_archive
+                    meter_archive.record_convergence_snapshot()
+                except Exception as _ce:
+                    log.debug("convergence snapshot failed: %s", _ce)
             except Exception as e:
                 log.debug("strict backfill daemon failed: %s", e)
             time.sleep(sleep_s)
@@ -6946,6 +6953,178 @@ def create_app(config, engine, weather, billing):
         out["ok"] = True
         out["dry_run"] = dry
         return jsonify(out)
+
+    # ── Convergence monitor + self-audit ───────────────────────────────────
+    @app.route("/cam/convergence")
+    def cam_convergence_page():
+        return render_template("convergence.html")
+
+    @app.route("/api/cam/convergence")
+    def cam_convergence():
+        """Live convergence stats + trend + audit-the-monitor agreement.
+
+        This is the honest progress view: perfectable-remaining trending toward
+        zero, plus an independent agreement % so the dashboard's own "perfect"
+        claim can be checked.
+        """
+        import meter_archive
+        try:
+            hours = query_int("hours", 24, min_value=1, max_value=720)
+        except Exception:
+            hours = 24
+        stats = meter_archive.convergence_stats()
+        history = meter_archive.convergence_history(hours=hours)
+        # Convergence rate + ETA from the trend (first vs last in window).
+        rate_per_hr = None
+        eta_hours = None
+        if len(history) >= 2:
+            a, b = history[0], history[-1]
+            try:
+                t0 = datetime.fromisoformat(a["ts"]).timestamp()
+                t1 = datetime.fromisoformat(b["ts"]).timestamp()
+                dh = (t1 - t0) / 3600.0
+                drop = int(a["perfectable_remaining"]) - int(b["perfectable_remaining"])
+                if dh > 0 and drop > 0:
+                    rate_per_hr = round(drop / dh, 2)
+                    rem = int(b["perfectable_remaining"])
+                    eta_hours = round(rem / rate_per_hr, 1) if rate_per_hr > 0 else None
+            except Exception:
+                pass
+        return jsonify({
+            "ok": True,
+            "stats": stats,
+            "history": history,
+            "rate_per_hr": rate_per_hr,
+            "eta_hours": eta_hours,
+            "audit": meter_archive.audit_summary(hours=max(hours, 168)),
+            "archive_heal": {
+                "mode": _archive_reread_state.get("mode") or ARCHIVE_REREAD_MODE,
+                "running": bool(_archive_reread_state.get("running")),
+                "pending": int(_archive_reread_state.get("pending", 0)),
+                "rows_reread": int(_archive_heal_state.get("rows", 0)),
+                "lock_trusted": (_lock_trusted_value() is not None),
+            },
+        })
+
+    @app.route("/api/cam/convergence/audit", methods=["POST"])
+    def cam_convergence_audit():
+        """Blind re-audit: independently re-read N rows the system CLAIMS are
+        correct and report how many an unbiased read confirms. This audits the
+        monitor itself — exact-match because we re-read the SAME archived image,
+        so a correct system must reproduce the same 9 digits."""
+        import meter_archive
+        try:
+            import vision_oracle
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"oracle import: {e}"}), 500
+        if not vision_oracle.available():
+            return jsonify({"ok": False, "error": "oracle unavailable"}), 400
+        data = request.get_json(silent=True) or {}
+        try:
+            n = int(data.get("n", 8))
+        except Exception:
+            n = 8
+        n = max(1, min(15, n))
+        sample = meter_archive.random_perfect_rows(limit=n)
+        checked = agreed = 0
+        results = []
+        for row in sample:
+            ts = row.get("ts")
+            stored = row.get("reading")
+            fpath = os.path.join(
+                ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
+            if stored is None or not os.path.exists(fpath):
+                continue
+            try:
+                with open(fpath, "rb") as f:
+                    frame = f.read()
+            except OSError:
+                continue
+            # UNBIASED: no hint, no anchor — the image alone.
+            res = vision_oracle.read_meter(
+                frame, rotate180=True, hint=None, model=ORACLE_AUTHORITY_MODEL)
+            _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
+            if (not res.get("ok") or not res.get("readable")
+                    or res.get("value") is None):
+                continue
+            reread = int(res.get("value"))
+            agree = (reread == int(stored))
+            checked += 1
+            if agree:
+                agreed += 1
+            meter_archive.record_audit_result(
+                ts, stored, reread, agree, kind="blind",
+                source=row.get("source"), model=ORACLE_AUTHORITY_MODEL,
+                note=res.get("confidence"))
+            results.append({
+                "ts": ts,
+                "stored": int(stored),
+                "reread": reread,
+                "agree": agree,
+                "source": row.get("source"),
+                "confidence": res.get("confidence"),
+                "file": os.path.basename(str(row.get("filename") or "")),
+            })
+        return jsonify({
+            "ok": True,
+            "checked": checked,
+            "agreed": agreed,
+            "disagreed": checked - agreed,
+            "agreement_pct": round((agreed / checked * 100.0), 1) if checked else None,
+            "results": results,
+        })
+
+    @app.route("/api/cam/convergence/verify-batch")
+    def cam_convergence_verify_batch():
+        """Return N random rows the system CLAIMS are correct, with image URL +
+        stored value, for human eyes-on spot-checking."""
+        import meter_archive
+        try:
+            n = query_int("n", 10, min_value=1, max_value=25)
+        except Exception:
+            n = 10
+        rows = meter_archive.random_perfect_rows(limit=n)
+        items = []
+        for r in rows:
+            fname = os.path.basename(str(r.get("filename") or ""))
+            exists = os.path.exists(os.path.join(ARCHIVE_DIR, fname))
+            items.append({
+                "ts": r.get("ts"),
+                "stored": r.get("reading"),
+                "reading_cf": (r.get("reading") / 1000.0
+                               if r.get("reading") is not None else None),
+                "source": r.get("source"),
+                "confidence": r.get("confidence"),
+                "file": fname,
+                "img_url": f"/api/cam/archive/img?file={fname}",
+                "img_available": exists,
+            })
+        return jsonify({"ok": True, "items": items})
+
+    @app.route("/api/cam/convergence/verify", methods=["POST"])
+    def cam_convergence_verify():
+        """Record one human spot-check verdict. If the human disagrees and types
+        the correct 9-digit value, the row is corrected (manual, reviewed)."""
+        import meter_archive
+        data = request.get_json(silent=True) or {}
+        ts = str(data.get("ts", ""))
+        row = meter_archive.get(ts)
+        if not row:
+            return jsonify({"ok": False, "error": "unknown ts"}), 404
+        stored = row.get("reading")
+        agree = bool(data.get("agree"))
+        corrected = None
+        if not agree:
+            v = "".join(c for c in str(data.get("value", "")) if c.isdigit())
+            if v and len(v) == 9:
+                corrected = int(v)
+                meter_archive.update_reading(
+                    ts, corrected, "manual", source="manual", reviewed=True)
+        meter_archive.record_audit_result(
+            ts, stored, corrected if corrected is not None else stored,
+            agree, kind="human", source=row.get("source"), model=None,
+            note="human spot-check")
+        return jsonify({"ok": True, "agree": agree, "corrected": corrected})
 
     @app.route("/api/cam/archive/usage")
     def cam_archive_usage():

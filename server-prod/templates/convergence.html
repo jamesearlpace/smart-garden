@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convergence Monitor — Smart Garden</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --green:#1b5e20; --bg:#f5f7f5; --card:#fff; --line:#e0e4e0;
+          --ok:#2e7d32; --warn:#ef6c00; --bad:#c62828; --muted:#667; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+         background:var(--bg); color:#1a1a1a; }
+  header { background:var(--green); color:#fff; padding:14px 18px; }
+  header h1 { margin:0; font-size:18px; }
+  header .sub { font-size:12px; opacity:.85; margin-top:2px; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+          gap:10px; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px;
+         padding:12px 14px; }
+  .kpi .label { font-size:11px; color:var(--muted); text-transform:uppercase;
+                letter-spacing:.04em; }
+  .kpi .val { font-size:24px; font-weight:700; margin-top:4px; }
+  .kpi .val.small { font-size:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:14px 16px; margin-bottom:16px; }
+  .card h2 { margin:0 0 10px; font-size:15px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { background:var(--green); color:#fff; border:none; border-radius:8px;
+           padding:9px 14px; font-size:14px; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--green); border:1px solid var(--green); }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px;
+          font-weight:600; }
+  .pill.ok { background:#e8f5e9; color:var(--ok); }
+  .pill.bad { background:#ffebee; color:var(--bad); }
+  .note { color:var(--muted); font-size:12px; }
+  .verify-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+                 gap:12px; }
+  .vcard { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .vcard img { width:100%; height:150px; object-fit:cover; background:#000; display:block; }
+  .vcard .body { padding:10px; }
+  .vcard .stored { font-family:ui-monospace,Menlo,monospace; font-size:18px; font-weight:700; }
+  .vcard .acts { display:flex; gap:6px; margin-top:8px; }
+  .vcard input { width:130px; font-family:ui-monospace,monospace; padding:5px;
+                 border:1px solid var(--line); border-radius:6px; }
+  a.back { color:#fff; text-decoration:none; font-size:13px; opacity:.9; }
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/cam/archive">← Archive</a>
+  <h1>Convergence Monitor</h1>
+  <div class="sub">Are records getting perfect — and can we trust that claim?</div>
+</header>
+<main>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="card">
+    <h2>Perfectable Remaining (lower is better)</h2>
+    <canvas id="trend" height="90"></canvas>
+    <div class="note" id="trendNote">Loading trend…</div>
+  </div>
+
+  <div class="card">
+    <h2>Audit the Monitor — Blind AI Re-Read</h2>
+    <div class="note">Independently re-reads rows the system claims are correct,
+      from the original image, with no hint. Exact match required.</div>
+    <div class="row" style="margin:10px 0;">
+      <button id="auditBtn" onclick="runAudit()">Run blind audit (8)</button>
+      <span id="auditStatus" class="note"></span>
+    </div>
+    <table id="auditTable" style="display:none;">
+      <thead><tr><th>Time</th><th>Stored</th><th>Blind re-read</th><th>Verdict</th><th>Conf</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Verify with Your Own Eyes</h2>
+    <div class="note">Image next to the stored number. If it's wrong, type the
+      correct 9 digits — the row is corrected immediately.</div>
+    <div class="row" style="margin:10px 0;">
+      <button class="secondary" onclick="loadVerify()">Load 10 random “perfect” rows</button>
+    </div>
+    <div class="verify-grid" id="verifyGrid"></div>
+  </div>
+</main>
+
+<script>
+let trendChart = null;
+
+function fmt(n){ return (n===null||n===undefined)?'—':n; }
+function cf(v){ return (v===null||v===undefined)?'—':(v/1000).toFixed(3); }
+
+async function loadAll(){
+  const r = await fetch('/api/cam/convergence?hours=24');
+  const d = await r.json();
+  if(!d.ok) return;
+  renderKpis(d);
+  renderTrend(d.history);
+}
+
+function renderKpis(d){
+  const s = d.stats||{};
+  const blind = (d.audit&&d.audit.blind)||{};
+  const human = (d.audit&&d.audit.human)||{};
+  const cards = [
+    ['Perfect %', (s.perfect_pct!=null? s.perfect_pct+'%':'—'), false],
+    ['Perfectable left', fmt(s.perfectable_remaining), false],
+    ['Rate / hr', fmt(d.rate_per_hr), false],
+    ['ETA (hrs)', fmt(d.eta_hours), false],
+    ['Blind agreement', (blind.agreement_pct!=null? blind.agreement_pct+'%':'—'),
+       blind.disagreed>0],
+    ['Your agreement', (human.agreement_pct!=null? human.agreement_pct+'%':'—'),
+       human.disagreed>0],
+    ['Unrecoverable', fmt(s.unrecoverable), false],
+    ['Heal running', (d.archive_heal&&d.archive_heal.running)?'yes':'idle', false],
+  ];
+  document.getElementById('kpis').innerHTML = cards.map(c=>
+    `<div class="kpi"><div class="label">${c[0]}</div>
+     <div class="val ${c[2]?'':'small'}" style="${c[2]?'color:var(--bad)':''}">${c[1]}</div></div>`
+  ).join('');
+}
+
+function renderTrend(hist){
+  const note = document.getElementById('trendNote');
+  if(!hist||hist.length<2){ note.textContent='Not enough trend data yet (collects every ~2 min).'; return; }
+  const labels = hist.map(h=>h.ts.slice(11,16));
+  const rem = hist.map(h=>h.perfectable_remaining);
+  const pct = hist.map(h=>h.perfect_pct);
+  note.textContent = `${hist.length} points · ${hist[0].ts.slice(5,16)} → ${hist[hist.length-1].ts.slice(5,16)}`;
+  if(trendChart) trendChart.destroy();
+  trendChart = new Chart(document.getElementById('trend'), {
+    type:'line',
+    data:{ labels, datasets:[
+      { label:'Perfectable remaining', data:rem, borderColor:'#c62828',
+        backgroundColor:'rgba(198,40,40,.08)', fill:true, yAxisID:'y', tension:.25, pointRadius:0 },
+      { label:'Perfect %', data:pct, borderColor:'#2e7d32', yAxisID:'y1',
+        tension:.25, pointRadius:0 },
+    ]},
+    options:{ responsive:true, interaction:{mode:'index',intersect:false},
+      scales:{ y:{ position:'left', title:{display:true,text:'rows left'} },
+               y1:{ position:'right', min:0, max:100, grid:{drawOnChartArea:false},
+                    title:{display:true,text:'%'} } } }
+  });
+}
+
+async function runAudit(){
+  const btn=document.getElementById('auditBtn');
+  const st=document.getElementById('auditStatus');
+  btn.disabled=true; st.textContent='Re-reading images independently…';
+  try{
+    const r=await fetch('/api/cam/convergence/audit',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({n:8})});
+    const d=await r.json();
+    if(!d.ok){ st.textContent='Error: '+(d.error||'failed'); btn.disabled=false; return; }
+    st.textContent = `${d.agreed}/${d.checked} agreed `+
+      (d.agreement_pct!=null? `(${d.agreement_pct}%)`:'');
+    const tbl=document.getElementById('auditTable');
+    tbl.style.display='';
+    tbl.querySelector('tbody').innerHTML = d.results.map(x=>
+      `<tr><td>${x.ts.slice(5,16)}</td>
+        <td style="font-family:monospace">${cf(x.stored)}</td>
+        <td style="font-family:monospace">${cf(x.reread)}</td>
+        <td><span class="pill ${x.agree?'ok':'bad'}">${x.agree?'match':'MISMATCH'}</span></td>
+        <td class="note">${x.confidence||''}</td></tr>`
+    ).join('');
+    loadAll();
+  }catch(e){ st.textContent='Error: '+e; }
+  btn.disabled=false;
+}
+
+async function loadVerify(){
+  const grid=document.getElementById('verifyGrid');
+  grid.innerHTML='<div class="note">Loading…</div>';
+  const r=await fetch('/api/cam/convergence/verify-batch?n=10');
+  const d=await r.json();
+  if(!d.ok){ grid.innerHTML='<div class="note">Error loading.</div>'; return; }
+  grid.innerHTML = d.items.map((it,i)=>`
+    <div class="vcard" id="vc${i}">
+      ${it.img_available? `<img src="${it.img_url}" loading="lazy">`
+        : `<div style="height:150px;display:flex;align-items:center;justify-content:center;background:#222;color:#bbb">image evicted</div>`}
+      <div class="body">
+        <div class="note">${it.ts? it.ts.slice(5,16):''} · ${it.source||''}</div>
+        <div class="stored">${cf(it.stored)} <span class="note">ft³</span></div>
+        <div class="acts">
+          <button onclick="verdict(${i},'${it.ts}',true)">✓ Correct</button>
+          <button class="secondary" onclick="showFix(${i})">✗ Wrong</button>
+        </div>
+        <div id="fix${i}" style="display:none;margin-top:8px;">
+          <input id="fixv${i}" placeholder="correct 9 digits" maxlength="9">
+          <button onclick="verdict(${i},'${it.ts}',false)">Save</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function showFix(i){ document.getElementById('fix'+i).style.display=''; }
+
+async function verdict(i, ts, agree){
+  const body={ts, agree};
+  if(!agree){
+    const v=(document.getElementById('fixv'+i).value||'').replace(/\D/g,'');
+    if(v.length!==9){ alert('Enter the 9 digits you see.'); return; }
+    body.value=v;
+  }
+  const r=await fetch('/api/cam/convergence/verify',{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const d=await r.json();
+  if(d.ok){
+    const card=document.getElementById('vc'+i);
+    card.style.opacity=.4;
+    card.querySelector('.acts').innerHTML =
+      `<span class="pill ${agree?'ok':'bad'}">${agree?'confirmed':'corrected'}</span>`;
+    loadAll();
+  }
+}
+
+loadAll();
+setInterval(loadAll, 60000);
+</script>
+</body>
+</html>

@@ -169,6 +169,38 @@
 
 ---
 
+## 2026-06-23 — Convergence Monitor + self-audit (the monitor can be checked)
+
+**Context:** James's concern with any progress dashboard: "I'll look at it and think this isn't right." A monitor that self-grades is worthless if it can quietly mark wrong rows as perfect. So the design goal was an honest monitor whose every claim is checkable against the one thing that can't lie — the archived image.
+
+**What was built (all behind existing auth):**
+- **New page `/cam/convergence`** (`templates/convergence.html`, self-contained, light theme, Chart.js CDN):
+  - KPI strip: Perfect %, Perfectable left, Rate/hr, ETA, **Blind agreement %**, **Your agreement %**, Unrecoverable, Heal running.
+  - One trend line: **Perfectable Remaining** (down=good) + Perfect % on a second axis. The single most honest progress metric.
+  - **Run blind audit** button → re-reads rows the system claims correct and shows match/MISMATCH per row.
+  - **Verify with your own eyes** lane → image next to stored number, ✓ Correct / ✗ Wrong (type the right 9 digits → row corrected immediately as manual+reviewed).
+- **Convergence trend logging** (`meter_archive.convergence_snapshot` table): the strict-backfill daemon records a snapshot each cycle (~2 min) → `perfectable_remaining`, `authoritative`, `perfect_pct`, etc.
+- **Audit-the-monitor log** (`meter_archive.audit_result` table): every blind AI re-read and human spot-check is stored, so agreement % is computed from real independent checks, not self-assessment.
+- **New helpers** in `meter_archive.py`: `convergence_stats`, `record_convergence_snapshot`, `convergence_history`, `random_perfect_rows`, `record_audit_result`, `audit_summary`.
+- **New endpoints** in `dashboard.py`:
+  - `GET /api/cam/convergence` (stats + trend + rate/ETA + audit summary + heal state)
+  - `POST /api/cam/convergence/audit` (blind re-read of N claimed-correct rows; exact-match because it re-reads the SAME image)
+  - `GET /api/cam/convergence/verify-batch` (N rows with image URL + stored value)
+  - `POST /api/cam/convergence/verify` (record human verdict; correct on disagreement)
+
+**Why exact-match is a strong audit:** the blind re-read uses the SAME archived JPEG with no hint/anchor. A correct system must reproduce the identical 9 digits, so any mismatch is a real contradiction — not model noise about a moving meter.
+
+**Verified live (2026-06-23 16:41 deploy):**
+- Service `active`; page renders; no TemplateNotFound/Traceback.
+- `GET /api/cam/convergence`: `perfect_pct=11.7`, `perfectable_remaining=770`, `total=872`, history logging started.
+- `POST /api/cam/convergence/audit {n:5}`: `checked=2 agreed=2 agreement_pct=100.0` (both claimed-correct rows reproduced exactly: `94796505`, `94793774`). Rows whose images were evicted are skipped.
+- `verify-batch` returns rows with `img_available` flags.
+- Note: when the heal worker and a blind audit run together they can hit oracle **HTTP 429** rate limits; both paths skip failed reads gracefully (audit just checks fewer rows), no crash.
+
+**Net:** progress is now monitored by one honest line (perfectable-remaining → 0) plus two independent agreement checks (blind AI re-read, human eyes) that exist specifically to catch the monitor lying. URL: `https://sprinklers.savagepace.com/cam/convergence`.
+
+---
+
 ## Plumbing Permit — Irrigation Water Tap
 
 **Status:** Application submitted 2026-05-21 via Duvall permit portal. **Permit #26-175.** Currently in Administrative Review.

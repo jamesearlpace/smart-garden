@@ -42,6 +42,13 @@ AUTHORITY_MODEL = os.environ.get("METER_ORACLE_AUTHORITY_MODEL", "gpt-4o")
 # Mean luma below this = a dark/night frame the meter can't be read on; skip the
 # (paid) model calls and just log staleness so we don't burn cost on black frames.
 DARK_THRESHOLD = float(os.environ.get("METER_AUDIT_DARK", "35"))
+# Exclude outage-like windows from quality scoring: when lock age is very old
+# the meter likely wasn't receiving fresh frames (internet/cam down), so model
+# quality metrics from that period are not actionable.
+OUTAGE_STALE_S = float(os.environ.get("METER_AUDIT_OUTAGE_STALE_S", "7200"))
+# Guard against obvious hallucinated 8-digit/garbled high-digit values.
+SANE_MIN = int(os.environ.get("METER_AUDIT_SANE_MIN", "90000000"))
+SANE_MAX = int(os.environ.get("METER_AUDIT_SANE_MAX", "99999999"))
 
 
 def _conn():
@@ -185,6 +192,37 @@ def report(hours=24):
     skips = sum(1 for r in rows if r[9] == "dark-skip")
     if skips:
         print(f"dark frames skipped: {skips}")
+
+    # Cleaner score for model quality work: ignore outage/no-frame windows,
+    # require whole-cf agreement between models, and drop obvious hallucinations.
+    def _trusted_row(r):
+        note = (r[9] or "")
+        if note in ("dark-skip", "no-frame"):
+            return False
+        if r[7] is None:  # needs lock_error
+            return False
+        if r[6] != 1:     # require mini/gpt4o agreement on whole-cf
+            return False
+        age = r[2]
+        if age is not None and age >= OUTAGE_STALE_S:
+            return False
+        g4 = r[5]
+        if g4 is None or not (SANE_MIN <= int(g4) <= SANE_MAX):
+            return False
+        return True
+
+    trusted = [r for r in rows if _trusted_row(r)]
+    print("--- trusted subset (outage/dark filtered, agreement required) ---")
+    print(f"trusted samples: {len(trusted)} of {len(rows)}")
+    if trusted:
+        terrs = sorted(abs(int(r[7])) for r in trusted)
+        tages = [r[2] for r in trusted if r[2] is not None]
+        pct = lambda k: 100 * sum(1 for e in terrs if e <= k) / len(terrs)
+        print(f"lock error |counts|: median={_median(terrs)}  max={max(terrs)}  "
+              f"| within 10={pct(10):.0f}%  within 100={pct(100):.0f}%  "
+              f"whole-cf exact (<1000)={pct(1000):.0f}%")
+        if tages:
+            print(f"staleness (s): median={_median(tages):.0f}  max={max(tages):.0f}")
 
 
 if __name__ == "__main__":

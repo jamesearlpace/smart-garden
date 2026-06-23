@@ -2903,6 +2903,15 @@ def create_app(config, engine, weather, billing):
     # A readable meter (real use or static) reads consistently within a few
     # counts, so a tight tol commits only genuinely readable states.
     ORACLE_CORROB_TOL = float(os.environ.get("METER_ORACLE_CORROB_TOL", "40"))
+    # Authority confirm tolerance (counts): strict whole-cf floor matching can
+    # false-fail near a cubic-foot boundary (e.g. 94730.890 vs 94731.090), even
+    # though both reads are effectively the same state on blurry frames.
+    ORACLE_AUTH_MATCH_COUNTS = int(
+        os.environ.get("METER_ORACLE_AUTH_MATCH_COUNTS", "1000"))
+    # Soft-hint fallback should not authorize large idle jumps on ambiguous
+    # frames. Allow it for sprinkler-on flow, or small forward adjustments.
+    ORACLE_SOFT_HINT_MAX_ADVANCE = int(
+        os.environ.get("METER_ORACLE_SOFT_HINT_MAX_ADVANCE", "2500"))
     # A forward step this small (counts) with no sprinkler running is in the
     # last-digit GLARE-NOISE range — real household water use (shower/toilet/tap)
     # moves the register far more. Tiny steps need an exact-repeat to commit, so
@@ -3361,37 +3370,63 @@ def create_app(config, engine, weather, billing):
             # when both models resolve to the same name (no double charge).
             if (_authority and ORACLE_AUTHORITY_MODEL
                     and ORACLE_AUTHORITY_MODEL != ORACLE_HEARTBEAT_MODEL):
-                # Read UNBIASED (hint=None): the hint's high_prefix comes from the
-                # current lock, which may be the very over-read we're trying to
-                # correct down — feeding it back would bias the authority into
-                # confirming the bad prefix. The strong model reads the odometer
-                # straight; if glare garbles its high digits the whole-cf won't
-                # match and the move simply holds (fails safe).
+                # First pass stays UNBIASED (hint=None): for consequential moves,
+                # we don't want the lock prefix to sway the authority model.
+                def _authority_match(res):
+                    aval_local = res.get("value")
+                    if (not res.get("ok") or res.get("confidence") == "low"
+                            or not res.get("readable") or aval_local is None
+                            or aval_local < anchor - 5):
+                        return False
+                    return abs(int(aval_local) - int(val)) <= ORACLE_AUTH_MATCH_COUNTS
+
                 ares = vision_oracle.read_meter(
                     frame, rotate180=True, hint=None,
                     model=ORACLE_AUTHORITY_MODEL)
                 _oracle_state["calls"] += 1
                 cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+                used_soft_hint = False
+
+                # On very blurry frames, an unbiased read can flip the leading
+                # digit (e.g. 94xxxxxx -> 54xxxxxx) even when the corroborated
+                # heartbeat is stable. For FORWARD moves only, take one extra
+                # soft-hinted authority pass anchored to the heartbeat candidate.
+                # Down-corrections remain unbiased-only to avoid lock-prefix bias.
+                allow_soft_hint = False
+                if lg is not None and val is not None and val >= lg:
+                    step = int(val) - int(lg)
+                    allow_soft_hint = bool(zone_on) or step <= ORACLE_SOFT_HINT_MAX_ADVANCE
+
+                if (not _authority_match(ares) and allow_soft_hint):
+                    soft_hint = {
+                        "last_value": int(val),
+                        "high_prefix": f"{int(val):09d}"[:4],
+                    }
+                    sres = vision_oracle.read_meter(
+                        frame, rotate180=True, hint=soft_hint,
+                        model=ORACLE_AUTHORITY_MODEL)
+                    _oracle_state["calls"] += 1
+                    cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+                    if _authority_match(sres):
+                        ares = sres
+                        used_soft_hint = True
+
+                if not _authority_match(ares):
+                    log.info("authority(%s) could not confirm move %09d "
+                             "(res=%s) — move held",
+                             ORACLE_AUTHORITY_MODEL, val, ares)
+                    _oracle_state["pending_val"] = None
+                    return
+
                 aval = ares.get("value")
-                if (not ares.get("ok") or ares.get("confidence") == "low"
-                        or not ares.get("readable") or aval is None
-                        or aval < anchor - 5):
-                    log.info("authority(%s) read not trusted (%s) — move %09d "
-                             "held", ORACLE_AUTHORITY_MODEL, ares, val)
-                    _oracle_state["pending_val"] = None
-                    return
-                # The authority must agree on the WHOLE cubic feet (the reliable
-                # digits — the last 3 jitter under glare on either model). If it
-                # does, COMMIT THE AUTHORITY'S value (it's the better reader); if
-                # not, the move is unsafe — hold and re-evaluate next cycle.
-                if (aval // 1000) != (val // 1000):
-                    log.info("authority(%s) %09d disagrees with heartbeat %09d "
-                             "(whole-cf) — move held",
+                if used_soft_hint:
+                    log.info("authority(%s) confirmed with soft hint: %09d "
+                             "(heartbeat had %09d)",
                              ORACLE_AUTHORITY_MODEL, aval, val)
-                    _oracle_state["pending_val"] = None
-                    return
-                log.info("authority(%s) confirmed move: %09d (heartbeat had %09d)",
-                         ORACLE_AUTHORITY_MODEL, aval, val)
+                else:
+                    log.info("authority(%s) confirmed move: %09d "
+                             "(heartbeat had %09d)",
+                             ORACLE_AUTHORITY_MODEL, aval, val)
                 val = aval
             _oracle_state["pending_val"] = None
             if meter_reader.reanchor(val, ts=now, source="oracle"):

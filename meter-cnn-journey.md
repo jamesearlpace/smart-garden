@@ -309,3 +309,33 @@ Spent the rest of the session honestly stress-testing whether the CNN could be s
 - Their CNNs generalize because they train on THOUSANDS of DIFFERENT meters. We have ONE meter with a climbing leading edge → their diversity advantage doesn't transfer. Our single-meter coverage problem is structurally different (and in that sense harder).
 
 **VERDICT:** The reader IS the LLM (gpt-4o-mini heartbeat + gpt-4o on moves). The CNN is dead weight on the live path and cannot be rescued by narrowing scope, a bigger model, or a different architecture on THIS hardware/data. The only theoretical paths left both need things James has ruled out or that don't pay off: (a) reduce glare = hardware (declined); (b) thousands of diverse meters = N/A; (c) distill gpt-4o reads into a bigger local student model = still hits the same glare information-loss wall, and `mini` already killed the cost motive. **Whole-cubic-foot is accurate and that's the win. Don't spend more nights on the CNN.**
+
+## 2026-06-22 — Codex evaluation + lock-arbiter hardening
+
+### What we measured (explicitly excluding outage concerns)
+- Live cam telemetry proved there was a real outage/stale window (long lock-age rows with missing model reads). Per your instruction, those periods are now separated from quality scoring.
+- Raw 24-48h audit headlines were still noisy (hallucinated `54xxxxxx`/`59xxxxxx` high-confidence reads and outage-stale rows), so the single raw metric was misleading by itself.
+- On current blurry frames, unbiased authority reads frequently flip the leading digits (`94...` -> `54...`) and fail lock-moving confirmations even when heartbeat/corroboration are stable.
+
+### Deployed fixes (Acer `~/smart-garden-server`)
+1. `dashboard.py` authority confirm fallback:
+  - Keep the first authority pass unbiased (`hint=None`).
+  - If that fails on a FORWARD move, do one extra soft-hinted authority read anchored to the heartbeat candidate.
+  - This is constrained to avoid creating new drift paths.
+2. `dashboard.py` authority match rule:
+  - Replaced strict whole-cf floor equality with count tolerance (`METER_ORACLE_AUTH_MATCH_COUNTS`, default `1000`) to avoid false disagreement at cubic-foot boundaries.
+3. `dashboard.py` soft-hint safety cap:
+  - Added `METER_ORACLE_SOFT_HINT_MAX_ADVANCE` (default `2500`) so soft-hint fallback cannot authorize large idle jumps from ambiguous frames.
+  - Large moves still require stronger evidence and stay blocked by existing physics guards.
+4. `meter_audit.py` trusted reporting subset:
+  - Added outage/sanity-aware scoring in report output:
+    - excludes dark/no-frame rows,
+    - excludes stale outage-like rows (`METER_AUDIT_OUTAGE_STALE_S`, default `7200`),
+    - requires model agreement,
+    - filters obvious hallucinated value ranges.
+  - Keeps the original raw report AND adds a trusted-subset section so we can compare honestly.
+
+### Why this is the current best path
+- The dominant current failure is ambiguity on blurry frames, not missing guardrails.
+- These changes improve decision quality without reopening the catastrophic jump/crash classes we already closed.
+- Internet-down windows are now explicitly excluded from the quality score so they do not pollute model/arbitration evaluation.

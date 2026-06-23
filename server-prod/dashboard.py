@@ -3057,11 +3057,17 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_HEAL_TOL_COUNTS = int(
         os.environ.get("METER_ARCHIVE_HEAL_TOL_COUNTS", "1500"))
     ARCHIVE_HEAL_LOOKBACK_MIN = int(
-        os.environ.get("METER_ARCHIVE_HEAL_LOOKBACK_MIN", "720"))
+        os.environ.get("METER_ARCHIVE_HEAL_LOOKBACK_MIN", "240"))
+    # Per-pass budget for the background per-frame re-read (authority-model reads
+    # of suspect frames). Each archive cycle (~60s) re-reads up to this many, so
+    # a big drifted backlog is cleaned over several minutes without a cost spike.
+    ARCHIVE_REREAD_BUDGET = int(
+        os.environ.get("METER_ARCHIVE_REREAD_BUDGET", "25"))
     _archive_heal_state = {
         "reconciles": 0, "rows": 0, "last_ts": 0.0,
         "last_from": None, "last_to": None,
     }
+    _archive_reread_state = {"running": False, "pending": 0, "reread": 0}
     _reconnect_backfill = {
         "pending": False,
         "start_ts": None,
@@ -3406,16 +3412,25 @@ def create_app(config, engine, weather, billing):
         return lg
 
     def _archive_reconcile_to_lock(trusted_lock, captured_dt):
-        """Snap provably-impossible-high archive rows back to the trusted lock.
+        """Self-heal drifted archive history by RE-READING each suspect frame
+        from its own archived image — never by flattening to a single value.
 
-        The meter is monotonic, so the oracle-trusted lock is the all-time-high
-        reading. Any archive row above it (beyond a small physical-lead
-        tolerance) cannot be real history — it's a drifted CNN/lock chain. We
-        rewrite those rows down to the trusted lock automatically. Cheap-gated:
-        we first check the window's MAX and only touch the DB when an
-        impossible-high row actually exists, so this is a no-op in steady state.
+        Earlier this flattened every impossible-high row to the trusted lock.
+        That fixed the live value but was wrong for OLD rows: the meter is
+        monotonic, so an hour ago the true reading was genuinely lower than the
+        lock is now — flattening made those cards read too high and stop matching
+        their own pictures. The image IS the ground truth, so the correct heal is
+        to re-read each suspect frame (unbiased) and write its OWN true value.
+
+        Cheap-gated: only spins up the background re-reader when suspect rows
+        actually exist (impossible-high, or previously flat-reconciled). The
+        re-read runs OFF the upload path in a budgeted background thread so it
+        never blocks frame ingest, and self-limits (corrected rows drop out of
+        the suspect set, so it converges and then idles).
         """
         if not ARCHIVE_HEAL_ENABLED or trusted_lock is None:
+            return
+        if _archive_reread_state.get("running"):
             return
         try:
             import meter_archive
@@ -3424,25 +3439,98 @@ def create_app(config, engine, weather, billing):
                 minutes=max(5, ARCHIVE_HEAL_LOOKBACK_MIN))).isoformat(
                     timespec="seconds")
             threshold = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
-            mx = meter_archive.max_reading_in(start, end)
-            if mx is None or mx <= threshold:
-                return  # nothing impossibly high → no-op
-            n = meter_archive.reconcile_above(
-                threshold=threshold, new_value=int(trusted_lock),
-                start=start, end=end)
-            if n > 0:
+            pending = meter_archive.count_suspect(start, end, threshold)
+            if pending <= 0:
+                return
+            _archive_reread_state["running"] = True
+            _archive_reread_state["pending"] = int(pending)
+            _threading.Thread(
+                target=_archive_reread_worker,
+                args=(start, end, int(trusted_lock), int(threshold)),
+                daemon=True, name="archive-reread").start()
+        except Exception as e:
+            log.debug("archive reconcile gate failed: %s", e)
+
+    def _archive_reread_worker(start, end, trusted_lock, threshold):
+        """Background: re-read up to ARCHIVE_REREAD_BUDGET suspect frames with the
+        authority model (unbiased — the image is the truth) and write each frame's
+        OWN value. Forward-only + bounded by the trusted lock so a glare misread
+        can't push a row backward or above the monotonic ceiling."""
+        reread = 0
+        try:
+            import meter_archive
+            try:
+                import vision_oracle
+            except Exception:
+                return
+            if not vision_oracle.available():
+                return
+            suspects = meter_archive.suspect_rows(
+                start, end, threshold, limit=ARCHIVE_REREAD_BUDGET)
+            if not suspects:
+                return
+            # The unbiased oracle read of each frame IS the truth, so we bound it
+            # only by the meter's hard monotonic floor (anchor_value) and the
+            # trusted-lock ceiling. We deliberately do NOT reject "below the
+            # previous row" — the previous rows may themselves be drifted-high
+            # (that's what we're fixing), and a drifted neighbor floor is exactly
+            # what trapped the old forward-only heal.
+            floor = int(getattr(meter_reader, "anchor_value", 0) or 0)
+            ceil = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
+            for row in suspects:
+                ts = row.get("ts")
+                fpath = os.path.join(
+                    ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
+                if not ts or not os.path.exists(fpath):
+                    continue
+                try:
+                    with open(fpath, "rb") as f:
+                        frame = f.read()
+                except OSError:
+                    continue
+                # UNBIASED read — no last_value hint, so a drifted neighbor can't
+                # pull the answer toward the wrong number. The image alone.
+                res = vision_oracle.read_meter(
+                    frame, rotate180=True, hint=None,
+                    model=ORACLE_AUTHORITY_MODEL)
+                _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
+                _oracle_state["calls"] += 1
+                cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+                if (not res.get("ok") or not res.get("readable")
+                        or res.get("confidence") == "low"):
+                    continue
+                v = res.get("value")
+                if v is None:
+                    continue
+                v = int(v)
+                # Bound by the meter's monotonic floor and the trusted-lock
+                # ceiling. Anything in between is a plausible historical value.
+                if v < floor or v > ceil:
+                    continue
+                # reviewed=True so this authoritative per-frame read becomes a
+                # HARD anchor — the strict backfill keeps reviewed rows and will
+                # not overwrite it on a later pass (otherwise the forward-only
+                # reprocess re-drifts it). The interpolation between these true
+                # anchors is then correct instead of flattening to the lock.
+                if meter_archive.update_reading(
+                        ts, v, res.get("confidence", "high"),
+                        source="oracle", reviewed=True):
+                    reread += 1
+            if reread > 0:
                 _archive_heal_state["reconciles"] += 1
-                _archive_heal_state["rows"] += int(n)
+                _archive_heal_state["rows"] += int(reread)
                 _archive_heal_state["last_ts"] = time.time()
-                _archive_heal_state["last_from"] = int(mx)
                 _archive_heal_state["last_to"] = int(trusted_lock)
                 log.warning(
-                    "ARCHIVE-HEAL: reconciled %d impossible-high archive row(s) "
-                    "(max %09d -> trusted lock %09d) — display/history snapped "
-                    "back to truth automatically, NO manual step",
-                    n, mx, int(trusted_lock))
+                    "ARCHIVE-HEAL: re-read %d suspect archive frame(s) to their "
+                    "OWN true value (bounded <= trusted lock %09d) — history "
+                    "matches the images, NO manual step", reread, trusted_lock)
         except Exception as e:
-            log.debug("archive reconcile failed: %s", e)
+            log.debug("archive reread worker failed: %s", e)
+        finally:
+            _archive_reread_state["running"] = False
+            _archive_reread_state["reread"] = (
+                int(_archive_reread_state.get("reread", 0)) + reread)
 
     def _archive_frame(frame, captured_dt):
         """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
@@ -5093,10 +5181,11 @@ def create_app(config, engine, weather, billing):
             },
             "archive_heal": {
                 "enabled": bool(ARCHIVE_HEAL_ENABLED),
-                "reconciles": int(_archive_heal_state.get("reconciles", 0)),
-                "rows": int(_archive_heal_state.get("rows", 0)),
+                "reread_passes": int(_archive_heal_state.get("reconciles", 0)),
+                "rows_reread": int(_archive_heal_state.get("rows", 0)),
+                "running": bool(_archive_reread_state.get("running")),
+                "pending": int(_archive_reread_state.get("pending", 0)),
                 "last_ts": _archive_heal_state.get("last_ts") or None,
-                "last_from": _archive_heal_state.get("last_from"),
                 "last_to": _archive_heal_state.get("last_to"),
                 "lock_trusted": (_lock_trusted_value() is not None),
             },
@@ -6218,8 +6307,20 @@ def create_app(config, engine, weather, billing):
           * prefers constrained CNN on the exact frame,
           * selectively uses oracle only when confidence is weak,
           * enforces monotonic + physics + bounded prefix progression.
+
+        HARD CEILING: when the live lock is oracle-trusted, NOTHING may be
+        written above it (the meter is monotonic → the lock is the all-time
+        high). This stops the forward-only reprocess from RE-DRIFTING history
+        upward off a still-high neighbor while the per-frame heal walks it back.
         """
         import meter_archive
+        hard_ceiling = None
+        try:
+            tl = _lock_trusted_value()
+            if tl is not None:
+                hard_ceiling = int(tl) + ARCHIVE_HEAL_TOL_COUNTS
+        except Exception:
+            hard_ceiling = None
         try:
             import vision_oracle
             oracle_ok = bool(vision_oracle.available())
@@ -6483,6 +6584,10 @@ def create_app(config, engine, weather, billing):
                 new_src = "propagated"
                 new_conf = "propagated"
                 reason = "no-trusted-candidate"
+                new_val = prev_val if prev_val is not None else cur_val
+                new_src = "propagated"
+                new_conf = "propagated"
+                reason = "no-trusted-candidate"
 
                 # If this row is bracketed by trusted anchors, infer an
                 # in-between value from timeline position (still bounded by
@@ -6517,6 +6622,25 @@ def create_app(config, engine, weather, billing):
             if new_val is None:
                 by_source["kept"] += 1
                 continue
+
+            # HARD CEILING: never let a reprocess write a value above the trusted
+            # lock (the meter's all-time high). Stops the forward-only walk from
+            # re-drifting history upward off a still-high neighbor. If the only
+            # candidate exceeds truth, keep the existing row unchanged rather than
+            # cementing an impossible value (the per-frame heal fixes it properly).
+            if (hard_ceiling is not None and new_val is not None
+                    and int(new_val) > hard_ceiling):
+                if cur_val is not None and int(cur_val) <= hard_ceiling:
+                    new_val = int(cur_val)
+                    new_src = row.get("source") or new_src
+                    new_conf = row.get("confidence") or new_conf
+                else:
+                    # advance prev so later rows still anchor sensibly, but skip
+                    # writing an above-truth value
+                    prev_val = min(int(new_val), hard_ceiling)
+                    prev_ep = _epoch(ts) or prev_ep
+                    by_source["kept"] += 1
+                    continue
 
             if new_src == "propagated":
                 uncertain += 1

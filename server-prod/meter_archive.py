@@ -328,6 +328,44 @@ def max_reading_in(start, end):
         c.close()
 
 
+def suspect_rows(start, end, threshold, limit=50):
+    """Rows in [start, end] that need a fresh PER-FRAME re-read because they no
+    longer faithfully reflect their own image:
+      * reading ABOVE ``threshold`` (impossible-high vs the trusted lock), OR
+      * source ``reconciled`` (an earlier flat-to-lock heal that erased the real
+        per-frame value — these read flat at the lock, so they're not "above" it
+        but are still wrong for older timestamps).
+    Never returns ``manual`` rows (human corrections are authoritative). NEWEST
+    first so the visible/recent history (whose images still exist) is fixed
+    before older rows that may have been evicted. Returns row dicts."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT * FROM archive_frame "
+            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+            "AND source!='manual' "
+            "AND (reading>? OR source='reconciled') "
+            "ORDER BY ts DESC LIMIT ?",
+            (start, end, int(threshold), int(limit))).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def count_suspect(start, end, threshold):
+    """Cheap count of rows needing a per-frame re-read (see suspect_rows)."""
+    c = _conn()
+    try:
+        r = c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+            "AND source!='manual' AND (reading>? OR source='reconciled')",
+            (start, end, int(threshold))).fetchone()
+        return int(r["n"]) if r else 0
+    finally:
+        c.close()
+
+
 def reconcile_above(threshold, new_value, start, end):
     """Self-heal: collapse provably-impossible-high archive rows onto the
     trusted live lock value.

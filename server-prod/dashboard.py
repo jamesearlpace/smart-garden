@@ -3335,6 +3335,23 @@ def create_app(config, engine, weather, billing):
                             "%d in %.0fs (lock %s held) — garble, consensus "
                             "ignored", val, val - lg, phys_max, elapsed, lg)
                 return
+            # ── SYMMETRIC GUARD for DOWN-corrections ────────────────────────
+            # The same systematic garble can read LOW (mini AND gpt-4o transpose
+            # the high digits DOWN on the same blurry frame, e.g. 094672->094612),
+            # which fires the down-correction and CRASHES the lock down ~60 ft³.
+            # The meter is monotonic, so a down-correction only ever fixes a prior
+            # over-read — and the forward guard above now prevents big over-reads,
+            # so a LARGE downward "correction" (> ORACLE_MAX_ADVANCE) is almost
+            # certainly a garbled-low read, NOT a real overshoot. Never crash the
+            # lock down on one frame's consensus; hold and let a manual re-anchor
+            # handle a genuine big overshoot (rare, deserves human eyes).
+            if (lg is not None and val is not None and val < lg
+                    and (lg - val) > ORACLE_MAX_ADVANCE):
+                _oracle_state["pending_val"] = None
+                log.warning("oracle BLOCKED impossible down-correction %09d: -%d > "
+                            "cap %d (lock %s held) — garbled-low read, consensus "
+                            "ignored", val, lg - val, ORACLE_MAX_ADVANCE, lg)
+                return
             # ── Hybrid authority confirm ────────────────────────────────────
             # The cheap heartbeat model (mini) decided to MOVE the lock. Before
             # we actually move it, confirm with the stronger model (gpt-4o) on

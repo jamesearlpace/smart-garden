@@ -239,6 +239,34 @@ def update_reading(ts, reading, confidence, source, reviewed=True):
         c.close()
 
 
+def reconcile_window(start_ts, end_ts):
+    """Re-run trusted-anchor interpolation for a time window.
+
+    Used by reconnect recovery: when the camera returns after a long gap,
+    re-apply interpolation across rows in the affected window so stale/held
+    lock rows are corrected automatically once trusted anchors exist.
+    """
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT ts, source, confidence, reviewed "
+            "FROM archive_frame WHERE ts>=? AND ts<=? AND reading IS NOT NULL "
+            "ORDER BY ts ASC",
+            (start_ts, end_ts),
+        ).fetchall()
+        anchors = [
+            r["ts"] for r in rows
+            if _is_trusted_anchor(r["source"], r["confidence"], r["reviewed"])
+        ]
+        updated = 0
+        for ts in anchors:
+            updated += int(_auto_interpolate_to_anchor(c, ts) or 0)
+        c.commit()
+        return {"anchors": len(anchors), "updated": int(updated)}
+    finally:
+        c.close()
+
+
 def propagate_delta(anchor_ts, delta):
     """Shift subsequent unreviewed lock-derived rows by ``delta`` counts.
 

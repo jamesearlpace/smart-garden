@@ -229,6 +229,20 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
    - left anchor `94780531`, right anchor `94780542`
    - middle rows auto-filled to `94780535`, `94780538`.
 
+**2026-06-23 reconnect self-heal (automatic backfill):**
+- Implemented disconnect-aware auto backfill so this no longer needs manual one-off scripts.
+- New behavior in `dashboard.py`:
+   - detects long cam upload gaps (`METER_RECONNECT_GAP_SECS`, default 45s)
+   - marks reconnect backfill pending with a bounded lookback window
+   - tags first post-gap OCR frames to force oracle confirmation quickly
+   - repeatedly runs archive reconciliation while pending (bounded attempts)
+- New helper in `meter_archive.py`:
+   - `reconcile_window(start_ts, end_ts)` re-applies trusted-anchor interpolation for all anchors in the window
+- Added visibility in `/api/cam/status` under `archive.reconnect_backfill`.
+- Validation:
+   - temp-db outage sequence test produced inferred middle rows automatically
+   - live status API shows reconnect_backfill state fields.
+
 **Azure-side guardrail attempt:**
 - Tried creating a subscription budget via CLI + REST for `f94c002c-2212-4bfb-b7a4-f8898b7ea4e5`.
 - Blocked by RBAC (`RBACAccessDenied`) on Cost Management budget write at current account permissions.

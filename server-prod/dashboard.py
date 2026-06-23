@@ -2829,8 +2829,25 @@ def create_app(config, engine, weather, billing):
         os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.55"))
     ARCHIVE_REPROCESS_CONSENSUS_COUNTS = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS", "80"))
+    # Reconnect recovery: after a long cam gap, automatically reconcile the
+    # affected archive window so held/propagated rows are backfilled once
+    # trusted anchors are available.
+    RECONNECT_BACKFILL_ENABLED = (
+        os.environ.get("METER_RECONNECT_BACKFILL_ENABLED", "1") == "1")
+    RECONNECT_GAP_SECS = float(
+        os.environ.get("METER_RECONNECT_GAP_SECS", "45"))
+    RECONNECT_LOOKBACK_MINUTES = int(
+        os.environ.get("METER_RECONNECT_LOOKBACK_MINUTES", "180"))
+    RECONNECT_BACKFILL_MAX_ATTEMPTS = int(
+        os.environ.get("METER_RECONNECT_BACKFILL_MAX_ATTEMPTS", "60"))
     _archive_state = {"last_ts": 0.0, "bytes": 0, "files": None, "saved": 0,
                       "evicted": 0, "last_reread_ts": 0.0}
+    _reconnect_backfill = {
+        "pending": False,
+        "start_ts": None,
+        "gap_s": 0.0,
+        "attempts": 0,
+    }
     _archive_lock = _threading.Lock()
 
     def _archive_init():
@@ -3086,6 +3103,36 @@ def create_app(config, engine, weather, billing):
                         ts_iso, name,
                         reading=arc_reading,
                         confidence=arc_conf, source=arc_source)
+
+                    # If we recently detected a long upload gap (cam
+                    # disconnect/reconnect), re-run interpolation in the
+                    # affected window automatically so stale propagated rows
+                    # self-heal once trusted anchors exist.
+                    if RECONNECT_BACKFILL_ENABLED and _reconnect_backfill.get("pending"):
+                        try:
+                            start_ts = _reconnect_backfill.get("start_ts")
+                            if not start_ts:
+                                start_ts = (
+                                    captured_dt
+                                    - timedelta(minutes=max(1, RECONNECT_LOOKBACK_MINUTES))
+                                ).isoformat(timespec="seconds")
+                            rec = meter_archive.reconcile_window(start_ts, ts_iso)
+                            _reconnect_backfill["attempts"] = int(
+                                _reconnect_backfill.get("attempts", 0)) + 1
+                            if int(rec.get("updated", 0)) > 0:
+                                _reconnect_backfill["pending"] = False
+                                log.info(
+                                    "reconnect backfill applied: gap=%.1fs window=%s..%s updated=%s anchors=%s",
+                                    float(_reconnect_backfill.get("gap_s") or 0.0),
+                                    start_ts, ts_iso,
+                                    rec.get("updated", 0), rec.get("anchors", 0))
+                            elif _reconnect_backfill["attempts"] >= max(1, RECONNECT_BACKFILL_MAX_ATTEMPTS):
+                                _reconnect_backfill["pending"] = False
+                                log.info(
+                                    "reconnect backfill expired after %s attempts (no updates)",
+                                    _reconnect_backfill["attempts"])
+                        except Exception as _re:
+                            log.debug("reconnect backfill failed: %s", _re)
                 except Exception as _ae:
                     log.debug("archive index failed: %s", _ae)
                 # Evict oldest until back under the cap (keep at least 1 file).
@@ -3906,7 +3953,16 @@ def create_app(config, engine, weather, billing):
             if item is None:
                 time.sleep(0.25)
                 continue
-            captured_ts, frame = item
+            reconnect_force = False
+            if isinstance(item, tuple):
+                if len(item) >= 2:
+                    captured_ts, frame = item[0], item[1]
+                    if len(item) >= 3:
+                        reconnect_force = bool(item[2])
+                else:
+                    continue
+            else:
+                continue
             try:
                 # 1) FAST FREE PATH: ask the custom CNN first. If it reads all 9
                 #    digits with high confidence, use that — no RapidOCR, no
@@ -4040,8 +4096,13 @@ def create_app(config, engine, weather, billing):
                     # force=True on a suspicious big CNN jump so the oracle
                     # corroborates it NOW (bypassing the rate limit) before the
                     # lock is allowed to move that far.
+                    # Also force once right after a long reconnect gap so we
+                    # quickly get a trusted post-gap anchor for backfill.
                     _maybe_oracle(frame, entry, captured_ts, cnn_digits,
-                                  force=cnn_big_jump)
+                                  force=(cnn_big_jump or reconnect_force))
+                    if reconnect_force:
+                        cam_ocr_stats["oracle_forced_reconnect"] = (
+                            cam_ocr_stats.get("oracle_forced_reconnect", 0) + 1)
                     # Daily reader-split counters for cost-ramp reporting.
                     try:
                         import cnn_metrics
@@ -4176,9 +4237,6 @@ def create_app(config, engine, weather, billing):
         cam_state["timestamp"] = capture_dt.isoformat()
         cam_state["transfer_s"] = round(transfer_s, 2)
         cam_state["ocr_count"] += 1
-        # Long-term rolling archive (1 frame/min, disk-capped). Independent of
-        # the OCR path below — the cam keeps pushing every ~5s for reading.
-        _archive_frame(data, capture_dt)
         # ── Device/WiFi telemetry ──────────────────────────────────────
         # gap = secs since the previous frame landed (~5s ideal; a big gap means
         # the cam dropped off the WiFi). Optional X-RSSI/X-Uptime/X-Reconnects
@@ -4189,6 +4247,28 @@ def create_app(config, engine, weather, billing):
         _gap = (_now_ts - cam_state["last_frame_ts"]) if cam_state["last_frame_ts"] else None
         cam_state["last_frame_ts"] = _now_ts
         cam_state["gap_s"] = round(_gap, 2) if _gap is not None else None
+
+        reconnect_force = False
+        if (RECONNECT_BACKFILL_ENABLED and _gap is not None
+                and float(_gap) >= float(RECONNECT_GAP_SECS)):
+            reconnect_force = True
+            back_secs = min(
+                max(float(_gap) + 120.0, 120.0),
+                max(60.0, float(RECONNECT_LOOKBACK_MINUTES) * 60.0),
+            )
+            _reconnect_backfill["pending"] = True
+            _reconnect_backfill["start_ts"] = (
+                capture_dt - timedelta(seconds=back_secs)
+            ).isoformat(timespec="seconds")
+            _reconnect_backfill["gap_s"] = float(_gap)
+            _reconnect_backfill["attempts"] = 0
+            log.info(
+                "cam reconnect gap detected: %.1fs (backfill window starts %s)",
+                float(_gap), _reconnect_backfill["start_ts"])
+
+        # Long-term rolling archive (1 frame/min, disk-capped). Independent of
+        # the OCR path below — the cam keeps pushing every ~5s for reading.
+        _archive_frame(data, capture_dt)
 
         def _hdr_int(name):
             try:
@@ -4224,7 +4304,7 @@ def create_app(config, engine, weather, billing):
                 # image exposes (X-Capture-Time), not plain arrival time, so the
                 # readings table's "Captured" column and the live image agree on
                 # exactly when the cam grabbed the frame.
-                cam_queue.append((capture_dt.timestamp(), data))
+                cam_queue.append((capture_dt.timestamp(), data, reconnect_force))
         return "OK", 200
 
     @app.route("/api/cam/latest")
@@ -4288,6 +4368,12 @@ def create_app(config, engine, weather, billing):
                 "cap_gb": round(ARCHIVE_MAX_BYTES / 1024 ** 3, 2),
                 "saved_session": _archive_state["saved"],
                 "evicted_session": _archive_state["evicted"],
+                "reconnect_backfill": {
+                    "pending": bool(_reconnect_backfill.get("pending")),
+                    "start_ts": _reconnect_backfill.get("start_ts"),
+                    "gap_s": _reconnect_backfill.get("gap_s"),
+                    "attempts": int(_reconnect_backfill.get("attempts", 0)),
+                },
             },
         })
 
@@ -5316,14 +5402,18 @@ def create_app(config, engine, weather, billing):
 
         next_anchor = [None] * n
         next_anchor_strict = [False] * n
+        next_anchor_idx = [None] * n
         next_val = None
         next_is_strict = False
+        next_idx = None
         for i in range(n - 1, -1, -1):
             next_anchor[i] = next_val
             next_anchor_strict[i] = bool(next_is_strict)
+            next_anchor_idx[i] = next_idx
             if strong[i] and rows[i].get("reading") is not None:
                 try:
                     next_val = int(rows[i]["reading"])
+                    next_idx = i
                     src_i = (rows[i].get("source") or "")
                     next_is_strict = bool(
                         int(rows[i].get("reviewed") or 0) == 1
@@ -5346,9 +5436,14 @@ def create_app(config, engine, weather, billing):
         updated = 0
         would_update = 0
         uncertain = 0
+        interpolated = 0
         oracle_calls = 0
         by_source = {"cnn": 0, "oracle": 0, "propagated": 0, "kept": 0}
         changes = []
+
+        left_anchor_val = prev_val if prev_val is not None else None
+        left_anchor_ep = prev_ep
+        left_anchor_trusted = False
 
         for i, row in enumerate(rows):
             ts = row.get("ts")
@@ -5364,6 +5459,9 @@ def create_app(config, engine, weather, billing):
                 if cur_val is not None:
                     prev_val = cur_val
                     prev_ep = _epoch(ts) or prev_ep
+                    left_anchor_val = cur_val
+                    left_anchor_ep = prev_ep
+                    left_anchor_trusted = True
                 by_source["kept"] += 1
                 continue
 
@@ -5488,6 +5586,36 @@ def create_app(config, engine, weather, billing):
                 new_conf = "propagated"
                 reason = "no-trusted-candidate"
 
+                # If this row is bracketed by trusted anchors, infer an
+                # in-between value from timeline position (still bounded by
+                # monotonic + physics + right-anchor guards).
+                right_i = next_anchor_idx[i]
+                if (prev_val is not None and right_v is not None
+                        and right_i is not None and right_i > i
+                        and left_anchor_trusted
+                        and left_anchor_val is not None
+                        and left_anchor_ep is not None
+                        and ep is not None
+                        and right_v >= int(left_anchor_val)
+                        and int(prev_val) <= int(right_v)):
+                    right_ep = _epoch(rows[right_i].get("ts"))
+                    if right_ep is not None and right_ep > float(left_anchor_ep):
+                        frac = (float(ep) - float(left_anchor_ep)) / (
+                            float(right_ep) - float(left_anchor_ep))
+                        frac = max(0.0, min(1.0, frac))
+                        est = int(round(
+                            float(left_anchor_val)
+                            + (float(right_v) - float(left_anchor_val)) * frac
+                        ))
+                        est = max(int(prev_val), min(int(right_v), est))
+                        if _fits(est, prev_val, right_v, max_adv,
+                                 right_strict=right_strict):
+                            new_val = int(est)
+                            new_src = "propagated"
+                            new_conf = "inferred"
+                            reason = "interpolated-between-anchors"
+                            interpolated += 1
+
             if new_val is None:
                 by_source["kept"] += 1
                 continue
@@ -5529,6 +5657,11 @@ def create_app(config, engine, weather, billing):
                 by_source[new_src] += 1
             prev_val = int(new_val)
             prev_ep = ep if ep is not None else prev_ep
+            if (new_src in ("manual", "oracle")
+                    or (new_src == "cnn" and new_conf == "high")):
+                left_anchor_val = int(new_val)
+                left_anchor_ep = prev_ep
+                left_anchor_trusted = True
 
         return {
             "start": start,
@@ -5540,6 +5673,7 @@ def create_app(config, engine, weather, billing):
             "would_update": int(would_update),
             "oracle_calls": int(oracle_calls),
             "uncertain": int(uncertain),
+            "interpolated": int(interpolated),
             "by_source": by_source,
             "changes": changes,
         }

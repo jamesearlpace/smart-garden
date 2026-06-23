@@ -217,6 +217,18 @@ bill_CCF = floor( whole_ft³ / 100 ) = floor( (meter_9digit / 1000) / 100 )
    - **Projected end-of-cycle spend**
    (implemented in `server-prod/templates/cam_archive.html`, refreshed every 30s from `/api/cam/quality`).
 
+**2026-06-23 auto in-between inference (new):**
+- Added automatic interpolation in `server-prod/meter_archive.py` for rows between trusted anchors.
+- Trigger: when a trusted anchor arrives (`manual`, `oracle`, or `cnn` high), lock/propagated rows between the previous trusted anchor and the new anchor are auto-filled.
+- Safeguards:
+   - monotonic only (never decreases)
+   - bounded by max physical flow (`METER_MAX_GPM`)
+   - never rewrites reviewed/manual/oracle/cnn-strong rows
+   - marks inferred rows as `source=propagated`, `confidence=inferred`
+- Verified with isolated temp-DB smoke test:
+   - left anchor `94780531`, right anchor `94780542`
+   - middle rows auto-filled to `94780535`, `94780538`.
+
 **Azure-side guardrail attempt:**
 - Tried creating a subscription budget via CLI + REST for `f94c002c-2212-4bfb-b7a4-f8898b7ea4e5`.
 - Blocked by RBAC (`RBACAccessDenied`) on Cost Management budget write at current account permissions.

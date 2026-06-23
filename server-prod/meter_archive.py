@@ -28,6 +28,10 @@ COUNTS_PER_GAL = COUNTS_PER_CF / GAL_PER_CF       # ~133.69
 # Absolute plumbing flow ceiling (gal/min) used to reject garbled jumps when
 # computing consumption — a single bad reading can't manufacture impossible use.
 MAX_GPM = float(os.environ.get("METER_MAX_GPM", "20"))
+# Keep lock-derived archive readings monotonic by default. If the live lock is
+# temporarily stale and falls behind a recently corrected archive point, clamp
+# the new lock row up to the previous archive reading.
+LOCK_MONOTONIC = os.environ.get("METER_ARCHIVE_LOCK_MONOTONIC", "1") == "1"
 
 
 def _conn():
@@ -35,6 +39,120 @@ def _conn():
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     return c
+
+
+def _is_trusted_anchor(source, confidence, reviewed):
+    """Whether a row is strong enough to anchor interpolation."""
+    if int(reviewed or 0) == 1:
+        return True
+    src = str(source or "").lower()
+    conf = str(confidence or "").lower()
+    if src in ("manual", "oracle"):
+        return True
+    if src == "cnn" and conf == "high":
+        return True
+    return False
+
+
+def _max_forward_counts(elapsed_s):
+    """Physical forward bound for one archive step."""
+    e = max(1.0, float(elapsed_s or 1.0))
+    return int((MAX_GPM / 60.0) * e * COUNTS_PER_GAL * 1.5 + 200)
+
+
+def _auto_interpolate_to_anchor(c, right_ts):
+    """Fill lock/prop rows between trusted anchors ending at right_ts.
+
+    This keeps nearby history coherent automatically when the newest frame gets
+    a trusted reading after several uncertain/stale lock-derived rows.
+    """
+    right = c.execute(
+        "SELECT ts, reading, source, confidence, reviewed "
+        "FROM archive_frame WHERE ts=? AND reading IS NOT NULL",
+        (right_ts,)
+    ).fetchone()
+    if not right:
+        return 0
+    if not _is_trusted_anchor(
+            right["source"], right["confidence"], right["reviewed"]):
+        return 0
+
+    left = None
+    for r in c.execute(
+            "SELECT ts, reading, source, confidence, reviewed "
+            "FROM archive_frame WHERE ts<? AND reading IS NOT NULL "
+            "ORDER BY ts DESC",
+            (right_ts,)).fetchall():
+        if _is_trusted_anchor(r["source"], r["confidence"], r["reviewed"]):
+            left = r
+            break
+    if not left:
+        return 0
+
+    left_ts = left["ts"]
+    left_val = int(left["reading"])
+    right_val = int(right["reading"])
+    if right_val < left_val:
+        return 0
+
+    left_ep = _epoch(left_ts)
+    right_ep = _epoch(right_ts)
+    if left_ep is None or right_ep is None or right_ep <= left_ep:
+        return 0
+
+    rows = c.execute(
+        "SELECT ts, reading, source, confidence, reviewed "
+        "FROM archive_frame WHERE ts>? AND ts<? AND reading IS NOT NULL "
+        "ORDER BY ts",
+        (left_ts, right_ts)
+    ).fetchall()
+    if not rows:
+        return 0
+
+    updated = 0
+    now_s = datetime.now().isoformat(timespec="seconds")
+    prev_val = left_val
+    prev_ep = left_ep
+    for r in rows:
+        # Never rewrite human-reviewed or strong model/cnn rows.
+        if int(r["reviewed"] or 0) == 1:
+            prev_val = int(r["reading"])
+            ep_r = _epoch(r["ts"])
+            prev_ep = ep_r if ep_r is not None else prev_ep
+            continue
+        src = str(r["source"] or "").lower()
+        if src not in ("lock", "propagated"):
+            prev_val = int(r["reading"])
+            ep_r = _epoch(r["ts"])
+            prev_ep = ep_r if ep_r is not None else prev_ep
+            continue
+
+        ep = _epoch(r["ts"])
+        if ep is None:
+            continue
+        frac = (ep - left_ep) / (right_ep - left_ep)
+        frac = max(0.0, min(1.0, frac))
+        est = int(round(left_val + (right_val - left_val) * frac))
+
+        cap = _max_forward_counts(ep - prev_ep)
+        lo = prev_val
+        hi = min(right_val, prev_val + cap)
+        new_val = min(max(est, lo), hi)
+
+        old_val = int(r["reading"])
+        old_conf = str(r["confidence"] or "")
+        if old_val != new_val or src != "propagated" or old_conf != "inferred":
+            c.execute(
+                "UPDATE archive_frame SET reading=?, reading_cf=?, confidence=?, "
+                "source=?, updated_ts=? WHERE ts=?",
+                (new_val, new_val / COUNTS_PER_CF, "inferred",
+                 "propagated", now_s, r["ts"])
+            )
+            updated += 1
+        prev_val = new_val
+        prev_ep = ep
+
+    return updated
 
 
 def ensure_schema():
@@ -60,15 +178,40 @@ def ensure_schema():
 def record(ts, filename, reading=None, confidence="lock", source="lock"):
     """Index a newly archived frame. INSERT OR IGNORE so a re-archive never
     clobbers a reading a human already refined for the same timestamp."""
-    cf = (reading / COUNTS_PER_CF) if reading is not None else None
+    base_reading = int(reading) if reading is not None else None
+    base_conf = confidence
+    base_source = source
     c = _conn()
     try:
+        if LOCK_MONOTONIC and base_source == "lock":
+            prev = c.execute(
+                "SELECT reading FROM archive_frame WHERE ts<? "
+                "AND reading IS NOT NULL ORDER BY ts DESC LIMIT 1",
+                (ts,)).fetchone()
+            prev_val = int(prev["reading"]) if prev and prev["reading"] is not None else None
+            if prev_val is not None:
+                if base_reading is None:
+                    base_reading = prev_val
+                    base_conf = "propagated"
+                    base_source = "propagated"
+                elif base_reading < prev_val:
+                    base_reading = prev_val
+                    base_conf = "propagated"
+                    base_source = "propagated"
+
+        cf = (base_reading / COUNTS_PER_CF) if base_reading is not None else None
         c.execute(
             "INSERT OR IGNORE INTO archive_frame"
             "(ts,filename,reading,reading_cf,confidence,source,reviewed,updated_ts)"
             " VALUES(?,?,?,?,?,?,0,?)",
-            (ts, filename, reading, cf, confidence, source,
+            (ts, filename, base_reading, cf, base_conf, base_source,
              datetime.now().isoformat(timespec="seconds")))
+
+        # If this row is a trusted anchor, automatically smooth uncertain rows
+        # between the previous trusted anchor and this one.
+        if base_reading is not None and _is_trusted_anchor(base_source, base_conf, 0):
+            _auto_interpolate_to_anchor(c, ts)
+
         c.commit()
     finally:
         c.close()
@@ -84,8 +227,61 @@ def update_reading(ts, reading, confidence, source, reviewed=True):
             "source=?,reviewed=?,updated_ts=? WHERE ts=?",
             (reading, cf, confidence, source, 1 if reviewed else 0,
              datetime.now().isoformat(timespec="seconds"), ts))
+
+        # A manual/oracle/cnn-high correction can close a gap; auto-fill the
+        # in-between lock/prop rows immediately.
+        if cur.rowcount > 0 and _is_trusted_anchor(source, confidence, reviewed):
+            _auto_interpolate_to_anchor(c, ts)
+
         c.commit()
         return cur.rowcount > 0
+    finally:
+        c.close()
+
+
+def propagate_delta(anchor_ts, delta):
+    """Shift subsequent unreviewed lock-derived rows by ``delta`` counts.
+
+    Why: when a human corrects one recent frame, nearby lock-baseline rows often
+    share the same offset. Propagating that offset forward keeps history coherent
+    without touching already-reviewed anchors.
+
+    Rules:
+      * start strictly AFTER anchor_ts
+      * update only rows with reviewed=0 and source in ('lock','propagated')
+      * stop at the first reviewed row (manual/oracle anchor)
+    Returns the number of rows updated.
+    """
+    try:
+        delta = int(delta)
+    except Exception:
+        return 0
+    if delta == 0:
+        return 0
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT ts, reading, source, reviewed FROM archive_frame "
+            "WHERE ts>? AND reading IS NOT NULL ORDER BY ts",
+            (anchor_ts,)).fetchall()
+        n = 0
+        now = datetime.now().isoformat(timespec="seconds")
+        for r in rows:
+            src = (r["source"] or "")
+            rev = int(r["reviewed"] or 0)
+            if rev == 1:
+                break
+            if src not in ("lock", "propagated"):
+                continue
+            new_val = int(r["reading"]) + delta
+            c.execute(
+                "UPDATE archive_frame SET reading=?, reading_cf=?, confidence=?, "
+                "source=?, updated_ts=? WHERE ts=?",
+                (new_val, new_val / COUNTS_PER_CF, "propagated",
+                 "propagated", now, r["ts"]))
+            n += 1
+        c.commit()
+        return n
     finally:
         c.close()
 

@@ -334,6 +334,9 @@ Spent the rest of the session honestly stress-testing whether the CNN could be s
     - requires model agreement,
     - filters obvious hallucinated value ranges.
   - Keeps the original raw report AND adds a trusted-subset section so we can compare honestly.
+5. `dashboard.py` near-lock jitter refresh:
+  - If oracle value is within the authority match tolerance of the current lock, treat it as same-state jitter and refresh lock time without moving the value.
+  - This prevents fake "stale" conditions when blurry frames wobble a few digits around the same reading.
 
 ### Why this is the current best path
 - The dominant current failure is ambiguity on blurry frames, not missing guardrails.

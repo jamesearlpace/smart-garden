@@ -3274,6 +3274,13 @@ def create_app(config, engine, weather, billing):
                 prev = _oracle_state.get("pending_val")
                 if d == 0:
                     commit = True                      # confirms the held value
+                elif abs(d) <= ORACLE_AUTH_MATCH_COUNTS:
+                    # Same-state jitter (including tiny negative wobble) should
+                    # refresh the lock timestamp instead of aging into a stale
+                    # state. Keep the existing lock value so we don't bounce on
+                    # sub-cf noise while the image is ambiguous.
+                    commit = True
+                    val = lg
                 elif zone_on and 0 < d <= ceiling:
                     commit = True                      # sprinklers on — real flow
                 elif 0 < d <= ORACLE_NOISE_BAND:

@@ -54,14 +54,14 @@
 {% include '_meternav.html' %}
 <header>
   <a class="back" href="/cam/archive">← Archive</a>
-  <h1>Convergence Monitor</h1>
-  <div class="sub">Are records getting perfect — and can we trust that claim?</div>
+  <h1>Meter History Trust</h1>
+  <div class="sub">Is the meter history trustworthy — and can we prove it?</div>
 </header>
 <main>
   <div class="kpis" id="kpis"></div>
 
   <div class="card">
-    <h2>Perfectable Remaining (lower is better)</h2>
+    <h2>Audit coverage &amp; backlog over time</h2>
     <canvas id="trend" height="90"></canvas>
     <div class="note" id="trendNote">Loading trend…</div>
   </div>
@@ -109,17 +109,19 @@ function renderKpis(d){
   const s = d.stats||{};
   const blind = (d.audit&&d.audit.blind)||{};
   const human = (d.audit&&d.audit.human)||{};
+  const cov = d.coverage||{};
+  const dr = d.drainer||{};
   const cards = [
-    ['Perfect %', (s.perfect_pct!=null? s.perfect_pct+'%':'—'), false],
-    ['Perfectable left', fmt(s.perfectable_remaining), false],
-    ['Rate / hr', fmt(d.rate_per_hr), false],
-    ['ETA (hrs)', fmt(d.eta_hours), false],
-    ['Blind agreement', (blind.agreement_pct!=null? blind.agreement_pct+'%':'—'),
+    ['Trust (agreement)', (blind.agreement_pct!=null? blind.agreement_pct+'%':'—'),
        blind.disagreed>0],
+    ['History checked', (cov.coverage_pct!=null? cov.coverage_pct+'%':'—'), false],
+    ['Frames audited', fmt(cov.audited), false],
+    ['Errors fixed', fmt(dr.total_corrected), false],
     ['Your agreement', (human.agreement_pct!=null? human.agreement_pct+'%':'—'),
        human.disagreed>0],
-    ['Unrecoverable', fmt(s.unrecoverable), false],
-    ['Heal running', (d.archive_heal&&d.archive_heal.running)?'yes':'idle', false],
+    ['Perfectable left', fmt(s.perfectable_remaining), false],
+    ['Total frames', fmt(s.total), false],
+    ['Auditor', (dr.enabled?'on':'off'), false],
   ];
   document.getElementById('kpis').innerHTML = cards.map(c=>
     `<div class="kpi"><div class="label">${c[0]}</div>

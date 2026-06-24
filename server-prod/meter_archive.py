@@ -308,6 +308,44 @@ def oldest_perfectable_rows(limit=5):
         c.close()
 
 
+def unaudited_rows(limit=5):
+    """Rows that have NEVER had an independent blind audit (no audit_result row).
+    Prioritises growing trust COVERAGE across the whole history. Random order so
+    coverage spreads evenly rather than marching front-to-back. Manual rows are
+    skipped (a human already vouched for them)."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT a.* FROM archive_frame a "
+            "WHERE a.reading IS NOT NULL AND a.source!='manual' "
+            "AND a.source!='evicted' "
+            "AND NOT EXISTS (SELECT 1 FROM audit_result r WHERE r.frame_ts=a.ts) "
+            "ORDER BY RANDOM() LIMIT ?",
+            (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def audit_coverage():
+    """How much of the history has been independently blind-checked at least
+    once. Returns {total, audited, coverage_pct}."""
+    c = _conn()
+    try:
+        total = int(c.execute(
+            "SELECT COUNT(*) n FROM archive_frame "
+            "WHERE reading IS NOT NULL AND source!='evicted'").fetchone()["n"])
+        audited = int(c.execute(
+            "SELECT COUNT(DISTINCT a.ts) n FROM archive_frame a "
+            "WHERE a.reading IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM audit_result r WHERE r.frame_ts=a.ts)"
+        ).fetchone()["n"])
+        pct = round((audited / total * 100.0), 2) if total else 0.0
+        return {"total": total, "audited": audited, "coverage_pct": pct}
+    finally:
+        c.close()
+
+
 def record_audit_result(frame_ts, stored, checked, agree, kind,
                         source=None, model=None, note=None):
     """Log one independent check of a stored value (blind AI or human)."""

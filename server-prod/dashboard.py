@@ -3616,10 +3616,13 @@ def create_app(config, engine, weather, billing):
                 + retired_missing)
 
     def _converge_drain_cycle():
-        """Re-read up to CONVERGE_DRAIN_PER_CYCLE of the OLDEST uncertain frames
-        with the authority model and write authoritative anchors. Bounded by the
-        meter's monotonic floor (anchor_value) and the live-lock ceiling so a
-        garble can't push a row out of range. Day-capped; self-stops at zero."""
+        """TRUST AUDITOR. Instead of trying to oracle-verify every frame (a losing
+        race against the 30s capture cadence), this continuously BLIND-AUDITS a
+        sample of never-checked frames to PROVE the history is trustworthy, and
+        auto-FIXES any frame where the independent read disagrees with what's
+        stored. Result: a rolling agreement % (trust) + growing coverage %, and
+        real errors get corrected — without paying to re-read everything.
+        Day-capped; spaced to respect the provider rate limit."""
         import datetime as _dt
         today = _dt.date.today().isoformat()
         if _converge_drain.get("day") != today:
@@ -3637,18 +3640,20 @@ def create_app(config, engine, weather, billing):
         budget = min(
             max(1, CONVERGE_DRAIN_PER_CYCLE),
             CONVERGE_DRAIN_DAILY_CAP - _converge_drain["day_count"])
-        rows = meter_archive.oldest_perfectable_rows(limit=budget)
+        rows = meter_archive.unaudited_rows(limit=budget)
         if not rows:
             return 0
         floor = int(getattr(meter_reader, "anchor_value", 0) or 0)
         lg = getattr(meter_reader, "last_good", None)
         ceil = (int(lg) + ARCHIVE_HEAL_TOL_COUNTS) if lg is not None else None
-        anchored = 0
+        audited = 0
+        corrected = 0
         for row in rows:
             ts = row.get("ts")
+            stored = row.get("reading")
             fpath = os.path.join(
                 ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
-            if not ts:
+            if not ts or stored is None:
                 continue
             if not os.path.exists(fpath):
                 try:
@@ -3663,39 +3668,50 @@ def create_app(config, engine, weather, billing):
                 continue
             res = vision_oracle.read_meter(
                 frame, rotate180=True, hint=None, model=ORACLE_AUTHORITY_MODEL)
-            # Space calls so a burst doesn't trip the provider rate limit (429).
             time.sleep(1.5)
             if not res.get("ok"):
-                # Failed/throttled read is not billable and did no work — don't
-                # spend daily budget on it; the same oldest rows retry next cycle.
                 _converge_drain["last_error"] = str(res.get("error") or "read failed")
                 continue
             _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
             _oracle_state["calls"] += 1
             cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
             _converge_drain["day_count"] += 1
-            if (not res.get("readable")
-                    or res.get("confidence") == "low"
+            if (not res.get("readable") or res.get("confidence") == "low"
                     or res.get("value") is None):
                 continue
             v = int(res.get("value"))
-            if v < floor or (ceil is not None and v > ceil):
-                continue
-            if meter_archive.update_reading(
-                    ts, v, res.get("confidence", "high"),
-                    source="oracle", reviewed=True):
-                anchored += 1
+            agree = (v == int(stored))
+            note = None
+            if not agree and v >= floor and (ceil is None or v <= ceil):
+                # The blind read of the SAME image is the truth — fix the stored
+                # value (bounded) and mark it authoritative.
+                if meter_archive.update_reading(
+                        ts, v, res.get("confidence", "high"),
+                        source="oracle", reviewed=True):
+                    corrected += 1
+                    note = "auto-corrected to blind read"
+            elif not agree:
+                note = "blind read out of bounds — left stored value"
+            meter_archive.record_audit_result(
+                ts, stored, v, agree, kind="blind",
+                source=row.get("source"), model=ORACLE_AUTHORITY_MODEL,
+                note=note)
+            audited += 1
             if _converge_drain["day_count"] >= CONVERGE_DRAIN_DAILY_CAP:
                 break
-        if anchored:
-            _converge_drain["total_anchored"] += anchored
-            _converge_drain["last_anchored"] = anchored
+        if audited:
+            _converge_drain["total_anchored"] += corrected
+            _converge_drain["last_anchored"] = corrected
+            _converge_drain["total_audited"] = (
+                int(_converge_drain.get("total_audited", 0)) + audited)
+            _converge_drain["last_audited"] = audited
             _converge_drain["last_ts"] = time.time()
             log.info(
-                "CONVERGE-DRAIN: anchored %d oldest uncertain frame(s) as "
-                "authoritative truth (day %d/%d)",
-                anchored, _converge_drain["day_count"], CONVERGE_DRAIN_DAILY_CAP)
-        return anchored
+                "TRUST-AUDIT: blind-checked %d frame(s), %d corrected "
+                "(day %d/%d)",
+                audited, corrected, _converge_drain["day_count"],
+                CONVERGE_DRAIN_DAILY_CAP)
+        return audited
 
     def _converge_drain_daemon():
         """Timer loop that drains uncertain history into authoritative anchors
@@ -7111,6 +7127,7 @@ def create_app(config, engine, weather, billing):
             hours = 24
         stats = meter_archive.convergence_stats()
         history = meter_archive.convergence_history(hours=hours)
+        coverage = meter_archive.audit_coverage()
         # Convergence rate + ETA from the trend (first vs last in window).
         rate_per_hr = None
         eta_hours = None
@@ -7147,10 +7164,13 @@ def create_app(config, engine, weather, billing):
                 "every_s": float(CONVERGE_DRAIN_EVERY_S),
                 "daily_cap": int(CONVERGE_DRAIN_DAILY_CAP),
                 "day_count": int(_converge_drain.get("day_count", 0)),
-                "total_anchored": int(_converge_drain.get("total_anchored", 0)),
-                "last_anchored": int(_converge_drain.get("last_anchored", 0)),
+                "total_audited": int(_converge_drain.get("total_audited", 0)),
+                "last_audited": int(_converge_drain.get("last_audited", 0)),
+                "total_corrected": int(_converge_drain.get("total_anchored", 0)),
+                "last_corrected": int(_converge_drain.get("last_anchored", 0)),
                 "last_ts": _converge_drain.get("last_ts") or None,
             },
+            "coverage": coverage,
         })
 
     @app.route("/api/cam/convergence/audit", methods=["POST"])

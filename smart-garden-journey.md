@@ -1209,3 +1209,19 @@ This stops the engine from making any further automatic decisions until you've d
 **Follow-up — external antenna mod for burial (2026-06-19):** the cam is being **buried in the underground meter pit**, where the PCB antenna would be dead. So the external U.FL antenna became required after all (supersedes the "not needed" note above — that only applied to the above-ground test). Board confirmed = Aideepen/AI-Thinker ESP32-CAM-MB; antenna select is a `0Ω` resistor next to the U.FL connector (`/` = PCB, `\` = external). James soldered the bridge to the U.FL side. **Result was dramatic:** yard ping went from avg **186 ms / max 1618 ms** (PCB) → avg **24.8 ms / max 181 ms / min 6 ms**, still 0% loss — a 7.5× latency improvement that confirms the external antenna is now the active path. Remaining step: bury the board with the **antenna routed up out of the pit into open air**, then re-test.
 
 ---
+
+## 2026-06-24 — Convergence verify thumbnails rotated upright
+
+**Context:** On the Convergence page (`/cam/convergence`), the "Verify with Your Own Eyes" cards were displaying archive images upside down. The Archive page already rotated thumbnails 180 degrees, but the Convergence template did not apply the same transform.
+
+**Changes:**
+- Updated `server-prod/templates/convergence.html` CSS for `.vcard img` to include `transform: rotate(180deg)`.
+- Deployed only the updated template to production (`~/smart-garden-server/templates/convergence.html`).
+- Restarted `smart-garden-server` and verified service health (`active`).
+- Confirmed deployed file contains the rotation rule.
+
+**Current state:** Convergence verification images now render with the same orientation as Archive images, so manual spot-checking/fixes are readable and consistent across pages.
+
+**Risk:** Low. UI-only display adjustment for image orientation; no model, lock, or archive write logic changed.
+
+---

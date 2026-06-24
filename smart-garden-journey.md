@@ -1250,3 +1250,31 @@ This stops the engine from making any further automatic decisions until you've d
 **Current state:** Human verification now has immediate temporal context, making Correct/Wrong decisions much more reliable and reducing accidental bad manual anchors.
 
 ---
+
+## 2026-06-24 — Convergence context cards now avoid duplicate neighbors and show deltas
+
+**Context:** Even with before/after images, many cards still looked unhelpful because neighboring rows often carried the same reading (flat/inferred stretches). Reviewers still lacked decision signal.
+
+**Changes:**
+- Enhanced neighbor lookup in `server-prod/meter_archive.py`:
+   - `previous_row(ts, distinct_from=...)`
+   - `next_row(ts, distinct_from=...)`
+   - when requested, these prefer the nearest row whose reading differs from the center reading.
+- Updated `GET /api/cam/convergence/verify-batch` in `server-prod/dashboard.py` to:
+   - request distinct before/after neighbors first
+   - fall back to immediate neighbors only if no distinct reading exists
+   - include metadata per context card: `delta_counts`, `delta_s`, `same_reading_as_ref`.
+- Updated `server-prod/templates/convergence.html` context rendering to show:
+   - full 9-digit reading (not only rounded ft³)
+   - signed delta in counts (`Δ ±N ct`)
+   - time offset from the center frame (seconds/minutes/hours)
+   - explicit “same reading” note when fallback yields identical values.
+
+**Deployment + verification:**
+- Deployed updated `dashboard.py`, `meter_archive.py`, and `templates/convergence.html`.
+- Restarted `smart-garden-server`.
+- Verified `verify-batch` returns the new metadata and that sampled cards were no longer returning identical neighbors in the test batch.
+
+**Current state:** Before/after cards now provide materially better signal for human review decisions, even in noisy windows.
+
+---

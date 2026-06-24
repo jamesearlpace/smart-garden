@@ -7260,13 +7260,13 @@ def create_app(config, engine, weather, billing):
         stored value, for human eyes-on spot-checking."""
         import meter_archive
 
-        def _pack_row(row):
+        def _pack_row(row, ref_ts=None, ref_reading=None):
             if not row:
                 return None
             fname = os.path.basename(str(row.get("filename") or ""))
             exists = os.path.exists(os.path.join(ARCHIVE_DIR, fname))
             reading = row.get("reading")
-            return {
+            out = {
                 "ts": row.get("ts"),
                 "stored": reading,
                 "reading_cf": (reading / 1000.0 if reading is not None else None),
@@ -7276,6 +7276,27 @@ def create_app(config, engine, weather, billing):
                 "img_url": f"/api/cam/archive/img?file={fname}",
                 "img_available": exists,
             }
+            if reading is not None and ref_reading is not None:
+                try:
+                    d = int(reading) - int(ref_reading)
+                    out["delta_counts"] = d
+                    out["same_reading_as_ref"] = (d == 0)
+                except Exception:
+                    out["delta_counts"] = None
+                    out["same_reading_as_ref"] = None
+            else:
+                out["delta_counts"] = None
+                out["same_reading_as_ref"] = None
+            if ref_ts and row.get("ts"):
+                try:
+                    a = datetime.fromisoformat(str(row.get("ts")))
+                    b = datetime.fromisoformat(str(ref_ts))
+                    out["delta_s"] = int((a - b).total_seconds())
+                except Exception:
+                    out["delta_s"] = None
+            else:
+                out["delta_s"] = None
+            return out
 
         try:
             n = query_int("n", 10, min_value=1, max_value=25)
@@ -7284,9 +7305,18 @@ def create_app(config, engine, weather, billing):
         rows = meter_archive.random_perfect_rows(limit=n)
         items = []
         for r in rows:
+            base_ts = r.get("ts")
+            base_reading = r.get("reading")
+            before = meter_archive.previous_row(base_ts, distinct_from=base_reading)
+            after = meter_archive.next_row(base_ts, distinct_from=base_reading)
+            # If no changed reading exists nearby, fall back to immediate neighbors.
+            if not before:
+                before = meter_archive.previous_row(base_ts)
+            if not after:
+                after = meter_archive.next_row(base_ts)
             item = _pack_row(r) or {}
-            item["before"] = _pack_row(meter_archive.previous_row(r.get("ts")))
-            item["after"] = _pack_row(meter_archive.next_row(r.get("ts")))
+            item["before"] = _pack_row(before, ref_ts=base_ts, ref_reading=base_reading)
+            item["after"] = _pack_row(after, ref_ts=base_ts, ref_reading=base_reading)
             items.append(item)
         return jsonify({"ok": True, "items": items})
 

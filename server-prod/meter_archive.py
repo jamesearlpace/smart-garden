@@ -793,25 +793,51 @@ def get(ts):
         c.close()
 
 
-def previous_row(ts):
-    """Closest archived row strictly before ``ts`` (or None)."""
+def previous_row(ts, distinct_from=None):
+    """Closest archived row strictly before ``ts`` (or None).
+
+    If ``distinct_from`` is provided, prefer rows whose reading differs from
+    that value.
+    """
     c = _conn()
     try:
-        r = c.execute(
-            "SELECT * FROM archive_frame WHERE ts<? ORDER BY ts DESC LIMIT 1",
-            (ts,)).fetchone()
+        q = "SELECT * FROM archive_frame WHERE ts<?"
+        args = [ts]
+        if distinct_from is not None:
+            try:
+                dv = int(distinct_from)
+            except Exception:
+                dv = None
+            if dv is not None:
+                q += " AND reading IS NOT NULL AND reading!=?"
+                args.append(dv)
+        q += " ORDER BY ts DESC LIMIT 1"
+        r = c.execute(q, args).fetchone()
         return dict(r) if r else None
     finally:
         c.close()
 
 
-def next_row(ts):
-    """Closest archived row strictly after ``ts`` (or None)."""
+def next_row(ts, distinct_from=None):
+    """Closest archived row strictly after ``ts`` (or None).
+
+    If ``distinct_from`` is provided, prefer rows whose reading differs from
+    that value.
+    """
     c = _conn()
     try:
-        r = c.execute(
-            "SELECT * FROM archive_frame WHERE ts>? ORDER BY ts ASC LIMIT 1",
-            (ts,)).fetchone()
+        q = "SELECT * FROM archive_frame WHERE ts>?"
+        args = [ts]
+        if distinct_from is not None:
+            try:
+                dv = int(distinct_from)
+            except Exception:
+                dv = None
+            if dv is not None:
+                q += " AND reading IS NOT NULL AND reading!=?"
+                args.append(dv)
+        q += " ORDER BY ts ASC LIMIT 1"
+        r = c.execute(q, args).fetchone()
         return dict(r) if r else None
     finally:
         c.close()

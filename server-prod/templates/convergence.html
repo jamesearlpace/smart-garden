@@ -54,6 +54,7 @@
   .ctx .meta { background:#fff; padding:4px 6px; }
   .ctx .lbl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
   .ctx .val { font-family:ui-monospace,Menlo,monospace; font-size:12px; font-weight:600; }
+  .ctx .sub { font-size:11px; color:var(--muted); margin-top:2px; }
   .vcard .acts { display:flex; gap:6px; margin-top:8px; }
   .vcard input { width:130px; font-family:ui-monospace,monospace; padding:5px;
                  border:1px solid var(--line); border-radius:6px; }
@@ -106,6 +107,19 @@ let trendChart = null;
 
 function fmt(n){ return (n===null||n===undefined)?'—':n; }
 function cf(v){ return (v===null||v===undefined)?'—':(v/1000).toFixed(3); }
+function digits(v){ return (v===null||v===undefined)?'—':String(v).padStart(9,'0'); }
+function signed(n){
+  if(n===null||n===undefined||!isFinite(Number(n))) return '—';
+  var x = Number(n);
+  return (x>0?'+':'') + String(Math.trunc(x));
+}
+function ageText(sec){
+  if(sec===null||sec===undefined||!isFinite(Number(sec))) return '';
+  var s = Math.abs(Number(sec));
+  if(s < 60) return Math.round(s) + 's';
+  if(s < 3600) return Math.round(s/60) + 'm';
+  return (s/3600).toFixed(1) + 'h';
+}
 
 function ctxCard(label, ctx){
   if(!ctx){
@@ -116,8 +130,14 @@ function ctxCard(label, ctx){
     ? `<img src="${ctx.img_url}" loading="lazy" onclick="window.open(this.src)">`
     : `<div class="miss">image evicted</div>`;
   const hhmm = (ctx.ts||'').slice(11,16);
+  const d = (ctx.delta_counts===null||ctx.delta_counts===undefined)
+    ? 'Δ —'
+    : `Δ ${signed(ctx.delta_counts)} ct`;
+  const age = ageText(ctx.delta_s);
+  const same = ctx.same_reading_as_ref ? ' · same reading' : '';
   return `<div class="ctx">${img}<div class="meta"><div class="lbl">${label} · ${hhmm}</div>
-    <div class="val">${cf(ctx.reading_cf)} ft³</div></div></div>`;
+    <div class="val">${digits(ctx.stored)}</div>
+    <div class="sub">${cf(ctx.stored)} ft³ · ${d}${age?(' · '+age):''}${same}</div></div></div>`;
 }
 
 async function loadAll(){

@@ -793,6 +793,30 @@ def get(ts):
         c.close()
 
 
+def previous_row(ts):
+    """Closest archived row strictly before ``ts`` (or None)."""
+    c = _conn()
+    try:
+        r = c.execute(
+            "SELECT * FROM archive_frame WHERE ts<? ORDER BY ts DESC LIMIT 1",
+            (ts,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        c.close()
+
+
+def next_row(ts):
+    """Closest archived row strictly after ``ts`` (or None)."""
+    c = _conn()
+    try:
+        r = c.execute(
+            "SELECT * FROM archive_frame WHERE ts>? ORDER BY ts ASC LIMIT 1",
+            (ts,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        c.close()
+
+
 def neighbor_reading(ts):
     """Most recent known reading at or before ``ts`` (context for a re-read)."""
     c = _conn()

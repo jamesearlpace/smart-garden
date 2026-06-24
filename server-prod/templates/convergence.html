@@ -41,10 +41,19 @@
   .verify-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
                  gap:12px; }
   .vcard { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  .vcard img { width:100%; height:150px; object-fit:cover; background:#000;
-               display:block; transform:rotate(180deg); }
+  .vcard .mainimg { width:100%; height:150px; object-fit:cover; background:#000;
+                    display:block; transform:rotate(180deg); }
   .vcard .body { padding:10px; }
   .vcard .stored { font-family:ui-monospace,Menlo,monospace; font-size:18px; font-weight:700; }
+  .ctxrow { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+  .ctx { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#111; }
+  .ctx img { width:100%; height:72px; object-fit:cover; background:#000;
+             display:block; transform:rotate(180deg); cursor:pointer; }
+  .ctx .miss { height:72px; display:flex; align-items:center; justify-content:center;
+               color:#bbb; font-size:11px; }
+  .ctx .meta { background:#fff; padding:4px 6px; }
+  .ctx .lbl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  .ctx .val { font-family:ui-monospace,Menlo,monospace; font-size:12px; font-weight:600; }
   .vcard .acts { display:flex; gap:6px; margin-top:8px; }
   .vcard input { width:130px; font-family:ui-monospace,monospace; padding:5px;
                  border:1px solid var(--line); border-radius:6px; }
@@ -97,6 +106,19 @@ let trendChart = null;
 
 function fmt(n){ return (n===null||n===undefined)?'—':n; }
 function cf(v){ return (v===null||v===undefined)?'—':(v/1000).toFixed(3); }
+
+function ctxCard(label, ctx){
+  if(!ctx){
+    return `<div class="ctx"><div class="miss">no nearby frame</div>
+      <div class="meta"><div class="lbl">${label}</div><div class="val">—</div></div></div>`;
+  }
+  const img = ctx.img_available
+    ? `<img src="${ctx.img_url}" loading="lazy" onclick="window.open(this.src)">`
+    : `<div class="miss">image evicted</div>`;
+  const hhmm = (ctx.ts||'').slice(11,16);
+  return `<div class="ctx">${img}<div class="meta"><div class="lbl">${label} · ${hhmm}</div>
+    <div class="val">${cf(ctx.reading_cf)} ft³</div></div></div>`;
+}
 
 async function loadAll(){
   const r = await fetch('/api/cam/convergence?hours=24');
@@ -186,11 +208,12 @@ async function loadVerify(){
   if(!d.ok){ grid.innerHTML='<div class="note">Error loading.</div>'; return; }
   grid.innerHTML = d.items.map((it,i)=>`
     <div class="vcard" id="vc${i}">
-      ${it.img_available? `<img src="${it.img_url}" loading="lazy">`
+      ${it.img_available? `<img class="mainimg" src="${it.img_url}" loading="lazy">`
         : `<div style="height:150px;display:flex;align-items:center;justify-content:center;background:#222;color:#bbb">image evicted</div>`}
       <div class="body">
         <div class="note">${it.ts? it.ts.slice(5,16):''} · ${it.source||''}</div>
         <div class="stored">${cf(it.stored)} <span class="note">ft³</span></div>
+        <div class="ctxrow">${ctxCard('Before', it.before)}${ctxCard('After', it.after)}</div>
         <div class="acts">
           <button onclick="verdict(${i},'${it.ts}',true)">✓ Correct</button>
           <button class="secondary" onclick="showFix(${i})">✗ Wrong</button>

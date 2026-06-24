@@ -7259,6 +7259,24 @@ def create_app(config, engine, weather, billing):
         """Return N random rows the system CLAIMS are correct, with image URL +
         stored value, for human eyes-on spot-checking."""
         import meter_archive
+
+        def _pack_row(row):
+            if not row:
+                return None
+            fname = os.path.basename(str(row.get("filename") or ""))
+            exists = os.path.exists(os.path.join(ARCHIVE_DIR, fname))
+            reading = row.get("reading")
+            return {
+                "ts": row.get("ts"),
+                "stored": reading,
+                "reading_cf": (reading / 1000.0 if reading is not None else None),
+                "source": row.get("source"),
+                "confidence": row.get("confidence"),
+                "file": fname,
+                "img_url": f"/api/cam/archive/img?file={fname}",
+                "img_available": exists,
+            }
+
         try:
             n = query_int("n", 10, min_value=1, max_value=25)
         except Exception:
@@ -7266,19 +7284,10 @@ def create_app(config, engine, weather, billing):
         rows = meter_archive.random_perfect_rows(limit=n)
         items = []
         for r in rows:
-            fname = os.path.basename(str(r.get("filename") or ""))
-            exists = os.path.exists(os.path.join(ARCHIVE_DIR, fname))
-            items.append({
-                "ts": r.get("ts"),
-                "stored": r.get("reading"),
-                "reading_cf": (r.get("reading") / 1000.0
-                               if r.get("reading") is not None else None),
-                "source": r.get("source"),
-                "confidence": r.get("confidence"),
-                "file": fname,
-                "img_url": f"/api/cam/archive/img?file={fname}",
-                "img_available": exists,
-            })
+            item = _pack_row(r) or {}
+            item["before"] = _pack_row(meter_archive.previous_row(r.get("ts")))
+            item["after"] = _pack_row(meter_archive.next_row(r.get("ts")))
+            items.append(item)
         return jsonify({"ok": True, "items": items})
 
     @app.route("/api/cam/convergence/verify", methods=["POST"])

@@ -1225,3 +1225,28 @@ This stops the engine from making any further automatic decisions until you've d
 **Risk:** Low. UI-only display adjustment for image orientation; no model, lock, or archive write logic changed.
 
 ---
+
+## 2026-06-24 — Convergence verify now shows before/after frame context
+
+**Context:** Single-image verification cards made it hard to judge whether a stored value was truly correct. Without adjacent frame context, manual reviewers had to guess if a reading was plausible.
+
+**Changes:**
+- Added archive helpers in `server-prod/meter_archive.py`:
+   - `previous_row(ts)`
+   - `next_row(ts)`
+- Updated `GET /api/cam/convergence/verify-batch` in `server-prod/dashboard.py` to include contextual neighbors for each sampled row:
+   - `before` (closest prior frame metadata + image URL)
+   - `after` (closest next frame metadata + image URL)
+- Updated `server-prod/templates/convergence.html` verification cards to render:
+   - Main frame
+   - Side-by-side **Before** and **After** mini-cards with timestamp and ft³ value
+   - Same 180° rotation for context images so orientation matches archive conventions
+
+**Deployment + verification:**
+- Deployed updated `dashboard.py`, `meter_archive.py`, and `templates/convergence.html`.
+- Restarted `smart-garden-server`.
+- Verified API payload now returns keys: `before`, `after` alongside main row fields.
+
+**Current state:** Human verification now has immediate temporal context, making Correct/Wrong decisions much more reliable and reducing accidental bad manual anchors.
+
+---

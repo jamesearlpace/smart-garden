@@ -60,7 +60,8 @@ zones:
   - 0.85
   dry_trigger: 45.0
   wet_target: 75.0
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -81,7 +82,8 @@ zones:
   - 0.85
   dry_trigger: 45
   wet_target: 75
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -103,7 +105,8 @@ zones:
   - 0.85
   dry_trigger: 40
   wet_target: 72
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -125,7 +128,8 @@ zones:
   - 0.85
   dry_trigger: 40
   wet_target: 72
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -147,7 +151,8 @@ zones:
   - 0.85
   dry_trigger: 45
   wet_target: 75
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -169,7 +174,8 @@ zones:
   - 0.85
   dry_trigger: 45
   wet_target: 75
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25
@@ -191,7 +197,8 @@ zones:
   - 0.85
   dry_trigger: 45
   wet_target: 75
-  max_runtime_min: 24
+  mad_pct: 60
+  max_runtime_min: 30
   cycle_soak: true
   cycle_run_min: 8
   cycle_soak_min: 25

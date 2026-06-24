@@ -1278,3 +1278,27 @@ This stops the engine from making any further automatic decisions until you've d
 **Current state:** Before/after cards now provide materially better signal for human review decisions, even in noisy windows.
 
 ---
+
+## 2026-06-24 — Increased watering aggressiveness for non-grape auto zones
+
+**Context:** Needed more water across the lawn/sprinkler zones while keeping Grapes unchanged.
+
+**Changes (deployed):**
+- Updated `server-prod/config.yaml` for zones `0-6` (all installed auto sprinkler zones):
+   - `mad_pct: 60` (was default/implicit 50)
+   - `max_runtime_min: 30` (was 24)
+- Left Grapes (`zone 8`) unchanged (`max_runtime_min: 60`, no explicit `mad_pct` override).
+- Garden (`zone 7`) remains manual (`auto_mode: false`) and was not changed.
+
+**Operational effect:**
+- Zones 0-6 now trigger watering sooner (higher MAD) and allow longer runs when they water.
+- Grapes scheduling/volume behavior remains as before.
+
+**Deployment + verification:**
+- Deployed updated `config.yaml` to `~/smart-garden-server/config.yaml`.
+- Restarted `smart-garden-server` (`active`).
+- Verified deployed values on host:
+   - Zones 0-6: `mad=60`, `max=30`
+   - Zone 8 (Grapes): unchanged.
+
+---

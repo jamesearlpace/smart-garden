@@ -3082,6 +3082,29 @@ def create_app(config, engine, weather, billing):
         "retired_missing": 0,
         "mode": ARCHIVE_REREAD_MODE,
     }
+    # ── CONVERGENCE DRAINER ────────────────────────────────────────────────
+    # The reread worker above only ARMS when the lock is oracle-trusted (i.e.
+    # right after a correction). When the meter reads fine for a while it never
+    # fires, so old uncertain history never converges. This dedicated drainer
+    # runs on its own timer, independent of corrections: each cycle it re-reads
+    # a few of the OLDEST uncertain frames with the authority model and writes
+    # them as authoritative anchors (source=oracle, reviewed=1), bounded by the
+    # meter's monotonic floor/ceiling. It self-stops at zero and is day-capped
+    # so cost stays tiny (~$0.004/read). This is the engine that makes the WHOLE
+    # archive march toward perfect — and gives steady evidence on the monitor.
+    CONVERGE_DRAIN_ENABLED = (
+        os.environ.get("METER_CONVERGE_DRAIN_ENABLED", "1") == "1")
+    CONVERGE_DRAIN_EVERY_S = float(
+        os.environ.get("METER_CONVERGE_DRAIN_EVERY_S", "75"))
+    CONVERGE_DRAIN_PER_CYCLE = int(
+        os.environ.get("METER_CONVERGE_DRAIN_PER_CYCLE", "5"))
+    CONVERGE_DRAIN_DAILY_CAP = int(
+        os.environ.get("METER_CONVERGE_DRAIN_DAILY_CAP", "600"))
+    _converge_drain = {
+        "running": False, "day": None, "day_count": 0,
+        "total_anchored": 0, "last_ts": 0.0, "last_anchored": 0,
+        "last_error": None,
+    }
     _reconnect_backfill = {
         "pending": False,
         "start_ts": None,
@@ -3591,6 +3614,105 @@ def create_app(config, engine, weather, billing):
             _archive_reread_state["retired_missing"] = (
                 int(_archive_reread_state.get("retired_missing", 0))
                 + retired_missing)
+
+    def _converge_drain_cycle():
+        """Re-read up to CONVERGE_DRAIN_PER_CYCLE of the OLDEST uncertain frames
+        with the authority model and write authoritative anchors. Bounded by the
+        meter's monotonic floor (anchor_value) and the live-lock ceiling so a
+        garble can't push a row out of range. Day-capped; self-stops at zero."""
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        if _converge_drain.get("day") != today:
+            _converge_drain["day"] = today
+            _converge_drain["day_count"] = 0
+        if _converge_drain["day_count"] >= CONVERGE_DRAIN_DAILY_CAP:
+            return 0
+        try:
+            import meter_archive
+            import vision_oracle
+        except Exception:
+            return 0
+        if not vision_oracle.available():
+            return 0
+        budget = min(
+            max(1, CONVERGE_DRAIN_PER_CYCLE),
+            CONVERGE_DRAIN_DAILY_CAP - _converge_drain["day_count"])
+        rows = meter_archive.oldest_perfectable_rows(limit=budget)
+        if not rows:
+            return 0
+        floor = int(getattr(meter_reader, "anchor_value", 0) or 0)
+        lg = getattr(meter_reader, "last_good", None)
+        ceil = (int(lg) + ARCHIVE_HEAL_TOL_COUNTS) if lg is not None else None
+        anchored = 0
+        for row in rows:
+            ts = row.get("ts")
+            fpath = os.path.join(
+                ARCHIVE_DIR, os.path.basename(str(row.get("filename") or "")))
+            if not ts:
+                continue
+            if not os.path.exists(fpath):
+                try:
+                    meter_archive.retire_missing(ts)
+                except Exception:
+                    pass
+                continue
+            try:
+                with open(fpath, "rb") as f:
+                    frame = f.read()
+            except OSError:
+                continue
+            res = vision_oracle.read_meter(
+                frame, rotate180=True, hint=None, model=ORACLE_AUTHORITY_MODEL)
+            # Space calls so a burst doesn't trip the provider rate limit (429).
+            time.sleep(1.5)
+            if not res.get("ok"):
+                # Failed/throttled read is not billable and did no work — don't
+                # spend daily budget on it; the same oldest rows retry next cycle.
+                _converge_drain["last_error"] = str(res.get("error") or "read failed")
+                continue
+            _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
+            _oracle_state["calls"] += 1
+            cam_ocr_stats["oracle_calls"] = _oracle_state["calls"]
+            _converge_drain["day_count"] += 1
+            if (not res.get("readable")
+                    or res.get("confidence") == "low"
+                    or res.get("value") is None):
+                continue
+            v = int(res.get("value"))
+            if v < floor or (ceil is not None and v > ceil):
+                continue
+            if meter_archive.update_reading(
+                    ts, v, res.get("confidence", "high"),
+                    source="oracle", reviewed=True):
+                anchored += 1
+            if _converge_drain["day_count"] >= CONVERGE_DRAIN_DAILY_CAP:
+                break
+        if anchored:
+            _converge_drain["total_anchored"] += anchored
+            _converge_drain["last_anchored"] = anchored
+            _converge_drain["last_ts"] = time.time()
+            log.info(
+                "CONVERGE-DRAIN: anchored %d oldest uncertain frame(s) as "
+                "authoritative truth (day %d/%d)",
+                anchored, _converge_drain["day_count"], CONVERGE_DRAIN_DAILY_CAP)
+        return anchored
+
+    def _converge_drain_daemon():
+        """Timer loop that drains uncertain history into authoritative anchors
+        until none remain, then idles cheaply (no oracle calls when at zero)."""
+        sleep_s = max(20.0, float(CONVERGE_DRAIN_EVERY_S or 75.0))
+        while True:
+            try:
+                if CONVERGE_DRAIN_ENABLED and not _converge_drain.get("running"):
+                    _converge_drain["running"] = True
+                    try:
+                        _converge_drain_cycle()
+                    finally:
+                        _converge_drain["running"] = False
+            except Exception as e:
+                _converge_drain["last_error"] = str(e)
+                log.debug("converge drain daemon failed: %s", e)
+            time.sleep(sleep_s)
 
     def _archive_frame(frame, captured_dt):
         """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
@@ -5012,6 +5134,17 @@ def create_app(config, engine, weather, billing):
         meter_archive.ensure_schema()
     except Exception as e:
         log.warning("meter_archive init failed: %s", e)
+
+    # Convergence drainer: continuously walk uncertain archive history into
+    # authoritative per-frame anchors (day-capped, self-stops at zero).
+    if CONVERGE_DRAIN_ENABLED:
+        _threading.Thread(
+            target=_converge_drain_daemon, daemon=True,
+            name="converge-drain").start()
+        log.info(
+            "convergence drainer started (every %ss, %d/cycle, day cap %d)",
+            CONVERGE_DRAIN_EVERY_S, CONVERGE_DRAIN_PER_CYCLE,
+            CONVERGE_DRAIN_DAILY_CAP)
 
     # ── ESP32-CAM background pinger ────────────────────────────────────
     # Frame telemetry covers the cam while it's uploading, but if it drops off
@@ -7007,6 +7140,16 @@ def create_app(config, engine, weather, billing):
                 "pending": int(_archive_reread_state.get("pending", 0)),
                 "rows_reread": int(_archive_heal_state.get("rows", 0)),
                 "lock_trusted": (_lock_trusted_value() is not None),
+            },
+            "drainer": {
+                "enabled": bool(CONVERGE_DRAIN_ENABLED),
+                "per_cycle": int(CONVERGE_DRAIN_PER_CYCLE),
+                "every_s": float(CONVERGE_DRAIN_EVERY_S),
+                "daily_cap": int(CONVERGE_DRAIN_DAILY_CAP),
+                "day_count": int(_converge_drain.get("day_count", 0)),
+                "total_anchored": int(_converge_drain.get("total_anchored", 0)),
+                "last_anchored": int(_converge_drain.get("last_anchored", 0)),
+                "last_ts": _converge_drain.get("last_ts") or None,
             },
         })
 

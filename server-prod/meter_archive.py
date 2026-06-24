@@ -291,6 +291,23 @@ def random_perfect_rows(limit=10):
         c.close()
 
 
+def oldest_perfectable_rows(limit=5):
+    """Oldest uncertain rows that still have a fixable path (not manual/oracle/
+    evicted, not human-reviewed). The convergence drainer walks these into
+    authoritative per-frame anchors so the WHOLE history converges over time."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT * FROM archive_frame "
+            "WHERE reading IS NOT NULL AND reviewed=0 "
+            "AND source NOT IN ('manual','oracle','evicted') "
+            "ORDER BY ts ASC LIMIT ?",
+            (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
 def record_audit_result(frame_ts, stored, checked, agree, kind,
                         source=None, model=None, note=None):
     """Log one independent check of a stored value (blind AI or human)."""

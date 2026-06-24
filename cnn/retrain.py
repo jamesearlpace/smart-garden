@@ -23,6 +23,7 @@ gated promotion (never auto-ship a worse model), monotonic audit as the floor.
 """
 import argparse
 import bisect
+from collections import Counter
 import hashlib
 import json
 import os
@@ -66,6 +67,16 @@ TEST_PCT = 12                  # ~12%% of frames held out forever (by name hash)
 MIN_TEST = 30                  # need at least this many test frames to judge
 MIN_NEW_FRAMES = 25            # skip retrain unless this many new since last run
 MAX_PER_LABEL = 3
+OUTSIDE_TAIL_TRUST = 0.35      # weak weight for current-range outside labels
+OUTSIDE_TAIL_MAX_ROWS = 300    # cap added outside-tail rows per retrain
+OUTSIDE_TAIL_MAX_PER_LABEL = 2 # avoid flooding near-duplicate values
+OUTSIDE_TAIL_MIN_DELTA = 0     # include values strictly above trusted max
+# Held-out coverage guard: if live data has enough 6/7 at digit index 3, require
+# the test benchmark to include them (or fail the run before promotion).
+COVERAGE_DIGIT_INDEX = 3
+COVERAGE_CRITICAL_DIGITS = ("6", "7")
+COVERAGE_MIN_CLEAN_PER_DIGIT = 5
+COVERAGE_MIN_TEST_PER_DIGIT = 3
 SYNTH_N = 600                  # recombined synthetic frames per retrain (covers
                               # the leading-edge high digits real data lacks)
 SYNTH_MAX_STRIPS = 300         # cap real digit strips kept per value (memory)
@@ -498,12 +509,14 @@ def gather_labels(manual=None):
     GOLD tier — authoritative OVER the audit.
 
     When Anchor & Propagate has run, its CONFIRMED/REPAIRED/anchor labels are the
-    trusted training set for banked frames and raw UNCONFIRMED oracle reads are
-    NOT trained on (flagged/outside are excluded). This is what lets a handful of
-    human anchors clean the whole set instead of training on noisy auto-labels."""
+    trusted training set for banked frames. Additionally, include a bounded tail
+    of current-range OUTSIDE labels (strictly above the trusted max) at LOW
+    weight so retraining can follow the live meter range instead of stalling
+    while anchors catch up."""
     manual = manual or {}
     prop = load_propagated()
     labels = {}
+    weak_tail = {}
     # baseline curated set (consensus / verified) — high trust, kept either way
     if os.path.exists(BASELINE_JSONL):
         for line in open(BASELINE_JSONL):
@@ -515,17 +528,57 @@ def gather_labels(manual=None):
             if len(d) == 9 and os.path.exists(os.path.join(FRAMES, r["file"])):
                 labels[r["file"]] = d
     if prop:
-        # Propagation active: trust its anchor/confirmed/repaired labels for
-        # banked frames; do NOT add raw unconfirmed oracle reads (the noisy mass
-        # the user doesn't want training the model). flagged/outside excluded.
+        # Propagation active: trust anchor/confirmed/repaired labels. Also allow
+        # a small weakly-weighted OUTSIDE tail above the trusted max so the
+        # dataset keeps pace with current meter values.
         n_trust = 0
+        trusted_vals = []
+        outside = []
         for f, (st, d) in prop.items():
-            if st in ("anchor", "confirmed", "repaired") and \
-                    os.path.exists(os.path.join(FRAMES, f)):
+            if not os.path.exists(os.path.join(FRAMES, f)):
+                continue
+            if st in ("anchor", "confirmed", "repaired"):
                 labels[f] = d
                 n_trust += 1
-        log(f"propagation: {n_trust} trusted (anchor/confirmed/repaired) labels; "
-            f"raw unconfirmed reads excluded")
+                try:
+                    trusted_vals.append(int(d))
+                except Exception:
+                    pass
+            elif st == "outside":
+                m = NAME_RE.match(f)
+                if not m:
+                    continue
+                outside.append((int(m.group(2)), f, d))
+
+        n_tail = 0
+        trusted_hi = max(trusted_vals) if trusted_vals else None
+        if trusted_hi is not None and outside:
+            per_label = {}
+            outside.sort(reverse=True)   # newest first
+            for _, f, d in outside:
+                try:
+                    dv = int(d)
+                except Exception:
+                    continue
+                if dv <= (trusted_hi + OUTSIDE_TAIL_MIN_DELTA):
+                    continue
+                if per_label.get(d, 0) >= OUTSIDE_TAIL_MAX_PER_LABEL:
+                    continue
+                if n_tail >= OUTSIDE_TAIL_MAX_ROWS:
+                    break
+                labels[f] = d
+                weak_tail[f] = d
+                per_label[d] = per_label.get(d, 0) + 1
+                n_tail += 1
+
+        if n_tail:
+            d4 = Counter(lbl[3] for lbl in weak_tail.values() if len(lbl) > 3)
+            log("propagation: %d trusted + %d weak outside-tail labels "
+                "(digit4 mix %s)"
+                % (n_trust, n_tail, dict(sorted(d4.items()))))
+        else:
+            log("propagation: %d trusted labels; no outside-tail labels added"
+                % n_trust)
     else:
         # legacy: oracle-banked frames (independent verifier) — label from name
         for f in os.listdir(FRAMES):
@@ -581,6 +634,8 @@ def gather_labels(manual=None):
         mv = manual.get(f)
         if mv and mv.get("action") in ("correct", "ok"):
             trust[f] = 3.0
+        elif f in weak_tail:
+            trust[f] = OUTSIDE_TAIL_TRUST
         elif f in prop:
             trust[f] = {"anchor": 2.5, "repaired": 2.0,
                         "confirmed": 1.5}.get(prop[f][0], 1.0)
@@ -616,19 +671,88 @@ def build_rows(clean, trust=None, regression=None, hard=None):
 
     per = {}
     train, test = [], []
+    test_files = set()
     # test frames first (never capped — keep the benchmark complete)
     for f, lbl in sorted(clean.items()):
         if in_test(f):
             test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0),
                          "reg": f in regression, "hard": f in hard})
+            test_files.add(f)
+
+    # Coverage seeding: when live clean data has substantial 6/7 values at the
+    # key leading-edge digit, guarantee minimum test coverage for those digits.
+    clean_cov = Counter(lbl[COVERAGE_DIGIT_INDEX]
+                        for lbl in clean.values() if len(lbl) > COVERAGE_DIGIT_INDEX)
+    test_cov = Counter(r["label"][COVERAGE_DIGIT_INDEX]
+                       for r in test if len(r["label"]) > COVERAGE_DIGIT_INDEX)
+    forced = 0
+    for d in COVERAGE_CRITICAL_DIGITS:
+        if clean_cov.get(d, 0) < COVERAGE_MIN_CLEAN_PER_DIGIT:
+            continue
+        need = COVERAGE_MIN_TEST_PER_DIGIT - test_cov.get(d, 0)
+        if need <= 0:
+            continue
+        cand = []
+        for f, lbl in clean.items():
+            if f in test_files:
+                continue
+            if len(lbl) <= COVERAGE_DIGIT_INDEX or lbl[COVERAGE_DIGIT_INDEX] != d:
+                continue
+            # Prefer hard frames if available; then deterministic filename order.
+            cand.append((0 if f in hard else 1, f, lbl))
+        cand.sort()
+        for _, f, lbl in cand[:need]:
+            test.append({"file": f, "label": lbl, "w": trust.get(f, 1.0),
+                         "reg": f in regression, "hard": f in hard,
+                         "forced_cov": True})
+            test_files.add(f)
+            test_cov[d] += 1
+            forced += 1
+
+    if forced:
+        log("coverage seed: +%d forced test rows (digit%d test mix %s)"
+            % (forced, COVERAGE_DIGIT_INDEX,
+               dict(sorted((k, test_cov.get(k, 0))
+                           for k in COVERAGE_CRITICAL_DIGITS))))
+
     for f, lbl in sorted(clean.items()):
-        if in_test(f):
+        if f in test_files:
             continue
         if per.get(lbl, 0) >= MAX_PER_LABEL:
             continue
         train.append({"file": f, "label": lbl, "w": trust.get(f, 1.0)})
         per[lbl] = per.get(lbl, 0) + 1
     return train, test
+
+
+def coverage_guard(clean, test_rows):
+    """Held-out benchmark coverage guard for live leading-edge ranges.
+
+    If clean data has enough examples for a critical digit value (6/7 at the
+    thousands position), require a minimum number of test rows for that value.
+    Missing coverage means skip the retrain to prevent false confidence.
+    """
+    clean_cov = Counter(lbl[COVERAGE_DIGIT_INDEX]
+                        for lbl in clean.values() if len(lbl) > COVERAGE_DIGIT_INDEX)
+    test_cov = Counter(r["label"][COVERAGE_DIGIT_INDEX]
+                       for r in test_rows
+                       if len(r.get("label", "")) > COVERAGE_DIGIT_INDEX)
+
+    required = [d for d in COVERAGE_CRITICAL_DIGITS
+                if clean_cov.get(d, 0) >= COVERAGE_MIN_CLEAN_PER_DIGIT]
+    missing = [d for d in required
+               if test_cov.get(d, 0) < COVERAGE_MIN_TEST_PER_DIGIT]
+
+    return {
+        "digit_index": COVERAGE_DIGIT_INDEX,
+        "critical_digits": list(COVERAGE_CRITICAL_DIGITS),
+        "required": required,
+        "missing": missing,
+        "min_clean_per_digit": COVERAGE_MIN_CLEAN_PER_DIGIT,
+        "min_test_per_digit": COVERAGE_MIN_TEST_PER_DIGIT,
+        "clean_cov": dict(sorted(clean_cov.items())),
+        "test_cov": dict(sorted(test_cov.items())),
+    }
 
 
 def new_frame_count(clean):
@@ -821,11 +945,36 @@ def main():
     else:
         log(f"hard benchmark: only {len(hard)} hard frames, too few held out "
             f"— falling back to plain hash holdout")
+
+    cov = coverage_guard(clean, test_rows)
+    log("coverage gate: digit%d required=%s missing=%s clean=%s test=%s"
+        % (cov["digit_index"], cov["required"], cov["missing"],
+           cov["clean_cov"], cov["test_cov"]))
+    if cov["missing"]:
+        log("ABORT: held-out benchmark missing live-range coverage for digits %s "
+            "at position %d" % (cov["missing"], cov["digit_index"]))
+        status = {
+            "ts": time.time(),
+            "skipped": True,
+            "reason": "coverage gap in held-out test",
+            "coverage": cov,
+            "trusted_ground_truth_n": len(clean),
+            "new_frames": n_new,
+            "new_manual": n_manual_new,
+        }
+        write_status(status)
+        append_history(status)
+        return
+
     if len(test_rows) < MIN_TEST:
         log(f"ABORT: held-out test too small ({len(test_rows)} < {MIN_TEST})")
-        status = {"ts": time.time(), "skipped": True,
-                  "reason": "test set too small",
-                  "trusted_ground_truth_n": len(clean)}
+        status = {
+            "ts": time.time(),
+            "skipped": True,
+            "reason": "test set too small",
+            "coverage": cov,
+            "trusted_ground_truth_n": len(clean),
+        }
         write_status(status)
         append_history(status)
         return
@@ -958,6 +1107,7 @@ def main():
     status = {
         "ts": time.time(), "skipped": False, "promoted": promoted,
         "bootstrap": bootstrap,
+        "coverage": cov,
         "champion_version": cur_ver, "challenger_version": nxt_ver,
         "champion_full9": round(c_f, 4), "challenger_full9": round(h_f, 4),
         "champion_perdigit": round(c_d, 4), "challenger_perdigit": round(h_d, 4),

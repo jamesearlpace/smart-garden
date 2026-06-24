@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (exact archive convergence mode: authoritative per-frame anchors + evicted-row retirement)
+**Last Updated:** 2026-06-23 (CNN retrain live-range fix: outside-tail inclusion + held-out coverage gate)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -215,6 +215,38 @@
 **Note:** `/cam-device` renders `cam_device.html` which does NOT exist on disk (pre-existing dead route) — deliberately left OUT of the nav so we don't link to a 500.
 
 **Verified live (2026-06-23 16:47 deploy):** service active; all 9 meter pages render the nav bar (`mtn-bar` present); `/cam` hub loads; no TemplateNotFound/jinja2/Traceback in logs (only transient oracle 429s from the heal worker).
+
+---
+
+## 2026-06-23 — CNN retrain root-cause fix (live-range coverage + anti-false-confidence gate)
+
+**Context:** CNN looked collapsed in production (v5 ~0% on live oracle eval), while retrain metrics still looked acceptable. Root-cause diagnostics showed a dataset mismatch: trusted retrain labels had almost no digit-4 `6/7` coverage, which is exactly the current meter range (`0946xxxx` / `0947xxxx`).
+
+**Root-cause evidence (verified):**
+- Live direct inference on latest meter-training frames: `full-9=0.0%`, avg `min_conf≈0.36`, no high-confidence rows.
+- Failure localization on `0946/0947` set: digit-4 confusion dominated (`6→0`, `7→0`), causing 0% full-9.
+- Retrain trusted set before fix had severe scarcity at digit-4: effectively no `6` coverage and sparse `7`, so held-out benchmark underrepresented live failure modes.
+
+**Code changes (`cnn/retrain.py`):**
+- Added **weak outside-tail inclusion** when propagation is active:
+   - keeps anchor/confirmed/repaired as trusted core,
+   - additionally includes a bounded tail of `outside` labels **above trusted max**,
+   - assigns low trust weight (`OUTSIDE_TAIL_TRUST=0.35`) to avoid overpowering gold labels.
+- Added **held-out coverage seeding** in `build_rows()` so the test set contains minimum critical live-range digits (`6/7` at digit index 3) when clean data has enough examples.
+- Added **coverage gate** (`coverage_guard`) in `main()`:
+   - aborts retrain before promotion if held-out test misses required live-range coverage,
+   - writes coverage diagnostics into `retrain_status.json` / history for auditability.
+
+**Deploy + smoke test:**
+- Deployed updated `retrain.py` to tower (`jack@192.168.0.120`, `~/meter-cnn/retrain.py`).
+- Compile check passed on tower.
+- Dry-run retrain (`--force --dry-run --epochs 1`) confirmed new behavior:
+   - propagation now included `1082` trusted + `185` weak outside-tail labels,
+   - clean digit-4 mix now includes strong live-range counts (`6:122`, `7:67`),
+   - held-out test coverage passed gate (`6:16`, `7:3`; required met),
+   - no promotion (challenger stayed worse), so gate + strict keep still protect production.
+
+**Outcome:** retrain now follows the live meter range and cannot report a misleading win from an under-covered benchmark.
 
 ---
 

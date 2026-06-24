@@ -17,6 +17,7 @@ the live meter lock at capture time (free); it can be refined on demand.
 """
 import os
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,13 @@ MAX_GPM = float(os.environ.get("METER_MAX_GPM", "20"))
 # temporarily stale and falls behind a recently corrected archive point, clamp
 # the new lock row up to the previous archive reading.
 LOCK_MONOTONIC = os.environ.get("METER_ARCHIVE_LOCK_MONOTONIC", "1") == "1"
+# Guardrail for machine-reviewed corrections (oracle/cnn): reject values that
+# contradict adjacent archive history by impossible amounts. Manual fixes can
+# still override when a human is correcting a drifted chain.
+AUTO_REVIEW_BACKSTEP_TOL = int(
+    os.environ.get("METER_ARCHIVE_AUTO_REVIEW_BACKSTEP_TOL", "2500"))
+
+log = logging.getLogger("meter_archive")
 
 
 def _conn():
@@ -58,6 +66,58 @@ def _max_forward_counts(elapsed_s):
     """Physical forward bound for one archive step."""
     e = max(1.0, float(elapsed_s or 1.0))
     return int((MAX_GPM / 60.0) * e * COUNTS_PER_GAL * 1.5 + 200)
+
+
+def _machine_anchor_guard(c, ts, reading):
+    """Validate a machine-reviewed correction against adjacent history.
+
+    Prevent a single bad oracle/CNN reread from becoming a trusted anchor and
+    propagating an impossible jump through nearby rows.
+    """
+    try:
+        val = int(reading)
+    except Exception:
+        return False, "non-integer reading"
+
+    cur_ep = _epoch(ts)
+    if cur_ep is None:
+        return True, None
+
+    def _cap(delta_s):
+        try:
+            return _max_forward_counts(float(delta_s))
+        except Exception:
+            return _max_forward_counts(60)
+
+    prev = c.execute(
+        "SELECT ts, reading FROM archive_frame "
+        "WHERE ts<? AND reading IS NOT NULL ORDER BY ts DESC LIMIT 1",
+        (ts,),
+    ).fetchone()
+    if prev and prev["reading"] is not None:
+        prev_val = int(prev["reading"])
+        prev_ep = _epoch(prev["ts"])
+        prev_cap = _cap(cur_ep - prev_ep) if prev_ep is not None else _cap(60)
+        if val < (prev_val - AUTO_REVIEW_BACKSTEP_TOL):
+            return False, f"below-previous by {prev_val - val}"
+        if val > (prev_val + prev_cap):
+            return False, f"above-previous cap by {val - (prev_val + prev_cap)}"
+
+    nxt = c.execute(
+        "SELECT ts, reading FROM archive_frame "
+        "WHERE ts>? AND reading IS NOT NULL ORDER BY ts ASC LIMIT 1",
+        (ts,),
+    ).fetchone()
+    if nxt and nxt["reading"] is not None:
+        next_val = int(nxt["reading"])
+        next_ep = _epoch(nxt["ts"])
+        next_cap = _cap(next_ep - cur_ep) if next_ep is not None else _cap(60)
+        if val > (next_val + AUTO_REVIEW_BACKSTEP_TOL):
+            return False, f"above-next by {val - next_val}"
+        if val < (next_val - next_cap):
+            return False, f"below-next cap by {(next_val - next_cap) - val}"
+
+    return True, None
 
 
 def _auto_interpolate_to_anchor(c, right_ts):
@@ -439,15 +499,38 @@ def record(ts, filename, reading=None, confidence="lock", source="lock"):
         c.close()
 
 
-def update_reading(ts, reading, confidence, source, reviewed=True):
-    """Refine the reading for one archived image (re-read or manual correction)."""
+def update_reading(ts, reading, confidence, source, reviewed=True, force=False):
+    """Refine the reading for one archived image (re-read or manual correction).
+
+    ``force=True`` bypasses machine-anchor guardrails. Use only from internal
+    repair paths that already apply independent monotonic/physics bounds.
+    """
+    try:
+        reading = int(reading) if reading is not None else None
+    except Exception:
+        return False
+
     cf = (reading / COUNTS_PER_CF) if reading is not None else None
     c = _conn()
     try:
+        src = str(source or "").lower()
+        rev = 1 if reviewed else 0
+
+        # Guard machine-reviewed anchors from introducing impossible jumps.
+        if (not force and reading is not None and rev == 1
+                and src in ("oracle", "cnn")):
+            ok, reason = _machine_anchor_guard(c, ts, reading)
+            if not ok:
+                log.warning(
+                    "archive update rejected ts=%s src=%s conf=%s reading=%s reason=%s",
+                    ts, src, confidence, reading, reason,
+                )
+                return False
+
         cur = c.execute(
             "UPDATE archive_frame SET reading=?,reading_cf=?,confidence=?,"
             "source=?,reviewed=?,updated_ts=? WHERE ts=?",
-            (reading, cf, confidence, source, 1 if reviewed else 0,
+            (reading, cf, confidence, source, rev,
              datetime.now().isoformat(timespec="seconds"), ts))
 
         # A manual/oracle/cnn-high correction can close a gap; auto-fill the

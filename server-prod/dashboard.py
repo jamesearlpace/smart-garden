@@ -3583,7 +3583,7 @@ def create_app(config, engine, weather, billing):
                 # anchors is then correct instead of flattening to the lock.
                 if meter_archive.update_reading(
                         ts, v, res.get("confidence", "high"),
-                        source="oracle", reviewed=True):
+                    source="oracle", reviewed=True, force=True):
                     reread += 1
             if reread > 0:
                 _archive_heal_state["reconciles"] += 1
@@ -3687,7 +3687,7 @@ def create_app(config, engine, weather, billing):
                 # value (bounded) and mark it authoritative.
                 if meter_archive.update_reading(
                         ts, v, res.get("confidence", "high"),
-                        source="oracle", reviewed=True):
+                    source="oracle", reviewed=True, force=True):
                     corrected += 1
                     note = "auto-corrected to blind read"
             elif not agree:
@@ -6871,7 +6871,7 @@ def create_app(config, engine, weather, billing):
                 if commit:
                     meter_archive.update_reading(
                         ts, int(new_val), new_conf, source=new_src,
-                        reviewed=False)
+                        reviewed=False, force=True)
                     updated += 1
                 else:
                     would_update += 1
@@ -7010,9 +7010,22 @@ def create_app(config, engine, weather, billing):
         updated = False
         if (res.get("ok") and res.get("readable")
                 and res.get("confidence") != "low"):
-            updated = meter_archive.update_reading(
-                ts, res["value"], res.get("confidence"), source="oracle",
-                reviewed=True)
+            try:
+                rval = int(res.get("value"))
+            except Exception:
+                rval = None
+            trusted_lock = _lock_trusted_value()
+            floor = int(getattr(meter_reader, "anchor_value", 0) or 0)
+            in_bounds = True
+            if trusted_lock is not None and rval is not None:
+                ceil = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
+                in_bounds = (floor <= rval <= ceil)
+            if in_bounds and rval is not None:
+                updated = meter_archive.update_reading(
+                    ts, rval, res.get("confidence"), source="oracle",
+                    reviewed=True)
+            else:
+                updated = False
         return jsonify({"ok": res.get("ok"), "value": res.get("value"),
                         "reading_cf": (res["value"] / 1000.0
                                        if res.get("value") is not None else None),

@@ -218,6 +218,36 @@
 
 ---
 
+## 2026-06-23 — Permanent archive anti-drift guardrails (prevent recurrence)
+
+**Context:** A wrong low value was accepted as an `oracle` reviewed anchor in archive history (`2026-06-23T20:41:49`), then propagated through surrounding rows. The issue was not a single bad card; it was missing invariants on trusted archive updates.
+
+**Root cause:** `meter_archive.update_reading()` accepted reviewed `oracle/cnn` values without validating against adjacent archive history (monotonic + physical bounds), so one bad machine reread could become a trusted anchor and poison interpolation/propagation.
+
+**Systemic fix (deployed to Acer):**
+- Added machine-anchor guard in `server-prod/meter_archive.py`:
+   - new env knob: `METER_ARCHIVE_AUTO_REVIEW_BACKSTEP_TOL` (default `2500` counts)
+   - reviewed `oracle/cnn` updates are now rejected if they imply impossible backstep/forward jump versus neighboring rows using time-aware physical caps (`_max_forward_counts`) plus small tolerance.
+   - blocked updates are logged (`archive update rejected ... reason=...`) for observability.
+- Added optional `force` parameter to `meter_archive.update_reading(...)`:
+   - internal repair pipelines that already enforce independent bounds can bypass neighbor guard safely.
+- Updated `server-prod/dashboard.py` callsites:
+   - strict reprocess writes use `force=True` with existing hard-ceiling/physics checks.
+   - archive heal worker + convergence drainer use `force=True` (already bounded by monotonic floor + trusted-lock ceiling).
+   - ad-hoc `/api/cam/archive/reread` now applies explicit floor/ceiling check (`anchor_value` .. `trusted_lock + ARCHIVE_HEAL_TOL_COUNTS`) before calling `update_reading`.
+
+**Verification:**
+- Local compile check passed (`python -m py_compile meter_archive.py dashboard.py`).
+- Service restarted cleanly and is `active`.
+- Direct regression test on production:
+   - attempted impossible low oracle-reviewed update at `2026-06-23T20:41:49`
+   - update rejected with log reason `below-previous ...`
+   - row remained unchanged.
+
+**Outcome:** this class of failure is now prevented at the write boundary. A single bad machine reread can no longer silently become a trusted anchor and cascade through archive history.
+
+---
+
 ## 2026-06-23 — CNN retrain root-cause fix (live-range coverage + anti-false-confidence gate)
 
 **Context:** CNN looked collapsed in production (v5 ~0% on live oracle eval), while retrain metrics still looked acceptable. Root-cause diagnostics showed a dataset mismatch: trusted retrain labels had almost no digit-4 `6/7` coverage, which is exactly the current meter range (`0946xxxx` / `0947xxxx`).

@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (CNN retrain live-range fix: outside-tail inclusion + held-out coverage gate)
+**Last Updated:** 2026-06-23 (meter archive misread deep-dive + pre-mortem documented)
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -247,6 +247,60 @@
    - no promotion (challenger stayed worse), so gate + strict keep still protect production.
 
 **Outcome:** retrain now follows the live meter range and cannot report a misleading win from an under-covered benchmark.
+
+---
+
+## 2026-06-23 — Meter archive misread incident: deep-dive investigation + pre-mortem
+
+**Context:** James reported an archive card pair that looked self-contradictory (`094790239` then `094798240`) and asked for a deep-dive on how the AI path still allowed an incorrect result despite the existing safety model.
+
+**Incident evidence captured (live server):**
+- Archive DB (`meter_archive.db`) rows in the window `17:30-17:40` included:
+   - `2026-06-23T17:33:57 -> 094790239` (`source=oracle`, `confidence=high`, `reviewed=1`, `updated_ts=17:46:47`)
+   - `2026-06-23T17:34:29 -> 094798240` (`source=oracle`, `confidence=high`, `reviewed=1`, `updated_ts=17:44:40`)
+- Live validated stream (`flow_sample` in `smart-garden.db`) stayed flat at `094797601` with `0.0 gpm` across the same window.
+- Consecutive archive deltas in the same window included physically impossible transitions (example: `+8001` counts in `32s` vs cap about `2339` counts).
+- No request-log evidence of manual `/api/cam/archive/reread` calls in the window.
+- Service log showed continuous background `ARCHIVE-HEAL[converge]` reread cycles in that interval.
+
+**Root cause (code-path level):**
+- The live lock path (`MeterReader._validate`) correctly enforces monotonic + time-aware physical bounds and did **not** move to the wrong values.
+- A separate archive correction path (`_archive_reread_worker`) can write authority-model reads into archive rows as `source=oracle, reviewed=1` when value is inside floor/ceiling bounds relative to trusted lock.
+- That archive path does not require the same neighbor-step continuity checks that protect the live lock stream.
+- During heavy glare blur, authority-model high-digit errors passed floor/ceiling checks and were promoted to reviewed oracle anchors in archive history.
+
+**Why this was surprising at the UI level:**
+- The archive page language says usage is built from monotonic, physically-capped deltas (true for aggregation).
+- The same page presents `AI` + `✓` badges on per-image cards.
+- Combined, this can look like "card value is guaranteed true" when the guarantee actually applies to downstream delta filtering, not to every card label.
+
+**Measured impact in this incident:**
+- Live monitor truth remained correct (`094797601`, no flow).
+- Archive cards in that window were wrong.
+- Archive usage model still admitted small local forward deltas and reported about `2.768 gal` in that 10-minute window while live flow was `0.0 gal`.
+
+**Runtime conditions that widened risk during this event:**
+- `METER_ARCHIVE_REREAD_MODE=converge`
+- `METER_ARCHIVE_HEAL_TOL_COUNTS=1500`
+- Frequent archive-heal cycles were active while oracle provider was also returning many `429` responses.
+
+**Pre-mortem on proposed fix (self-audit before implementation):**
+1. Switching to `suspect` mode alone can leave bad below-lock rows untouched.
+2. Tightening one tolerance constant alone can over-block real movement or still miss structured glare errors.
+3. If a wrong oracle row remains marked reviewed, downstream strict/backfill logic treats it as immutable anchor and can preserve bad chains.
+4. Repair jobs can race with active background writers unless mutators are paused during correction.
+5. If trust badges remain unchanged, operators may still over-trust single-pass AI rows.
+
+**Recommended remediation strategy (staged, safer than a one-shot tweak):**
+1. **Containment first:** pause archive mutators during repair windows.
+2. **Trust-promotion hardening:** single oracle reread should not auto-become reviewed authority; require corroboration before promotion.
+3. **Continuity gate for archive writes:** enforce neighbor-step physics monotonic checks before accepting archive oracle writes.
+4. **Deterministic repair pass:** run dry-run report first (row count + before/after deltas), then apply.
+5. **Post-fix invariants:** verify no impossible deltas, no sustained lock-divergent authoritative plateaus, and no authoritative rows without corroboration metadata.
+
+**Decision recorded:** no hot patch was applied during this investigation pass. This entry documents the evidence chain and the hardened implementation plan to avoid swapping one failure mode for another.
+
+**Follow-up note (same day):** CNN retrain hardening was shipped later on 2026-06-23 (outside-tail inclusion + held-out coverage gate) and is documented in the separate dated entry above. The no-hot-patch decision here refers only to this archive-misread investigation pass.
 
 ---
 

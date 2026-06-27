@@ -1828,35 +1828,75 @@ def create_app(config, engine, weather, billing):
             if accepted:
                 b["gpm_sum"] += r["gpm"]
                 b["gpm_n"] += 1
+        # Emit ONE point per bucket across the full span between the first and
+        # last bucket that actually has data, FILLING any bucket with no samples
+        # as a zero-usage "gap" (the 15s sampler/camera was down — NOT real zero
+        # flow). This keeps the category x-axis uniform in time so a data outage
+        # can't visually collapse to look like continuous flow, and the
+        # cumulative / meter lines don't slope across missing time. Bounded:
+        # bucket_s scales to ~40 buckets/window, so this loop is window-sized.
+        #
+        # An empty bucket is only FLAGGED as an outage gap when the bucket is
+        # comfortably wider than the 15s sampler cadence (>=60s = 4+ expected
+        # samples). At the finest grain (15s buckets) one sample landing a
+        # fraction early/late can leave a bucket empty by jitter alone — that's
+        # not an outage, so it's filled as a plain zero (gap=False) instead.
+        mark_gap = bucket_s >= 60
         usage, line, meter = [], [], []
-        carry_cf = None
-        for k in order:
-            b = buckets[k]
-            gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
-            usage.append({"t": b["ts"], "gallons": round(b["gal"], 2),
-                          "gpm": round(gpm, 2),
-                          "start_ms": int(k * bucket_s * 1000),
-                          "end_ms": int((k + 1) * bucket_s * 1000)})
-            line.append({"t": b["ts"], "gal": round(b["cum"], 2)})
-            cf = b["cf"] if b["cf"] is not None else carry_cf
-            carry_cf = cf
-            meter.append({"t": b["ts"],
-                          "cf": (round(cf, 3) if cf is not None else None)})
+        if order:
+            carry_cf = None
+            carry_cum = 0.0
+            for k in range(order[0], order[-1] + 1):
+                # Uniform bucket-START timestamp (local) so spacing == real time.
+                t_iso = _dt.fromtimestamp(k * bucket_s).isoformat(
+                    timespec="seconds")
+                start_ms = int(k * bucket_s * 1000)
+                end_ms = int((k + 1) * bucket_s * 1000)
+                b = buckets.get(k)
+                if b is not None:
+                    gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
+                    carry_cum = b["cum"]
+                    cf = b["cf"] if b["cf"] is not None else carry_cf
+                    carry_cf = cf
+                    usage.append({"t": t_iso, "gallons": round(b["gal"], 2),
+                                  "gpm": round(gpm, 2), "gap": False,
+                                  "start_ms": start_ms, "end_ms": end_ms})
+                    line.append({"t": t_iso, "gal": round(b["cum"], 2)})
+                    meter.append({"t": t_iso,
+                                  "cf": (round(cf, 3) if cf is not None
+                                         else None)})
+                else:
+                    # No samples in this bucket -> data gap. Zero usage, hold the
+                    # cumulative flat, carry the last meter reading; flag it as an
+                    # outage only when the bucket is wide enough that emptiness
+                    # means real missing data (not 15s-cadence jitter).
+                    usage.append({"t": t_iso, "gallons": 0.0, "gpm": 0.0,
+                                  "gap": mark_gap,
+                                  "start_ms": start_ms, "end_ms": end_ms})
+                    line.append({"t": t_iso, "gal": round(carry_cum, 2)})
+                    meter.append({"t": t_iso,
+                                  "cf": (round(carry_cf, 3)
+                                         if carry_cf is not None else None)})
         if bucket_s < 60:
             blabel = f"{bucket_s}s"
         elif bucket_s < 3600:
             blabel = f"{bucket_s // 60} min"
         else:
             blabel = f"{bucket_s // 3600} hr"
-        # flat if every bucket used ~nothing
-        steps = [u["gallons"] for u in usage]
+        # flat / leak detection looks at REAL buckets only — a filled gap bucket
+        # (zero by construction) must not flatten the max or break a
+        # continuous-flow leak signal.
+        real_steps = [u["gallons"] for u in usage if not u["gap"]]
+        gap_n = sum(1 for u in usage if u["gap"])
         total = round(cum, 2)
-        flat = bool(steps) and max(steps) < 0.3
-        leak_hint = bool(steps) and len(steps) >= 5 and min(steps) > 0.3
+        flat = bool(real_steps) and max(real_steps) < 0.3
+        leak_hint = (bool(real_steps) and len(real_steps) >= 5
+                     and min(real_steps) > 0.3)
         return jsonify({"minutes": minutes, "bucket_s": bucket_s,
                         "bucket_label": blabel, "usage": usage, "line": line,
-                        "meter": meter,
-                        "total_gal": total, "flat": flat, "leak_hint": leak_hint})
+                        "meter": meter, "gaps": gap_n,
+                        "total_gal": total, "flat": flat,
+                        "leak_hint": leak_hint})
 
     @app.route("/api/water-usage/frames")
     def api_water_usage_frames():

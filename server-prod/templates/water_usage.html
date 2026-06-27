@@ -126,7 +126,8 @@ function render(d){
   document.getElementById('bar-title').textContent = 'Gallons used per ' + (d.bucket_label||'bucket');
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
-    + (d.total_gal||0)+' gal total this window · meter sampled every 15s';
+    + (d.total_gal||0)+' gal total this window · meter sampled every 15s'
+    + (d.gaps ? ' · <b style="color:#94a3b8">'+d.gaps+'</b> gap bucket(s) (offline, shown dashed)' : '');
   var b = document.getElementById('banner');
   if (!usage.length){ b.className='banner muted'; b.textContent='No data in this window yet.'; }
   else if (d.leak_hint){ b.className='banner warn';
@@ -150,6 +151,15 @@ function render(d){
   // can pack more ticks before they collide.
   var maxTicks = (d.bucket_s < 60 && !multiDay) ? 16 : (spanDays > 2 ? 10 : 13);
   var gph = usage.map(function(u){ return u.gallons; });
+  // Which buckets are data gaps (sampler/camera offline) vs real readings.
+  var gapFlags = usage.map(function(u){ return !!u.gap; });
+  // Style a line segment grey + dashed when it spans into/out of a gap, so a
+  // data outage is visibly different from real zero-flow.
+  function gapSeg(){ return {
+    borderColor:function(ctx){ return (gapFlags[ctx.p0DataIndex]||gapFlags[ctx.p1DataIndex])
+      ? 'rgba(148,163,184,.65)' : undefined; },
+    borderDash:function(ctx){ return (gapFlags[ctx.p0DataIndex]||gapFlags[ctx.p1DataIndex])
+      ? [5,4] : undefined; } }; }
 
   // Shared axis config so all three charts line up perfectly: an identical
   // x-axis (same bucket labels + same tick rules) and a FIXED y-axis width, so
@@ -171,8 +181,11 @@ function render(d){
     data:{labels:labels, datasets:[{label:'gal', data:gph,
       backgroundColor:'#3b82f6', borderRadius:3}]},
     options:{responsive:true,maintainAspectRatio:false,
-      onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u) showFrames(u); } },
-      plugins:{legend:{display:false}, tooltip:xTooltip()},
+      onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u && !u.gap) showFrames(u); } },
+      plugins:{legend:{display:false}, tooltip:{callbacks:{
+        title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
+        label:function(c){ return gapFlags[c.dataIndex] ? 'no data (offline)'
+          : (c.parsed.y + ' gal'); }}}},
       scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
@@ -182,7 +195,7 @@ function render(d){
     data:{labels:labels,
       datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
         borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
-        fill:true, pointRadius:0, borderWidth:2, tension:.2}]},
+        fill:true, pointRadius:0, borderWidth:2, tension:.2, segment:gapSeg()}]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}, tooltip:xTooltip()},
       scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
@@ -194,14 +207,16 @@ function render(d){
     data:{labels:labels,
       datasets:[{label:'meter (ft\u00b3)', data:meterArr.map(function(p){return p.cf;}),
         borderColor:'#0d9488', backgroundColor:'rgba(13,148,136,.08)',
-        fill:false, pointRadius:0, borderWidth:2, tension:.15, spanGaps:true}]},
+        fill:false, pointRadius:0, borderWidth:2, tension:.15, spanGaps:true,
+        segment:gapSeg()}]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},
         tooltip:{callbacks:{
           title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
-          label:function(c){ return (c.parsed.y!=null
+          label:function(c){ var s=(c.parsed.y!=null
           ? Number(c.parsed.y).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3})
-          : '\u2014')+' ft\u00b3'; }}}},
+          : '\u2014')+' ft\u00b3';
+            return gapFlags[c.dataIndex] ? s+' (carried, offline)' : s; }}}},
       scales:{x:xAxis(),
         y:yAxis('ft\u00b3',{beginAtZero:false,
           ticks:{font:{size:9},callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}})}}

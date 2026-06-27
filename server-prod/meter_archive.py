@@ -17,7 +17,6 @@ the live meter lock at capture time (free); it can be refined on demand.
 """
 import os
 import sqlite3
-import logging
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,13 +32,6 @@ MAX_GPM = float(os.environ.get("METER_MAX_GPM", "20"))
 # temporarily stale and falls behind a recently corrected archive point, clamp
 # the new lock row up to the previous archive reading.
 LOCK_MONOTONIC = os.environ.get("METER_ARCHIVE_LOCK_MONOTONIC", "1") == "1"
-# Guardrail for machine-reviewed corrections (oracle/cnn): reject values that
-# contradict adjacent archive history by impossible amounts. Manual fixes can
-# still override when a human is correcting a drifted chain.
-AUTO_REVIEW_BACKSTEP_TOL = int(
-    os.environ.get("METER_ARCHIVE_AUTO_REVIEW_BACKSTEP_TOL", "2500"))
-
-log = logging.getLogger("meter_archive")
 
 
 def _conn():
@@ -66,58 +58,6 @@ def _max_forward_counts(elapsed_s):
     """Physical forward bound for one archive step."""
     e = max(1.0, float(elapsed_s or 1.0))
     return int((MAX_GPM / 60.0) * e * COUNTS_PER_GAL * 1.5 + 200)
-
-
-def _machine_anchor_guard(c, ts, reading):
-    """Validate a machine-reviewed correction against adjacent history.
-
-    Prevent a single bad oracle/CNN reread from becoming a trusted anchor and
-    propagating an impossible jump through nearby rows.
-    """
-    try:
-        val = int(reading)
-    except Exception:
-        return False, "non-integer reading"
-
-    cur_ep = _epoch(ts)
-    if cur_ep is None:
-        return True, None
-
-    def _cap(delta_s):
-        try:
-            return _max_forward_counts(float(delta_s))
-        except Exception:
-            return _max_forward_counts(60)
-
-    prev = c.execute(
-        "SELECT ts, reading FROM archive_frame "
-        "WHERE ts<? AND reading IS NOT NULL ORDER BY ts DESC LIMIT 1",
-        (ts,),
-    ).fetchone()
-    if prev and prev["reading"] is not None:
-        prev_val = int(prev["reading"])
-        prev_ep = _epoch(prev["ts"])
-        prev_cap = _cap(cur_ep - prev_ep) if prev_ep is not None else _cap(60)
-        if val < (prev_val - AUTO_REVIEW_BACKSTEP_TOL):
-            return False, f"below-previous by {prev_val - val}"
-        if val > (prev_val + prev_cap):
-            return False, f"above-previous cap by {val - (prev_val + prev_cap)}"
-
-    nxt = c.execute(
-        "SELECT ts, reading FROM archive_frame "
-        "WHERE ts>? AND reading IS NOT NULL ORDER BY ts ASC LIMIT 1",
-        (ts,),
-    ).fetchone()
-    if nxt and nxt["reading"] is not None:
-        next_val = int(nxt["reading"])
-        next_ep = _epoch(nxt["ts"])
-        next_cap = _cap(next_ep - cur_ep) if next_ep is not None else _cap(60)
-        if val > (next_val + AUTO_REVIEW_BACKSTEP_TOL):
-            return False, f"above-next by {val - next_val}"
-        if val < (next_val - next_cap):
-            return False, f"below-next cap by {(next_val - next_cap) - val}"
-
-    return True, None
 
 
 def _auto_interpolate_to_anchor(c, right_ts):
@@ -499,38 +439,15 @@ def record(ts, filename, reading=None, confidence="lock", source="lock"):
         c.close()
 
 
-def update_reading(ts, reading, confidence, source, reviewed=True, force=False):
-    """Refine the reading for one archived image (re-read or manual correction).
-
-    ``force=True`` bypasses machine-anchor guardrails. Use only from internal
-    repair paths that already apply independent monotonic/physics bounds.
-    """
-    try:
-        reading = int(reading) if reading is not None else None
-    except Exception:
-        return False
-
+def update_reading(ts, reading, confidence, source, reviewed=True):
+    """Refine the reading for one archived image (re-read or manual correction)."""
     cf = (reading / COUNTS_PER_CF) if reading is not None else None
     c = _conn()
     try:
-        src = str(source or "").lower()
-        rev = 1 if reviewed else 0
-
-        # Guard machine-reviewed anchors from introducing impossible jumps.
-        if (not force and reading is not None and rev == 1
-                and src in ("oracle", "cnn")):
-            ok, reason = _machine_anchor_guard(c, ts, reading)
-            if not ok:
-                log.warning(
-                    "archive update rejected ts=%s src=%s conf=%s reading=%s reason=%s",
-                    ts, src, confidence, reading, reason,
-                )
-                return False
-
         cur = c.execute(
             "UPDATE archive_frame SET reading=?,reading_cf=?,confidence=?,"
             "source=?,reviewed=?,updated_ts=? WHERE ts=?",
-            (reading, cf, confidence, source, rev,
+            (reading, cf, confidence, source, 1 if reviewed else 0,
              datetime.now().isoformat(timespec="seconds"), ts))
 
         # A manual/oracle/cnn-high correction can close a gap; auto-fill the
@@ -793,56 +710,6 @@ def get(ts):
         c.close()
 
 
-def previous_row(ts, distinct_from=None):
-    """Closest archived row strictly before ``ts`` (or None).
-
-    If ``distinct_from`` is provided, prefer rows whose reading differs from
-    that value.
-    """
-    c = _conn()
-    try:
-        q = "SELECT * FROM archive_frame WHERE ts<?"
-        args = [ts]
-        if distinct_from is not None:
-            try:
-                dv = int(distinct_from)
-            except Exception:
-                dv = None
-            if dv is not None:
-                q += " AND reading IS NOT NULL AND reading!=?"
-                args.append(dv)
-        q += " ORDER BY ts DESC LIMIT 1"
-        r = c.execute(q, args).fetchone()
-        return dict(r) if r else None
-    finally:
-        c.close()
-
-
-def next_row(ts, distinct_from=None):
-    """Closest archived row strictly after ``ts`` (or None).
-
-    If ``distinct_from`` is provided, prefer rows whose reading differs from
-    that value.
-    """
-    c = _conn()
-    try:
-        q = "SELECT * FROM archive_frame WHERE ts>?"
-        args = [ts]
-        if distinct_from is not None:
-            try:
-                dv = int(distinct_from)
-            except Exception:
-                dv = None
-            if dv is not None:
-                q += " AND reading IS NOT NULL AND reading!=?"
-                args.append(dv)
-        q += " ORDER BY ts ASC LIMIT 1"
-        r = c.execute(q, args).fetchone()
-        return dict(r) if r else None
-    finally:
-        c.close()
-
-
 def neighbor_reading(ts):
     """Most recent known reading at or before ``ts`` (context for a re-read)."""
     c = _conn()
@@ -942,7 +809,14 @@ def usage_series(start, end, target_points=60):
     if e0 is None or e1 is None or e1 <= e0:
         return {"bucket_s": 0, "bucket_label": "—", "usage": [], "line": [],
                 "total_gal": 0.0, "points": 0, "readings": len(rows)}
-    bucket_s = max(60, int(round((e1 - e0) / max(target_points, 1) / 60)) * 60)
+    # Bucket size auto-scales to ~target_points across the window. Allow FINE
+    # (down to 5s) buckets for short spans so flow events show their true ~5s
+    # detail; longer spans still coarsen to whole minutes/hours.
+    raw = (e1 - e0) / max(target_points, 1)
+    if raw <= 55:
+        bucket_s = max(5, int(round(raw / 5)) * 5)
+    else:
+        bucket_s = int(round(raw / 60)) * 60
     buckets, order = {}, []
     line = []
     cum = 0.0
@@ -971,7 +845,9 @@ def usage_series(start, end, target_points=60):
     usage = [{"t": buckets[k]["ts"], "gallons": round(buckets[k]["gal"], 2),
               "start_ms": int(k * bucket_s * 1000),
               "end_ms": int((k + 1) * bucket_s * 1000)} for k in order]
-    if bucket_s < 3600:
+    if bucket_s < 60:
+        blabel = f"{bucket_s} sec"
+    elif bucket_s < 3600:
         blabel = f"{bucket_s // 60} min"
     elif bucket_s < 86400:
         blabel = f"{bucket_s // 3600} hr"

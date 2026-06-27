@@ -67,6 +67,12 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <div class="wrap"><canvas id="lineChart"></canvas></div>
 </div>
 
+<div class="card">
+  <h2>Actual meter reading</h2>
+  <div class="hint">The raw meter value (ft³) over time. Climbs as water flows; a flat line = no flow; a vertical step = a manual re-anchor / correction (not real usage). The x-axis is locked in sync with the two charts above.</div>
+  <div class="wrap"><canvas id="meterChart"></canvas></div>
+</div>
+
 <div class="modal" id="modal">
   <div class="modal-card">
     <span class="x" id="modal-x">&times;</span>
@@ -88,20 +94,35 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
               [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
-var minutes = 60, barC = null, lineC = null, LAST_USAGE = [];
+var minutes = 60, barC = null, lineC = null, meterC = null, LAST_USAGE = [];
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
-function tlabel(ts, fine){
-  // ts = 'YYYY-MM-DDTHH:MM:SS' (local). Show HH:MM:SS for fine, HH:MM else.
-  return fine ? ts.slice(11,19) : ts.slice(11,16);
+// Month abbreviations for compact, unambiguous date labels.
+var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function _md(ts){ // 'Jun 15' from 'YYYY-MM-DDTHH:MM:SS'
+  return MONTHS[parseInt(ts.slice(5,7),10)-1] + ' ' + parseInt(ts.slice(8,10),10);
+}
+function fullStamp(ts){ // 'Jun 15, 2026 · 14:08:25' — always full detail (tooltips/modal)
+  return _md(ts) + ', ' + ts.slice(0,4) + ' · ' + ts.slice(11,19);
+}
+// Build an axis-label formatter that adapts to the time grain so the x-axis is
+// readable from a 5-second window all the way out to 3 months:
+//   • seconds grain          -> 14:08:25
+//   • minutes/hours, one day -> 14:08        (full date lives in the tooltip)
+//   • crosses midnight       -> Jun 26 · 14:00
+//   • span > 2 days          -> Jun 15        (time-of-day is noise at this zoom)
+function makeLabeler(bucket_s, spanDays, multiDay){
+  if (bucket_s < 60) return function(ts){ return ts.slice(11,19); };       // 14:08:25
+  if (spanDays > 2)  return function(ts){ return _md(ts); };               // Jun 15
+  if (!multiDay)     return function(ts){ return ts.slice(11,16); };       // 14:08
+  return function(ts){ return _md(ts) + ' · ' + ts.slice(11,16); };       // Jun 26 · 14:00
 }
 
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
-  var fine = d.bucket_s < 60;
   document.getElementById('bar-title').textContent = 'Gallons used per ' + (d.bucket_label||'bucket');
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
@@ -115,8 +136,35 @@ function render(d){
   else { b.className='banner muted';
     b.textContent='Some water use this window ('+(d.total_gal||0)+' gal) with quiet buckets in between — normal on/off usage.'; }
 
-  var labels = usage.map(function(u){ return tlabel(u.t, fine); });
+  var meterArr = d.meter || [];
+  // Adaptive x-axis: pick label detail from the bucket grain + the window span
+  // so the axis reads well from a 5-second window out to 3 months.
+  var firstT = usage.length ? usage[0].t : '';
+  var lastT  = usage.length ? usage[usage.length-1].t : '';
+  var multiDay = firstT.slice(0,10) !== lastT.slice(0,10);
+  var spanDays = (firstT && lastT) ? (Date.parse(lastT)-Date.parse(firstT))/86400000 : 0;
+  var labeler = makeLabeler(d.bucket_s||0, spanDays, multiDay);
+  var labels = usage.map(function(u){ return labeler(u.t); });
+  var fullLabels = usage.map(function(u){ return fullStamp(u.t); });
+  // Date-bearing labels are wider, so show fewer of them; a fine same-day grain
+  // can pack more ticks before they collide.
+  var maxTicks = (d.bucket_s < 60 && !multiDay) ? 16 : (spanDays > 2 ? 10 : 13);
   var gph = usage.map(function(u){ return u.gallons; });
+
+  // Shared axis config so all three charts line up perfectly: an identical
+  // x-axis (same bucket labels + same tick rules) and a FIXED y-axis width, so
+  // every plot area starts at the same x and a vertical line hits the same time
+  // on all three charts.
+  var YW = 82;
+  function xAxis(){ return {grid:{display:true,color:'#eef2f6'},
+    ticks:{maxRotation:90,minRotation:45,autoSkip:true,autoSkipPadding:8,
+      maxTicksLimit:maxTicks,font:{size:9}}}; }
+  function xTooltip(){ return {callbacks:{title:function(items){
+    return items.length ? fullLabels[items[0].dataIndex] : ''; }}}; }
+  function yAxis(title, opts){ return Object.assign(
+    {title:{display:true,text:title}, afterFit:function(s){ s.width = YW; },
+     ticks:{font:{size:9}}}, opts||{}); }
+
   if (barC) barC.destroy();
   barC = new Chart(document.getElementById('barChart'), {
     type:'bar',
@@ -124,22 +172,39 @@ function render(d){
       backgroundColor:'#3b82f6', borderRadius:3}]},
     options:{responsive:true,maintainAspectRatio:false,
       onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u) showFrames(u); } },
-      plugins:{legend:{display:false}},
-      scales:{x:{ticks:{maxRotation:90,minRotation:45,autoSkip:true,maxTicksLimit:24,font:{size:9}}},
-        y:{beginAtZero:true,title:{display:true,text:'gallons'}}}}
+      plugins:{legend:{display:false}, tooltip:xTooltip()},
+      scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
   if (lineC) lineC.destroy();
   lineC = new Chart(document.getElementById('lineChart'), {
     type:'line',
-    data:{labels:line.map(function(p){return tlabel(p.t, fine);}),
+    data:{labels:labels,
       datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
         borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
         fill:true, pointRadius:0, borderWidth:2, tension:.2}]},
     options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false}},
-      scales:{x:{ticks:{maxTicksLimit:12,font:{size:9}}},
-        y:{title:{display:true,text:'gallons'}}}}
+      plugins:{legend:{display:false}, tooltip:xTooltip()},
+      scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
+  });
+
+  if (meterC) meterC.destroy();
+  meterC = new Chart(document.getElementById('meterChart'), {
+    type:'line',
+    data:{labels:labels,
+      datasets:[{label:'meter (ft\u00b3)', data:meterArr.map(function(p){return p.cf;}),
+        borderColor:'#0d9488', backgroundColor:'rgba(13,148,136,.08)',
+        fill:false, pointRadius:0, borderWidth:2, tension:.15, spanGaps:true}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{
+          title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
+          label:function(c){ return (c.parsed.y!=null
+          ? Number(c.parsed.y).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3})
+          : '\u2014')+' ft\u00b3'; }}}},
+      scales:{x:xAxis(),
+        y:yAxis('ft\u00b3',{beginAtZero:false,
+          ticks:{font:{size:9},callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}})}}
   });
 }
 
@@ -202,7 +267,7 @@ function showFrames(u){
   window.__curUsage = u;
   var m = document.getElementById('modal');
   document.getElementById('modal-title').textContent =
-    u.gallons + ' gal · ' + (u.t ? u.t.slice(11,19) : '');
+    u.gallons + ' gal · ' + (u.t ? fullStamp(u.t) : '');
   document.getElementById('modal-sub').textContent = 'Loading captured frames…';
   document.getElementById('modal-grid').innerHTML = '';
   m.classList.add('on');

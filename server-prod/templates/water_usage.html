@@ -10,22 +10,30 @@
   --blue:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
-  background:var(--bg);color:var(--text);line-height:1.45;padding:16px 16px 60px;max-width:1100px;margin:0 auto}
+  background:var(--bg);color:var(--text);line-height:1.45;padding:12px 14px 24px;max-width:1100px;margin:0 auto}
 a{color:var(--blue);text-decoration:none}
 h1{font-size:1.35rem;margin-bottom:2px}
-.sub{color:var(--text2);font-size:.85rem;margin-bottom:14px}
-.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}
+.sub{color:var(--text2);font-size:.85rem;margin-bottom:8px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
 .chip.on{background:var(--text);color:#fff;border-color:var(--text)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:.95rem;margin-bottom:2px}
 .card .hint{font-size:.78rem;color:var(--text2);margin-bottom:10px}
-.banner{padding:10px 14px;border-radius:10px;font-size:.85rem;font-weight:600;margin-bottom:16px}
+.banner{padding:8px 12px;border-radius:10px;font-size:.82rem;font-weight:600;margin-bottom:10px}
 .banner.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
 .banner.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
 .banner.muted{background:#f1f5f9;border:1px solid var(--border);color:var(--text2)}
-.wrap{position:relative;height:300px}
+.wrap{position:relative}
+.stack{padding:10px 12px 12px}
+.panel{margin:0}
+.cap{font-size:.82rem;font-weight:600;margin:4px 0 1px 2px}
+.capsub{font-weight:400;color:var(--text2);font-size:.74rem}
+.stackhint{font-size:.72rem;color:var(--text2);margin-top:8px;line-height:1.35}
+.wrap-bar{height:clamp(120px,23vh,240px)}
+.wrap-mid{height:clamp(95px,18vh,200px)}
+.wrap-meter{height:clamp(130px,24vh,250px)}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
   padding:24px;overflow:auto}
 .modal.on{display:block}
@@ -55,22 +63,20 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="bar" id="chips"></div>
 
-<div class="card">
-  <h2 id="bar-title">Gallons used per bucket</h2>
-  <div class="hint">Each bar = water used in that time bucket. <b>Click a bar</b> to see the captured meter photos from that window and confirm it really happened. All bars near zero = no water moving.</div>
-  <div class="wrap"><canvas id="barChart"></canvas></div>
-</div>
-
-<div class="card">
-  <h2>Cumulative usage</h2>
-  <div class="hint">Total gallons since the start of the window. A flat line = no water moving. A steady upward slope = continuous flow (a leak, if nothing's running).</div>
-  <div class="wrap"><canvas id="lineChart"></canvas></div>
-</div>
-
-<div class="card">
-  <h2>Actual meter reading</h2>
-  <div class="hint">The raw meter value (ft³) over time. Climbs as water flows; a flat line = no flow; a vertical step = a manual re-anchor / correction (not real usage). The x-axis is locked in sync with the two charts above.</div>
-  <div class="wrap"><canvas id="meterChart"></canvas></div>
+<div class="card stack">
+  <div class="panel">
+    <div class="cap" id="bar-title">Gallons used per bucket</div>
+    <div class="wrap wrap-bar"><canvas id="barChart"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="cap">Cumulative usage <span class="capsub">— total gallons since window start</span></div>
+    <div class="wrap wrap-mid"><canvas id="lineChart"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="cap">Actual meter reading <span class="capsub">— raw meter ft³</span></div>
+    <div class="wrap wrap-meter"><canvas id="meterChart"></canvas></div>
+  </div>
+  <div class="stackhint"><b>Click a bar</b> to see the meter photos for that window. All three share one time axis (labels at the bottom); a grey dashed line segment = a data gap (offline).</div>
 </div>
 
 <div class="modal" id="modal">
@@ -166,8 +172,9 @@ function render(d){
   // every plot area starts at the same x and a vertical line hits the same time
   // on all three charts.
   var YW = 82;
-  function xAxis(){ return {grid:{display:true,color:'#eef2f6'},
-    ticks:{maxRotation:90,minRotation:45,autoSkip:true,autoSkipPadding:8,
+  function xAxis(showTicks){ return {grid:{display:true,color:'#eef2f6'},
+    ticks:{display:showTicks!==false,
+      maxRotation:90,minRotation:45,autoSkip:true,autoSkipPadding:8,
       maxTicksLimit:maxTicks,font:{size:9}}}; }
   function xTooltip(){ return {callbacks:{title:function(items){
     return items.length ? fullLabels[items[0].dataIndex] : ''; }}}; }
@@ -186,7 +193,7 @@ function render(d){
         title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
         label:function(c){ return gapFlags[c.dataIndex] ? 'no data (offline)'
           : (c.parsed.y + ' gal'); }}}},
-      scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
+      scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
   if (lineC) lineC.destroy();
@@ -198,7 +205,7 @@ function render(d){
         fill:true, pointRadius:0, borderWidth:2, tension:.2, segment:gapSeg()}]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}, tooltip:xTooltip()},
-      scales:{x:xAxis(), y:yAxis('gallons',{beginAtZero:true})}}
+      scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
   if (meterC) meterC.destroy();
@@ -217,7 +224,7 @@ function render(d){
           ? Number(c.parsed.y).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3})
           : '\u2014')+' ft\u00b3';
             return gapFlags[c.dataIndex] ? s+' (carried, offline)' : s; }}}},
-      scales:{x:xAxis(),
+      scales:{x:xAxis(true),
         y:yAxis('ft\u00b3',{beginAtZero:false,
           ticks:{font:{size:9},callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}})}}
   });

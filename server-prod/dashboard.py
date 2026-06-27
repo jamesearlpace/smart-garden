@@ -1898,6 +1898,110 @@ def create_app(config, engine, weather, billing):
                         "total_gal": total, "flat": flat,
                         "leak_hint": leak_hint})
 
+    @app.route("/api/water-usage/audit")
+    def api_water_usage_audit():
+        """One-click ACCURACY audit for a usage window. Reconciles the chart's
+        counted usage (validated flow) against the PHYSICAL meter movement and
+        explains every gallon of the difference:
+          • catch-up jumps  — real water the live lock caught up on after fast
+            flow; tagged a gap (gpm NULL) and excluded from validated flow to
+            stay conservative, but the meter really did move.
+          • re-anchor corrections — operator/auto resets (register went down);
+            NOT real water.
+        Lets you verify any window against the meter without running scripts."""
+        GAL = 7.48052
+        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT ts, reading_cf, delta_cf, gpm, state FROM flow_sample "
+                "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
+                "ORDER BY ts",
+                (f"-{minutes} minutes",)).fetchall()
+        finally:
+            conn.close()
+
+        def g(cf):
+            return round((cf or 0.0) * GAL, 2)
+
+        samples = len(rows)
+        reads = [r["reading_cf"] for r in rows if r["reading_cf"] is not None]
+        meter_start = reads[0] if reads else None
+        meter_end = reads[-1] if reads else None
+        meter_delta_cf = (meter_end - meter_start) if reads else 0.0
+
+        # Categorise EVERY sample's delta so the books balance exactly:
+        #   counted   = accepted positive flow (gpm not NULL)  -> the chart total
+        #   catchup   = excluded positive flow (gpm NULL, delta>0) -> real water
+        #   reanchor  = any negative delta (meter is monotonic, so a drop is a
+        #               correction, never real usage)
+        sum_all_cf = sum((r["delta_cf"] or 0.0) for r in rows)
+        counted_cf = sum(max(0.0, r["delta_cf"] or 0.0)
+                         for r in rows if r["gpm"] is not None)
+        catchup_cf = sum((r["delta_cf"] or 0.0) for r in rows
+                         if r["gpm"] is None and (r["delta_cf"] or 0.0) > 0)
+        catchup_n = sum(1 for r in rows
+                        if r["gpm"] is None and (r["delta_cf"] or 0.0) > 0)
+        reanchor_cf = sum((r["delta_cf"] or 0.0) for r in rows
+                          if (r["delta_cf"] or 0.0) < 0)
+        reanchor_n = sum(1 for r in rows if (r["delta_cf"] or 0.0) < 0)
+        gap_n = sum(1 for r in rows if r["gpm"] is None)
+        best_cf = counted_cf + catchup_cf      # real water (excl. corrections)
+
+        telescoping_err_cf = sum_all_cf - meter_delta_cf
+        recon_err_cf = (counted_cf + catchup_cf + reanchor_cf) - sum_all_cf
+        tol_cf = max(0.5 / GAL, 0.02 * abs(meter_delta_cf))
+        expected = max(1, int(minutes * 60 / 15))
+        coverage_pct = round(100.0 * samples / expected, 1) if expected else 0.0
+
+        checks = [
+            {"name": "Counted usage ties to the samples",
+             "ok": abs(recon_err_cf) < 0.01,
+             "detail": "counted + excluded equals the sum of every sample "
+                       f"(off by {g(recon_err_cf)} gal)"},
+            {"name": "Samples reconcile to the meter reading",
+             "ok": abs(telescoping_err_cf) < 0.01,
+             "detail": ("the per-sample changes add up to the meter's net move"
+                        if abs(telescoping_err_cf) < 0.01
+                        else f"off by {g(telescoping_err_cf)} gal — "
+                             f"{reanchor_n} re-anchor correction(s) reset the "
+                             f"reading mid-window")},
+            {"name": "Chart total vs physical meter",
+             "ok": abs(best_cf - counted_cf) < tol_cf,
+             "detail": (f"chart counts {g(counted_cf)} gal of validated flow; "
+                        f"the meter shows {g(best_cf)} gal of real water"
+                        + (f", {g(catchup_cf)} gal of it in {catchup_n} catch-up "
+                           f"jump(s) excluded from the validated count"
+                           if catchup_n else ""))},
+            {"name": "Sample coverage",
+             "ok": coverage_pct >= 90.0,
+             "detail": f"{samples} samples of ~{expected} expected "
+                       f"({coverage_pct}%); {gap_n} offline gap sample(s)"},
+        ]
+        verdict = "accurate"
+        if abs(best_cf - counted_cf) >= tol_cf:
+            verdict = "undercount"
+        if reanchor_n > 0 and abs(telescoping_err_cf) >= 0.01:
+            verdict = "review"
+
+        return jsonify({
+            "minutes": minutes, "samples": samples,
+            "window": {"start": rows[0]["ts"] if rows else None,
+                       "end": rows[-1]["ts"] if rows else None},
+            "meter": {
+                "start_cf": round(meter_start, 3) if meter_start is not None else None,
+                "end_cf": round(meter_end, 3) if meter_end is not None else None,
+                "net_gal": g(meter_delta_cf)},
+            "counted_gal": g(counted_cf),
+            "best_estimate_gal": g(best_cf),
+            "excluded": {
+                "catchup_jumps_gal": g(catchup_cf), "catchup_count": catchup_n,
+                "reanchor_gal": g(reanchor_cf), "reanchor_count": reanchor_n,
+                "gap_samples": gap_n},
+            "coverage": {"samples": samples, "expected": expected,
+                         "pct": coverage_pct},
+            "checks": checks, "verdict": verdict})
+
     @app.route("/api/water-usage/frames")
     def api_water_usage_frames():
         """Captured meter frames that JUSTIFY a usage bar: the reading just

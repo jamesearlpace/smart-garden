@@ -34,6 +34,22 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .wrap-bar{height:clamp(120px,23vh,240px)}
 .wrap-mid{height:clamp(95px,18vh,200px)}
 .wrap-meter{height:clamp(130px,24vh,250px)}
+.auditrow{margin:-2px 0 12px}
+.auditbtn{font-size:.8rem;padding:7px 14px;border-radius:8px;border:1px solid var(--border);
+  background:var(--card);cursor:pointer;font-weight:600}
+.auditbtn:hover{border-color:var(--blue);color:var(--blue)}
+.auditpanel{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:14px 16px;margin-bottom:16px;font-size:.85rem}
+.auditpanel .verdict{font-weight:700;font-size:.92rem;padding:8px 12px;border-radius:8px;margin-bottom:12px}
+.v-accurate{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+.v-undercount{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
+.v-review{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.auditnums{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+.auditnum{flex:1;min-width:110px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.auditnum .n{font-size:1.2rem;font-weight:700}
+.auditnum .l{font-size:.72rem;color:var(--text2);line-height:1.2;margin-top:2px}
+.auditcheck{display:flex;gap:8px;padding:3px 0;align-items:flex-start}
+.auditcheck .ck{flex:0 0 auto;font-weight:700}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
   padding:24px;overflow:auto}
 .modal.on{display:block}
@@ -62,6 +78,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div id="banner" class="banner muted">Checking for a slow leak…</div>
 
 <div class="bar" id="chips"></div>
+
+<div class="auditrow"><button id="auditBtn" class="auditbtn">🔍 Audit this window for accuracy</button></div>
+<div id="auditPanel" class="auditpanel" style="display:none"></div>
 
 <div class="card stack">
   <div class="panel">
@@ -359,6 +378,42 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
       setTimeout(poll,4000);
     }).catch(function(e){ msg.style.color='#ef4444';
       msg.textContent=String(e.message||e); bar.style.display='none'; reset(); });
+  };
+})();
+
+// One-click accuracy audit: reconcile the chart's counted usage against the
+// physical meter movement for the currently selected window.
+(function(){
+  var btn=document.getElementById('auditBtn'), panel=document.getElementById('auditPanel');
+  if(!btn) return;
+  function num(v,l){ return '<div class="auditnum"><div class="n">'+v+'</div><div class="l">'+l+'</div></div>'; }
+  btn.onclick=function(){
+    panel.style.display='block';
+    panel.innerHTML='<div style="color:var(--text2)">Auditing this window against the meter…</div>';
+    fetch('/api/water-usage/audit?minutes='+minutes).then(function(r){return r.json();}).then(function(a){
+      var vc={accurate:'v-accurate',undercount:'v-undercount',review:'v-review'}[a.verdict]||'v-review';
+      var vt={accurate:'✅ Accurate — the chart matches the meter',
+              undercount:'⚠️ Conservative — the meter moved more than the chart counts',
+              review:'🔎 Review — re-anchor corrections affect this window'}[a.verdict]||a.verdict;
+      var h='<div class="verdict '+vc+'">'+vt+'</div>';
+      h+='<div class="auditnums">'
+        + num(a.counted_gal+' gal','Chart counts (validated flow)')
+        + num(a.best_estimate_gal+' gal','Real water that flowed')
+        + num((a.meter&&a.meter.net_gal)+' gal','Physical meter net change')
+        + '</div>';
+      var ex=a.excluded||{};
+      if(ex.catchup_count||ex.reanchor_count){
+        h+='<div style="font-size:.8rem;color:var(--text2);margin-bottom:10px">Difference explained: '
+          + (ex.catchup_count?('<b>'+ex.catchup_jumps_gal+' gal</b> in '+ex.catchup_count+' catch-up jump(s) — real water the lock caught up on after fast flow, excluded to stay conservative'):'')
+          + (ex.reanchor_count?((ex.catchup_count?' · ':'')+'<b>'+ex.reanchor_gal+' gal</b> in '+ex.reanchor_count+' re-anchor correction(s) — not real water'):'')
+          + '.</div>';
+      }
+      h+=(a.checks||[]).map(function(c){
+        return '<div class="auditcheck"><span class="ck" style="color:'+(c.ok?'#16a34a':'#ef4444')+'">'
+          +(c.ok?'✓':'✗')+'</span><span><b>'+esc(c.name)+'</b> — '+esc(c.detail)+'</span></div>'; }).join('');
+      h+='<div style="font-size:.72rem;color:var(--text2);margin-top:10px">Window '+esc((a.window&&a.window.start)||'')+' → '+esc((a.window&&a.window.end)||'')+' · '+a.samples+' samples · '+((a.coverage&&a.coverage.pct))+'% coverage</div>';
+      panel.innerHTML=h;
+    }).catch(function(){ panel.innerHTML='<div style="color:#ef4444">Audit failed to load.</div>'; });
   };
 })();
 

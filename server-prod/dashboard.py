@@ -314,14 +314,37 @@ def create_app(config, engine, weather, billing):
 
     @app.route("/auth/google", methods=["POST"])
     def auth_google():
+        wants_json = bool(request.is_json) or request.headers.get("X-Requested-With") == "XMLHttpRequest"
         data = request.get_json(silent=True) or {}
-        credential = data.get("credential", "")
+        credential = (data.get("credential", "") or request.form.get("credential", "")).strip()
+
+        # GIS redirect mode includes a double-submit CSRF token in both cookie
+        # and form body. Validate it when present.
+        if not wants_json:
+            form_csrf = request.form.get("g_csrf_token", "")
+            cookie_csrf = request.cookies.get("g_csrf_token", "")
+            if form_csrf or cookie_csrf:
+                if not (form_csrf and cookie_csrf and hmac.compare_digest(form_csrf, cookie_csrf)):
+                    return redirect("/login?error=csrf")
+
         email = _verify_google_token(credential)
         if not email:
-            return jsonify({"ok": False, "error": "Invalid Google token"}), 401
+            if wants_json:
+                return jsonify({"ok": False, "error": "Invalid Google token"}), 401
+            return redirect("/login?error=invalid_token")
         if email not in _load_allowed_emails():
-            return jsonify({"ok": False, "error": "Not authorized"}), 403
-        resp = make_response(jsonify({"ok": True, "email": email}))
+            if wants_json:
+                return jsonify({"ok": False, "error": "Not authorized"}), 403
+            return redirect("/login?error=not_authorized")
+
+        if wants_json:
+            resp = make_response(jsonify({"ok": True, "email": email}))
+        else:
+            next_path = (request.form.get("next") or "/").strip()
+            if not next_path.startswith("/"):
+                next_path = "/"
+            resp = make_response(redirect(next_path))
+
         token = _make_session_token(email)
         # SameSite=Strict: cookie is never sent on cross-site requests. App is
         # bookmarked / typed directly, so Strict is fine and blocks CSRF.
@@ -1759,7 +1782,7 @@ def create_app(config, engine, weather, billing):
         conn = db.get_conn()
         try:
             rows = conn.execute(
-                "SELECT ts, delta_cf, gpm FROM flow_sample "
+                "SELECT ts, delta_cf, gpm, reading_cf FROM flow_sample "
                 # flow_sample.ts is T-separated; datetime() returns SPACE-
                 # separated, so a plain >= datetime(...) compares wrong and never
                 # bounds the window. Use strftime to build a T-separated bound.
@@ -1775,13 +1798,17 @@ def create_app(config, engine, weather, billing):
         # summing only accepted positive deltas counts real water. Re-anchors and
         # bad reads can never become "usage", and this stays consistent with the
         # leak monitor (one source of truth) instead of clamping the display.
-        buckets, order, line = {}, [], []
-        step = max(1, len(rows) // 400)
+        # All three series are BUCKET-ALIGNED (one point per bucket, identical
+        # timestamps) so the bar / cumulative / meter charts share an EXACT x-axis.
+        buckets, order = {}, []
         cum = 0.0
-        for i, r in enumerate(rows):
+        last_cf = None
+        for r in rows:
             accepted = r["gpm"] is not None
             dgal = (max(0.0, r["delta_cf"] or 0.0) * GAL) if accepted else 0.0
             cum += dgal
+            if r["reading_cf"] is not None:
+                last_cf = r["reading_cf"]
             try:
                 ep = _dt.fromisoformat(r["ts"]).timestamp()
             except Exception:
@@ -1789,17 +1816,20 @@ def create_app(config, engine, weather, billing):
             key = int(ep // bucket_s)
             b = buckets.get(key)
             if b is None:
-                b = {"ts": r["ts"], "gal": 0.0, "gpm_sum": 0.0, "gpm_n": 0}
+                b = {"ts": r["ts"], "gal": 0.0, "gpm_sum": 0.0, "gpm_n": 0,
+                     "cum": cum, "cf": last_cf}
                 buckets[key] = b
                 order.append(key)
             b["ts"] = r["ts"]
             b["gal"] += dgal
+            b["cum"] = cum                 # cumulative gallons at bucket end
+            if last_cf is not None:
+                b["cf"] = last_cf          # last actual meter reading in bucket
             if accepted:
                 b["gpm_sum"] += r["gpm"]
                 b["gpm_n"] += 1
-            if i % step == 0:
-                line.append({"t": r["ts"], "gal": round(cum, 2)})
-        usage = []
+        usage, line, meter = [], [], []
+        carry_cf = None
         for k in order:
             b = buckets[k]
             gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
@@ -1807,6 +1837,11 @@ def create_app(config, engine, weather, billing):
                           "gpm": round(gpm, 2),
                           "start_ms": int(k * bucket_s * 1000),
                           "end_ms": int((k + 1) * bucket_s * 1000)})
+            line.append({"t": b["ts"], "gal": round(b["cum"], 2)})
+            cf = b["cf"] if b["cf"] is not None else carry_cf
+            carry_cf = cf
+            meter.append({"t": b["ts"],
+                          "cf": (round(cf, 3) if cf is not None else None)})
         if bucket_s < 60:
             blabel = f"{bucket_s}s"
         elif bucket_s < 3600:
@@ -1820,6 +1855,7 @@ def create_app(config, engine, weather, billing):
         leak_hint = bool(steps) and len(steps) >= 5 and min(steps) > 0.3
         return jsonify({"minutes": minutes, "bucket_s": bucket_s,
                         "bucket_label": blabel, "usage": usage, "line": line,
+                        "meter": meter,
                         "total_gal": total, "flat": flat, "leak_hint": leak_hint})
 
     @app.route("/api/water-usage/frames")
@@ -4339,6 +4375,14 @@ def create_app(config, engine, weather, billing):
         now = time.time()
         if now < float(_oracle_state.get("quota_block_until", 0.0) or 0.0):
             return
+        # Respect the vision_oracle rate-limit circuit breaker so the live
+        # per-frame path stops attempting (and inflating counters) during a
+        # 429 backoff window — the same brake the background workers hit.
+        try:
+            if now < float(vision_oracle.rate_limited_until() or 0.0):
+                return
+        except Exception:
+            pass
         today = time.strftime("%Y-%m-%d")
         if _oracle_state["day"] != today:
             _oracle_state["day"] = today
@@ -7120,6 +7164,10 @@ def create_app(config, engine, weather, billing):
     @app.route("/cam")
     def cam_hub_page():
         return render_template("cam_hub.html")
+
+    @app.route("/cam/focus")
+    def cam_focus_page():
+        return render_template("cam_focus.html")
 
     @app.route("/cam/convergence")
     def cam_convergence_page():

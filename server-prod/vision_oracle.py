@@ -23,6 +23,7 @@ import io
 import json
 import logging
 import os
+import time
 import urllib.request
 
 log = logging.getLogger("vision_oracle")
@@ -30,6 +31,42 @@ log = logging.getLogger("vision_oracle")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 MODEL = os.environ.get("ORACLE_MODEL", "gpt-4o")
 AZURE_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+
+# ── Rate-limit circuit breaker ────────────────────────────────────────────
+# Azure OpenAI deployments with a low per-minute TPM/RPM return HTTP 429
+# rate_limit_exceeded when called too fast. Without a brake, every caller (the
+# live per-frame fallback AND the archive-heal/converge background workers that
+# re-read a frame every ~1.5s) keeps hammering and 429-storms the log while
+# never succeeding. This module-level breaker makes ALL callers back off
+# together: after a 429 we refuse new HTTP calls for a short, exponentially
+# growing window, reset on the next successful response. Env-tunable.
+_RATE_BACKOFF_BASE_SECS = float(
+    os.environ.get("ORACLE_RATE_BACKOFF_BASE_SECS", "20"))
+_RATE_BACKOFF_MAX_SECS = float(
+    os.environ.get("ORACLE_RATE_BACKOFF_MAX_SECS", "300"))
+_rate_state = {"block_until": 0.0, "strikes": 0}
+
+
+def rate_limited_until():
+    """Epoch secs until which calls are suppressed due to 429s (0 = not blocked)."""
+    return _rate_state["block_until"]
+
+
+def _note_rate_limit():
+    """Record a 429 and extend the backoff window (exponential, capped)."""
+    _rate_state["strikes"] += 1
+    backoff = min(
+        _RATE_BACKOFF_BASE_SECS * (2 ** (_rate_state["strikes"] - 1)),
+        _RATE_BACKOFF_MAX_SECS)
+    _rate_state["block_until"] = time.time() + backoff
+    return backoff
+
+
+def _clear_rate_limit():
+    """A successful HTTP response means we're no longer throttled — reset."""
+    if _rate_state["strikes"] or _rate_state["block_until"]:
+        _rate_state["strikes"] = 0
+        _rate_state["block_until"] = 0.0
 
 _SYS = (
     "You read residential water-meter LCD odometers. The display shows exactly "
@@ -167,6 +204,17 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
         return {"ok": False, "error": "no oracle credentials configured", "value": None,
                 "digits": "", "confidence": "none", "readable": False,
                 "cost_tokens": 0}
+    # Rate-limit circuit breaker: if a recent 429 put us in a backoff window,
+    # don't make another HTTP call (it would just 429 again). Fail fast so the
+    # caller skips this read instead of hammering the provider.
+    _now = time.time()
+    if _now < _rate_state["block_until"]:
+        return {"ok": False,
+                "error": ("rate_limited: backing off "
+                          f"{_rate_state['block_until'] - _now:.0f}s"),
+                "value": None, "digits": "", "confidence": "none",
+                "readable": False, "provider": cfg.get("provider"),
+                "rate_limited": True, "cost_tokens": 0}
     try:
         from PIL import Image
         img = Image.open(io.BytesIO(jpeg_bytes))
@@ -220,6 +268,7 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             out = json.load(r)
+        _clear_rate_limit()  # a 200 response means we're not throttled
         content = out["choices"][0]["message"]["content"].strip()
         tokens = out.get("usage", {}).get("total_tokens", 0)
         # Strip code fences if the model added them.
@@ -243,7 +292,16 @@ def read_meter(jpeg_bytes, rotate180=True, hint=None, model=None):
                 detail = e.read().decode()[:200]
             except Exception:
                 pass
-        log.warning("oracle call failed: %s %s", e, detail)
+        code = getattr(e, "code", None)
+        blob = f"{e} {detail}".lower()
+        if (code == 429 or "rate_limit" in blob
+                or "too_many_requests" in blob or "429" in blob):
+            backoff = _note_rate_limit()
+            log.warning(
+                "oracle rate-limited (429) — suppressing oracle calls for %.0fs "
+                "(strike %d)", backoff, _rate_state["strikes"])
+        else:
+            log.warning("oracle call failed: %s %s", e, detail)
         return {"ok": False, "error": f"{type(e).__name__}: {e} {detail}",
                 "value": None, "digits": "", "confidence": "none",
             "readable": False, "provider": provider,

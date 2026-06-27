@@ -3003,6 +3003,13 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_DIR = os.environ.get(
         "METER_ARCHIVE_DIR", os.path.expanduser("~/meter-archive"))
     ARCHIVE_INTERVAL = float(os.environ.get("METER_ARCHIVE_INTERVAL", "60"))
+    # During flow (a zone running, or the meter advancing) capture far more
+    # often so flow EVENTS get fine-grained ~5s history instead of a single
+    # 1/min sample. Idle stays at ARCHIVE_INTERVAL. Bounded by the same disk cap.
+    ARCHIVE_FLOW_INTERVAL = float(
+        os.environ.get("METER_ARCHIVE_FLOW_INTERVAL", "5"))
+    ARCHIVE_FLOW_COOLDOWN = float(
+        os.environ.get("METER_ARCHIVE_FLOW_COOLDOWN", "120"))
     # 30 GiB default cap. Average frame ~48KB → ~640k images ≈ 440 days at 1/min.
     ARCHIVE_MAX_BYTES = int(
         os.environ.get("METER_ARCHIVE_MAX_BYTES", str(30 * 1024 ** 3)))
@@ -3766,17 +3773,57 @@ def create_app(config, engine, weather, billing):
                 log.debug("converge drain daemon failed: %s", e)
             time.sleep(sleep_s)
 
+    def _archive_in_flow(now):
+        """True when water is (or was just) moving — a zone is running, or the
+        meter value advanced within the flow cooldown. Drives 5s archive capture
+        during flow so flow events get fine-grained history. Self-contained
+        (tracks the lock value in _archive_state); the lock's natural lag is fine
+        here — we only need to know a flow window is open, and the cooldown keeps
+        capture on through the tail."""
+        try:
+            if _active_gpm() > 0:
+                return True
+        except Exception:
+            pass
+        st = _archive_state
+        try:
+            lg = getattr(meter_reader, "last_good", None)
+            if lg is not None:
+                lv = int(lg)
+                prev = st.get("flow_last_lock")
+                if prev is not None and lv > int(prev):
+                    st["flow_last_move_ts"] = now
+                st["flow_last_lock"] = lv
+        except Exception:
+            pass
+        mt = st.get("flow_last_move_ts")
+        try:
+            if mt and (now - float(mt)) < ARCHIVE_FLOW_COOLDOWN:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _archive_interval(now):
+        """ARCHIVE_FLOW_INTERVAL while flow is detected, else ARCHIVE_INTERVAL."""
+        if ARCHIVE_FLOW_INTERVAL < ARCHIVE_INTERVAL and _archive_in_flow(now):
+            return ARCHIVE_FLOW_INTERVAL
+        return ARCHIVE_INTERVAL
+
     def _archive_frame(frame, captured_dt):
-        """Save one frame per ARCHIVE_INTERVAL into the rolling archive, evicting
-        the oldest files when the total exceeds ARCHIVE_MAX_BYTES. Best-effort —
-        never let a disk hiccup break the upload path."""
+        """Save one frame per archive interval (ARCHIVE_INTERVAL when idle, or
+        ARCHIVE_FLOW_INTERVAL while water is flowing so flow events get ~5s
+        resolution), evicting the oldest files when the total exceeds
+        ARCHIVE_MAX_BYTES. Best-effort — never let a disk hiccup break the
+        upload path."""
         if not ARCHIVE_ENABLED or not frame:
             return
         now = time.time()
-        if now - _archive_state["last_ts"] < ARCHIVE_INTERVAL:
+        interval = _archive_interval(now)
+        if now - _archive_state["last_ts"] < interval:
             return
         with _archive_lock:
-            if now - _archive_state["last_ts"] < ARCHIVE_INTERVAL:
+            if now - _archive_state["last_ts"] < interval:
                 return
             if _archive_state["files"] is None:
                 _archive_init()

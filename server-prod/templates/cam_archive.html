@@ -67,7 +67,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="card">
   <h2>💧 Water used over this window</h2>
-  <div class="hint">Built from the <b>per-minute archived readings</b> — monotonic, physically-capped deltas only, so a single bad image can't fabricate usage. Fix any wrong readings below and this graph gets more accurate.</div>
+  <div class="hint">Built from the <b>archived readings</b> (every ~5s while water is flowing, 1/min when idle) — monotonic, physically-capped deltas only, so a single bad image can't fabricate usage. Pick a short range (<b>3m</b>/<b>5m</b>) to see per-5-second detail. Fix any wrong readings below and this graph gets more accurate.</div>
   <div style="margin-bottom:8px">
     <span class="stat">Total: <b id="st-total">—</b> gal</span>
     <span class="stat">Buckets: <b id="st-buckets">—</b></span>
@@ -106,11 +106,11 @@ h1{font-size:1.35rem;margin-bottom:2px}
   </div>
   <div class="grid" id="grid"></div>
   <button class="more" id="moreBtn" onclick="loadMore()" style="display:none">Load more</button>
-  <div class="empty" id="empty" style="display:none">No archived images in this window yet. The archive saves one image per minute — check back soon.</div>
+  <div class="empty" id="empty" style="display:none">No archived images in this window yet. The archive saves an image every ~5s while water flows (1/min when idle) — check back soon.</div>
 </div>
 
 <script>
-var RANGES = [[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
+var RANGES = [[3,'3m'],[5,'5m'],[15,'15m'],[30,'30m'],[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
 var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 120;
 var includeProp = false;
 var barC = null, lineC = null, loading = false, exhausted = false;

@@ -196,6 +196,12 @@ function render(d){
         +'<span style="color:#ef4444">\u25cf</span> red dot marks each'
         +(hh.big_jumps?('; <span style="color:#f59e0b">\u25cf</span> amber = fast-flow catch-up (normal)'):'')+'.';
     }
+    if (hh.samples && hh.usage_outliers) {
+      rhEl.className='readhealth rh-warn';
+      rhEl.innerHTML += ' <b style="color:#dc2626">'+hh.usage_outliers+' implausible usage jump(s)</b>'
+        +(hh.max_usage_jump_gal?(' (biggest +'+hh.max_usage_jump_gal+' gal in one step)'):'')
+        +' \u2014 likely a misread that slipped into the total; flagged for review.';
+    }
   }
 
   var meterArr = d.meter || [];

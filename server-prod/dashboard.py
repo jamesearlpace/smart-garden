@@ -1815,6 +1815,12 @@ def create_app(config, engine, weather, billing):
         big_jumps = 0         # over-ceiling forward jumps (catch-up or garble)
         step_n = 0
         nondec_n = 0
+        # Flag-only (does NOT change usage): a single-step NEW HIGH bigger than
+        # this many ft3 is almost certainly a misread-jump, not real flow even
+        # after catch-up -- surfaced so a phantom-usage spike is visible.
+        USAGE_OUTLIER_FT3 = 20.0
+        usage_outliers = 0
+        max_usage_jump_cf = 0.0
         for r in rows:
             accepted = r["gpm"] is not None
             rc = r["reading_cf"]
@@ -1841,6 +1847,9 @@ def create_app(config, engine, weather, billing):
                     peak_cf = rc
                 elif rc > peak_cf:
                     dgal = (rc - peak_cf) * GAL
+                    if (rc - peak_cf) > USAGE_OUTLIER_FT3:
+                        usage_outliers += 1
+                        max_usage_jump_cf = max(max_usage_jump_cf, rc - peak_cf)
                     peak_cf = rc
             cum += dgal
             try:
@@ -1935,6 +1944,8 @@ def create_app(config, engine, weather, billing):
         health = {"backward_steps": backward_steps,
                   "max_drop_gal": round(max_drop_cf * GAL, 1),
                   "big_jumps": big_jumps,
+                  "usage_outliers": usage_outliers,
+                  "max_usage_jump_gal": round(max_usage_jump_cf * GAL, 1),
                   "pct_monotonic": (round(100.0 * nondec_n / step_n, 1)
                                     if step_n else 100.0),
                   "samples": step_n}

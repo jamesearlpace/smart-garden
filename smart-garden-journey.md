@@ -1,7 +1,63 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-23 (meter archive misread deep-dive + pre-mortem documented)
+**Last Updated:** 2026-06-27 (RCA filed: the meter graph can't show what the OCR read — issues #40/#41/#42)
+
+> **RESUME HERE — RCA: the meter graph can't show what the OCR read (session 2026-06-27 eve):**
+>
+> **Trigger:** James used `/water-usage` to audit the reader and saw the graph plot `95029.6` while a frame's modal showed `095929.678`. He pushed hard on "is there a bug / what's working" → full RCA.
+>
+> **Verdict (honest):** the stored data + graph for that window are **correct** — the physical photo read by eye (rotated 180°) = `095029.675`, matching the week's monotonic climb (94,524 → 95,029). The `95929` was a **transient OCR misread the guardrail rejected**. BUT the real, bigger problem James surfaced: **the system never persists the raw per-frame OCR read.** Every stored series (`flow_sample.reading_cf`, `archive_frame.reading_cf`) is the post-validation **lock**; the graph then adds bucketing + gap-fill + high-water-mark. So you **cannot answer "what did the OCR read at time T,"** and the graph **cannot audit the OCR** (it is engineered to look clean regardless of reader health). I had initially over-claimed "it's all working / contained" — retracted; the OCR is genuinely buggy and the leaks reach the stored stream (82 backward steps + 11 big jumps in 14 days).
+>
+> **Logged:** RCA doc **`RCA-ocr-historical-read-2026-06-27.md`** (repo root). New issues **#40** (no raw-read persistence — THE core), **#41** (graph ≠ OCR frames, lossy transforms), **#42** (usage high-water-mark has no outlier guard). Related existing: #35/#36/#37/#39.
+>
+> **Remediation (phased, NOT started):** P0 relabel meter chart "validated lock (not raw OCR)" + flag `propagated`/`inferred` points; **P1** faithful audit line from `archive_frame` (one point/frame, no HWM/carry/bucketing-collapse, color by confidence, click→frame) — low-risk, uses existing data; **P2** persist `raw_reading` at capture **before** bounding/anchoring (THE fix for "what did OCR read at T"); P3 usage outlier guard; P4 root-cause OCR.
+>
+> **Next:** James to confirm starting **P1** before touching the capture pipeline (P2).
+>
+> ---
+>
+> **RESUME HERE — loc2 CNN + meter rollover + Water Usage 3-chart, session of 2026-06-25:**
+>
+> **The arc:** Focus Assistant (2026-06-24) → operator refocused + **reseated the meter cam to a new fixed position "location-2"** (CUTOVER 2026-06-24 17:03) → collected a fresh **675-frame** oracle-labeled dataset (`~/cnn-locations/location-2/` on the Acer) → trained a new per-digit CNN **`loc2-v1`** for the new position.
+>
+> **loc2-v1 trained + deployed (overnight 2026-06-25 00:33–00:44):** held-out **full-9 0.962 / per-digit 0.996** (vs old location-1 ~0.65–0.81). Deployed to the tower CNN service (`~/meter-cnn/meter_cnn.pt`, `VERSION=loc2-v1`, port 5201) with the **location-2 serving crop `(0.10,0.45,0.82,0.73)`** (must match training) + backups (`meter_cnn_preloc2.bak`, `cnn_service.py.bak.preloc2`). Train script: tower `~/meter-cnn-loc2/train_loc2.py` (local `c:\MyCode\smart-garden\cnn\train_loc2.py`).
+>
+> **⚠️ Then the meter ROLLED OVER 094→095** (now **~095026224** = 95,026.224 ft³). loc2-v1 was trained only on `094920–094968`, so it **confidently misreads** the `095` frame as `094922` — a **leading-edge / out-of-distribution** failure (the synthetic generator hardcoded the `094` prefix). The live lock froze ~6h at the stale `094797660`, and the GPT-4o oracle (the only reader that can read `095`) hit **HTTP 429 rate-limit**. **Re-anchored** the lock to the true `095026224` (confirmed by eye + oracle): stop svc → write `/tmp/meter_state.json {"last_good":95026224}` → start. Display correct again; archive updating 1/min.
+>
+> **DURABLE FIX attempt (completed 2026-06-25 evening):** widened `train_loc2.py` `synth_rows()` to synthesize values across a **wide forward range (94,900,000–96,500,000)**, retrained **`loc2-v2`** (**best held-out full-9 0.975 / per-digit 0.997**), and deployed to live (`VERSION=loc2-v2`, with timestamped backup of served loc2-v1).
+>
+> **Post-deploy reality:** raw CNN argmax on current live frames is still unstable (`095922224`, min_conf ~0.40-0.59, `readable=false`). However, the production path uses anchor-constrained decode (`/cnn?anchor=<lock>&ceil=...`), and on the same frames `constrained_value` consistently resolves to **`095026224`**. Lock timestamp and `flow_sample` rows are still advancing every 15s, so continuous history/update behavior remains intact while oracle and physics guards stay on top.
+>
+> **Next model step:** improve raw confidence on true 095 frames (not just constrained rescue), then promote a new checkpoint.
+>
+> **Water Usage page got a 3rd chart:** `/water-usage` now shows **Actual meter reading (ft³)** below the gallons-bar + cumulative-line charts. The API (`/api/water-usage`) emits a new bucket-aligned `meter` series (`flow_sample.reading_cf`), and **all three charts share one x-axis** (identical bucket labels + fixed 82px y-axis width so plot areas align). Deployed + verified.
+>
+> **Image-view gotcha (fixed):** viewing a meter frame failed with a JPEG/PNG media-type mismatch — `System.Drawing` `RotateFlip` then `Save("...jpg")` writes **PNG bytes** (rawFormat→MemoryBmp). Fix: save rotated frames as **`.png`** (extension matches bytes). Verify header `89 50 4E 47`.
+>
+> ---
+>
+> **RESUME HERE — Focus Assistant (Meter Lens Focusing Tool), session of 2026-06-24:**
+>
+> **What it is:** A new page `/cam/focus` (`templates/cam_focus.html`, route in `dashboard.py`) that coaches manual lens focusing of the water-meter ESP32 camera. URL: `https://sprinklers.savagepace.com/cam/focus`. Nav tab "🎯 Focus" in `_meternav.html` + tile in `cam_hub.html`.
+>
+> **How it works:** Polls `/api/cam/latest`, draws the frame to a padded `<canvas>` (`displayCanvas`), computes a **client-side ROI sharpness score** (grayscale gradient-energy `dx²+dy²` mean over the ROI box). User pulls cam → twists lens → reinserts → waits for new capture time → clicks Log baseline / I twisted CW / I twisted CCW. The coach compares score deltas and tells you to keep going, reverse, or change step size.
+>
+> **Features shipped this session (all deployed + smoke-tested live):**
+> 1. Iterative twist coach with history table (score, delta, capture time, best marker).
+> 2. **Rotation:** fine rotation slider (±12°) + **base orientation toggle** (Upside down 180° / Normal 0°) — the meter cam mounts upside down. Render uses `totalRotationDeg()` = base + fine for BOTH display and scoring.
+> 3. **No-crop rotation:** image drawn on a larger black-padded canvas so straightening doesn't clip corners; ROI may extend over the black border. Padding is sized to the **current** angle (not worst-case) so digits stay large.
+> 4. **Locks:** "Lock ROI" + "Lock rotation" buttons freeze those controls.
+> 5. **Persistence:** all settings (ROI, rotation, base orientation, locks, compact mode, step mode, learned step, twist ref, polling) persist across refresh via `localStorage` key `cam_focus_v2`.
+> 6. **Turn-fraction guidance:** step selector is in TURNS not degrees — `Auto learn (start 1/4 turn)`, 1, 1/2, 1/4, 1/8, 1/16, 1/32. Auto mode adapts: improve→bigger step, worse→reverse+halve, flat→adjust.
+> 7. **Compact mode** (default On): denser one-screen layout, viewport-fit canvas (`applyCanvasViewportFit()`).
+> 8. **Direction reference** dropdown: "meter side (lens/front)" vs "camera back (wire side)" — just clarifies which viewpoint CW/CCW refers to; independent of image orientation.
+>
+> **KEY UNRESOLVED ISSUE (physical, not software) — "numbers cut off":** Fetched the raw frame (800×600). The outer digits run off the LEFT/RIGHT edges of the *camera capture itself* — the web page faithfully shows the full frame, it is NOT cropping. Root cause: focusing these lens modules = unscrewing the lens, which **magnifies** and **narrows field of view**, pushing outer digits off-frame. Focus vs. framing fight each other. **Fixes are physical:** (a) move cam farther from meter then refocus, (b) re-aim cam so the digits the OCR needs are centered, (c) accept centered digits if those are the ones the reading needs. NEXT STEP: check which digit positions the OCR pipeline actually requires (`water-meter-ocr.md` repo memory) so we know which must be in-frame.
+>
+> **Known limitation of the tool:** A single frame's sharpness score cannot distinguish "out of focus because too near" vs "too far" — it only knows better/worse per twist. Could add a one-time near/far calibration if desired.
+>
+> **Deploy pattern (this service):** local edits in `C:\MyCode\smart-garden\server-prod\` → backup on server (`cp ...bak.<tag>-<ts>`) → `scp templates/cam_focus.html jamesearlpace@192.168.0.109:~/smart-garden-server/templates/` → `ssh ... "echo 'KeepingP@ce8!' | sudo -S systemctl restart smart-garden-server"` → authed smoke test via session-cookie python. Also mirror to `C:\MyCode\smart-garden-server-live\`. Port 5125.
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -29,6 +85,244 @@
 **Goal:** Solar-powered smart irrigation controlled remotely via Copilot through home server.
 
 > **Full history → [smart-garden-journey-archive.md](smart-garden-journey-archive.md)** (~234KB, all dated session logs through 2026-06-06, hardware build notes, deployment post-mortems). This doc keeps only active reference + the most-recent work. Newest archived batch is under the divider "Archived 2026-06-12 from main journey".
+
+---
+
+## 2026-06-27 — VS Code login fix (Google popup blocked)
+
+**Context:** In the VS Code embedded browser, clicking **Sign in with Google** on `/login` did nothing. Browser console showed Google Identity popup errors (`Failed to open popup window`), so auth could not start from that environment.
+
+**Root cause:** `login.html` relied on Google popup UX. Embedded browser context blocks/limits popups, so GIS could not open its auth window.
+
+**Fix shipped:**
+- `templates/login.html` now auto-detects embedded/VS Code browser context and switches GIS to **redirect mode** (`ux_mode=redirect`, `login_uri=/auth/google`) instead of popup.
+- Follow-up fix: removed mixed auto-init (`g_id_onload`) + manual init pattern that could initialize GIS with an empty/undefined client ID and override redirect behavior. Login page now uses a single explicit `google.accounts.id.initialize(...)` + `renderButton(...)` path after `/auth/config` loads.
+- Post-deploy adjustment: redirect-default triggered Google `redirect_uri_mismatch` (`https://sprinklers.savagepace.com/auth/google` not registered in OAuth client redirect URIs), so login was rolled back to **popup-default**. Redirect mode remains available only via `?mode=redirect` for environments where OAuth redirect URIs are explicitly configured.
+- Added inline mode hint text and query-param error display (`invalid_token`, `not_authorized`, `csrf`) so failures are visible on the login page.
+- `dashboard.py` `/auth/google` now supports BOTH flows:
+   - existing JSON POST callback (popup mode)
+   - form POST from GIS redirect mode (embedded-browser-safe)
+- Added redirect-mode CSRF double-submit validation (`g_csrf_token` form + cookie) when present.
+
+**Deploy:**
+- Backed up server files on Acer:
+   - `dashboard.py.bak.vscodeauth-<ts>`
+   - `templates/login.html.bak.vscodeauth-<ts>`
+- Deployed updated `dashboard.py` + `templates/login.html` to `~/smart-garden-server/`.
+- Verified `python -m py_compile dashboard.py` and restarted `smart-garden-server` (`active`).
+- Synced mirrors: `smart-garden-server-live` -> `smart-garden/server-prod`.
+
+**Additional dashboard fix (same session):**
+- Found a **false stale-warning** condition on the Home dashboard (`Data stale — last reading ~63m ago`) even while server telemetry rows were fresh every few minutes.
+- Root cause: client-side freshness math used browser `Date.now()` against server timestamps (`health.ts`/`conn.ts`) without anchoring to server clock, so timezone/clock skew could inflate age by ~1 hour.
+- Fix in `templates/index.html`: introduced server-referenced clock (`setServerNow`, `nowRefMs`) and switched `timeAgo`, stale-alert age, and card freshness age calculations to use that server reference.
+- Result: stale banner/card freshness now reflect real pipeline age, not local clock skew.
+
+**Cam panel follow-up fix (same session):**
+- On `#/cam`, the image subtitle still showed `Captured ... (60m ago)` even while new frames were arriving every few seconds.
+- Root cause: cam subtitle age used `Date.now() - new Date(o.cap)` (browser clock basis), bypassing the new server-clock anchor used elsewhere.
+- Fix in `templates/index.html` (`camRefresh`): switched capture-age math to `parseTsMs(o.cap)` + `nowRefMs()`, with negative-age clamp and safe fallback when capture header is unparsable.
+- Result: cam captured-age now matches real freshness instead of client/server timezone skew.
+
+---
+
+## 2026-06-25 — loc2 CNN deployed, meter 094→095 rollover caught + fixed, Water Usage 3rd chart
+
+## 2026-06-25 — loc2 CNN deployed, meter 094→095 rollover caught + fixed, Water Usage 3rd chart
+
+**Context:** Continued a chat that had overloaded mid-work on the location-2 CNN. Reconstructed state from memory + live checks, then carried it through deploy, a rollover incident, a retrain, and a UI feature.
+
+**1. loc2-v1 trained + deployed.** The corrected 675-frame location-2 dataset (4 bad labels #87–90, `094928xxx`→`094929xxx`) was re-synced Acer→tower and trained clean: **full-9 0.962 / per-digit 0.996** (DONE 00:33). Deployed 00:44 to the tower CNN service: copied `meter_cnn_loc2.pt`→`~/meter-cnn/meter_cnn.pt`, set serving **CROP=(0.10,0.45,0.82,0.73)** (location-2 band, matches training), `VERSION=loc2-v1`, backed up the old location-1 model. `/health` ok, service active.
+
+**2. Meter rolled over 094→095 — leading-edge blind spot.** Morning check found the live lock frozen ~6h at `094797660`. Root cause: the meter physically climbed past `094999` into **`095026224`** (95,026.224 ft³, confirmed by eye + GPT-4o oracle). loc2-v1's training data was entirely `094920–094968`, and `synth_rows()` hardcoded the `094` prefix, so the model **confidently misreads** the `095` frame as `094922` (it can't output digits it never trained on). The lock couldn't catch up because the oracle's correct `095026` read was a +228 ft³ jump the physics guard (correctly) blocks, and the oracle itself was **HTTP 429 rate-limited**.
+
+**3. Re-anchored the lock.** Manual re-anchor to the confirmed `095026224` (stop service → write `/tmp/meter_state.json` → start). Verified: lock holds, oracle confirms it, the CNN's wrong `0949xx` reads are rejected as below-lock, archive saving 1/min. Display correct again.
+
+**4. Durable fix (retrain, in progress).** Edited `train_loc2.py` `synth_rows()`: instead of hardcoding `[0,9,4,...]`, it now generates synthetic values across a **wide forward range (94,900,000–96,500,000)** by recombining real digit strips (all digits 0–9 exist in the strip library), teaching the model `095/096+` prefixes before the meter physically reaches them. Launched **loc2-v2 retrain** on the tower (current model preserved as `meter_cnn_loc2_v1.bak`). When done: verify it reads a live `095` frame, then redeploy.
+
+**5. Water Usage page — 3rd chart + axis sync.** `/water-usage` now has a third chart, **Actual meter reading (ft³)** (`flow_sample.reading_cf`), below the gallons-per-bucket bar and cumulative-usage line. Backend (`api_water_usage` in `dashboard.py`): added `reading_cf` to the query and emits a new **bucket-aligned** `meter` series; also bucket-aligned the cumulative `line` so all three series share identical timestamps. Frontend (`water_usage.html`): added the chart + a shared `xAxis()`/`yAxis()` config with a **fixed 82px y-axis width** so all three plot areas line up exactly. Deployed + verified (`reading_cf` populated 74,432 rows, latest 95,026.224).
+
+**Files touched:** tower `~/meter-cnn-loc2/train_loc2.py`, `~/meter-cnn/cnn_service.py`; Acer `~/smart-garden-server/dashboard.py` + `templates/water_usage.html`; local `c:\MyCode\smart-garden\cnn\train_loc2.py`, `c:\MyCode\smart-garden-server-live\` + `server-prod\` mirrors.
+
+**Current live state:** lock correct at 95,026.224; archive + usage continuous; oracle carrying live reads (429s expected until loc2-v2 ships). Retrain running.
+
+---
+
+## 2026-06-24 — Focus Assistant: preview-size fix + "numbers cut off" diagnosis
+
+**Preview-size fix (`templates/cam_focus.html`):** Padded rotation canvas was sized for worst-case ±12° rotation at all times, shrinking the live digits. Changed `computePaddedSize()` to size the border to the **current** `totalRotationDeg()` (with `Math.max(src, bbox)` floor), bumped compact preview height (`window.innerHeight * 0.38`, cap 360), and call `ensureCanvasSize()` on rotation/orientation change so the canvas recomputes. Deployed (`cam_focus.html.bak.previewsize-20260624-151008`), restarted, smoke-tested OK.
+
+**"Numbers cut off" — ROOT CAUSE (physical, not software):** Pulled the raw frame via authed `GET /api/cam/latest` → **800×600**. The page renders the FULL frame; nothing is cropped in software. In the raw capture the outer digits already run off the LEFT/RIGHT edges. Cause: focusing these lens modules = unscrewing the lens → magnifies → narrows field of view → outer digits leave frame. Focus and framing trade off against each other. **Resolution is physical:** move cam farther + refocus, or re-aim so the needed digits are centered. **NEXT:** confirm which digit positions the OCR pipeline needs (see `/memories/repo/water-meter-ocr.md`) so we know the must-be-in-frame digits.
+
+---
+
+## 2026-06-24 — Focus Assistant orientation fix (upside-down image support)
+
+**Context:** Operator reported the live frame appeared upside down during focusing.
+
+**What changed in `templates/cam_focus.html`:**
+- Added a base-orientation toggle button in the rotation controls:
+   - `Base: Upside down (180 deg)`
+   - toggles between 180 deg and 0 deg base orientation
+- Fine rotation slider remains +/-12 deg and now applies around base orientation.
+- Render path now rotates by `totalRotationDeg()` (base + fine) for both display and scoring.
+- Base orientation now persists across refresh in local storage (`cam_focus_v2`).
+- Rotation lock now disables the base-orientation button as well.
+- Direction help text now clarifies CW/CCW reference is independent of image orientation.
+
+**Deploy + verify:**
+- Backed up production template: `cam_focus.html.bak.orientation-20260624-132710`.
+- Deployed updated template and restarted `smart-garden-server` (`active`).
+- Smoke check (`GET /cam/focus`) confirmed:
+   - `orientationFlipBtn` present
+   - base orientation state persisted (`baseOrientationDeg` save/load)
+   - rendering uses combined `totalRotationDeg()`
+
+**Operator note:**
+- If frame is upside down, keep base at `Upside down (180 deg)`, then use fine rotation slider for straightening.
+
+---
+
+## 2026-06-24 — Focus Assistant usability pass: persistent locks + exact turn fractions
+
+**Context:** Operator feedback identified three workflow blockers:
+- "Direction reference" wording was ambiguous.
+- ROI/rotation lock state did not persist after page refresh.
+- Degree-based guidance was impractical; desired guidance is in turn fractions (full, 1/2, 1/4, 1/8, 1/16...) with learning.
+
+**What changed in `templates/cam_focus.html`:**
+- Direction clarity:
+   - renamed options to explicit viewpoints:
+      - `As viewed from meter side (lens/front)`
+      - `As viewed from camera back (wire side)`
+   - added inline helper text that updates with selected viewpoint.
+- Lock persistence across refresh:
+   - added localStorage persistence (`cam_focus_v2`) for:
+      - ROI position/size
+      - rotation degrees
+      - ROI lock state
+      - rotation lock state
+      - compact mode
+      - step mode and learned step size
+      - twist reference and polling settings
+   - state now rehydrates on page load.
+- Turn-fraction workflow + adaptive learning:
+   - replaced degree-centric step selector with turn fractions:
+      - `1`, `1/2`, `1/4`, `1/8`, `1/16`, `1/32`
+      - plus `Auto learn (start 1/4 turn)`
+   - coaching text now recommends explicit turn fractions.
+   - in auto mode, turn size adapts based on score deltas:
+      - improve -> modestly increase step
+      - worse -> reverse direction and reduce step
+      - flat -> adjust step directionally and continue
+
+**Deploy + verify:**
+- Backed up production template: `cam_focus.html.bak.turns-20260624-132104`.
+- Deployed updated template, restarted `smart-garden-server` (`active`).
+- Smoke check (`GET /cam/focus`) confirmed presence of:
+   - auto/fraction turn options
+   - direction helper + step learning text
+   - `saveState()` / `loadState()` and `cam_focus_v2` storage key
+
+---
+
+## 2026-06-24 — Focus Assistant compact mode (one-screen fit)
+
+**Context:** Even with ROI/rotation lock controls in place, the page still felt too spread out to monitor frame + controls + guidance together.
+
+**What changed:**
+- Added a `Compact mode` toggle (default On).
+- Compressed control layout into denser grids:
+   - ROI sliders in one row (`controls-grid`)
+   - rotation + polling controls in compact two-column panels (`panel-grid`)
+   - utility actions merged into one 4-button row (`btn-row-4`)
+- Added viewport-fit logic for the rotated padded canvas:
+   - `applyCanvasViewportFit()` scales frame area to available height/width
+   - keeps ROI overlay aligned by sizing `viewerWrap` with the canvas
+   - recalculates on window resize and when compact mode toggles
+- Reduced compact-mode vertical footprint:
+   - tighter spacing/padding
+   - shorter history viewport
+   - step list hidden in compact mode to keep operational controls visible
+
+**Deploy + verify:**
+- Backed up production template: `cam_focus.html.bak.compact-20260624-131626`.
+- Deployed updated `cam_focus.html`, restarted `smart-garden-server` (`active`).
+- Smoke check (`GET /cam/focus`) confirmed presence of:
+   - `compactToggleBtn`
+   - `controls-grid` / `panel-grid` / `btn-row-4`
+   - compact CSS block and `applyCanvasViewportFit()` JS function
+
+**Operator note:**
+- Leave `Compact mode: On` for tuning sessions where everything must stay visible on one screen.
+
+---
+
+## 2026-06-24 — Focus Assistant: straightening control added (few-degree image rotation)
+
+**Context:** During manual focusing, the meter frame was slightly tilted, making ROI alignment and visual comparison harder.
+
+**What changed (v2 enhancement same day):**
+- Added rotation UI in `templates/cam_focus.html`:
+   - `Image rotation (deg)` slider (`-12` to `+12`, step `0.1`)
+   - live rotation readout
+   - reset button
+- Added lock controls:
+   - `Lock ROI` / `Unlock ROI` (freezes ROI sliders + preset)
+   - `Lock rotation` / `Unlock rotation` (freezes rotation slider + reset)
+- Reworked rendering so rotated view keeps the full source image:
+   - switched from rotating `<img>` to drawing into a larger black-padded canvas (`displayCanvas`)
+   - no text loss from corner clipping during small-angle straighten operations
+   - ROI can now be positioned over the black border area as requested
+- Rotation is applied to both display and scoring, so guidance remains aligned with what the operator sees.
+
+**Deploy + verify:**
+- Backed up production template: `cam_focus.html.bak.rotate-20260624-130541`.
+- Backed up enhanced template before lock/padded-canvas deploy: `cam_focus.html.bak.lockpad-20260624-131116`.
+- Deployed updated `cam_focus.html` to `~/smart-garden-server/templates/`.
+- Restarted `smart-garden-server`; status remained `active`.
+- Smoke check (`GET /cam/focus`) confirmed:
+   - `id="displayCanvas"` present
+   - `id="roiLockBtn"` present
+   - `id="rotationLockBtn"` present
+   - larger-black-border rotation note present
+
+**Operator guidance:**
+- Use tiny rotation first (for example `+1.0` to `+3.0` deg) until number wheels look vertical.
+- Then position ROI on number wheels and continue baseline/CW/CCW loop.
+
+---
+
+## 2026-06-24 — Focus Assistant page shipped for iterative manual lens tuning
+
+**Context:** Manual ESP32 lens focus was taking hours because visual judgment was inconsistent and the meter letters (slightly different depth) could mislead decisions while the real goal is digit sharpness.
+
+**What was built:**
+- New page `GET /cam/focus` (`templates/cam_focus.html`) with a guided iterative focusing loop.
+- Live ROI-only sharpness scoring on `/api/cam/latest` frames:
+   - ROI sliders and a digits preset keep scoring anchored to the number wheels, not nearby letters.
+   - Score uses grayscale gradient-energy over ROI (`dx^2 + dy^2` mean), updated each fresh capture.
+- Step-by-step twist coach:
+   - actions: baseline, twisted CW, twisted CCW, undo, reset.
+   - guidance logic recommends continue/reverse/reduce/increase based on score delta with noise tolerance.
+   - logs each step with capture time + delta and highlights best score.
+   - waits for **new capture timestamp** to avoid stale-frame false conclusions.
+- Navigation wired so the tool is easy to reach:
+   - `_meternav.html` adds a `🎯 Focus` tab.
+   - `cam_hub.html` adds a Focus Assistant tile.
+
+**Backend wiring:**
+- Added route in `dashboard.py`:
+   - `@app.route("/cam/focus")` → `render_template("cam_focus.html")`.
+
+**Deployment + verification (Acer `192.168.0.109`):**
+- Backed up production files with timestamped `*.bak.focus-20260624-125827`.
+- Deployed: `dashboard.py`, `templates/cam_focus.html`, `templates/cam_hub.html`, `templates/_meternav.html`.
+- Restarted `smart-garden-server` and confirmed:
+   - service `active`, new `ActiveEnterTimestamp=2026-06-24 12:58:37 PDT`.
+   - authenticated smoke tests: `/cam/focus` 200, `/cam` 200 (contains focus link), `/api/cam/latest` 200.
+
+**Outcome:** James now has a purpose-built page that can tell him, after each twist iteration, whether to keep direction, reverse, or change step size while prioritizing focus on meter digits only.
 
 ---
 

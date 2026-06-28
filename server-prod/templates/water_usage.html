@@ -96,11 +96,19 @@ h1{font-size:1.35rem;margin-bottom:2px}
     <div class="wrap wrap-mid"><canvas id="lineChart"></canvas></div>
   </div>
   <div class="panel">
-    <div class="cap">Actual meter reading <span class="capsub">— raw meter ft³</span></div>
+    <div class="cap">Validated meter lock <span class="capsub">— the system's committed reading (ft³), NOT the raw OCR</span></div>
     <div class="wrap wrap-meter"><canvas id="meterChart"></canvas></div>
     <div class="readhealth" id="readHealth"></div>
   </div>
   <div class="stackhint"><b>Click a bar</b> to see the meter photos for that window. All three share one time axis (labels at the bottom); a grey dashed line segment = a data gap (offline).</div>
+</div>
+
+<div class="card">
+  <div class="cap">OCR audit — every archived frame, exactly as read
+    <span class="capsub">— no bucketing, no high-water-mark, no gap-fill. Same source as the photos. Color = confidence; click a point → its photo.</span></div>
+  <div class="wrap" style="height:260px"><canvas id="auditChart"></canvas></div>
+  <div id="auditLegend" style="display:flex;flex-wrap:wrap;gap:12px;font-size:.72rem;margin-top:8px;color:var(--text2)"></div>
+  <div id="auditNote" style="font-size:.72rem;color:var(--text2);margin-top:4px"></div>
 </div>
 
 <div class="modal" id="modal">
@@ -124,7 +132,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
               [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
-var minutes = 60, barC = null, lineC = null, meterC = null, LAST_USAGE = [];
+var minutes = 60, barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -511,6 +519,81 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
   };
 })();
 
+// ── OCR AUDIT (faithful per-frame line straight from archive_frame) ──
+// One point per ARCHIVED FRAME exactly as stored: no bucketing, no high-water
+// mark, no gap-fill. Same source as the click-through photos. Color = the
+// stored confidence, so derived/propagated points are visibly flagged.
+var AUDIT_CONF = {
+  high:{c:'#16a34a',label:'high (real read)'},
+  manual:{c:'#2563eb',label:'manual (human)'},
+  medium:{c:'#f59e0b',label:'medium'},
+  inferred:{c:'#94a3b8',label:'inferred (derived)'},
+  propagated:{c:'#0d9488',label:'propagated (copied)'},
+  lock:{c:'#64748b',label:'lock snapshot'},
+  low:{c:'#ef4444',label:'low'}
+};
+function auditColor(conf){ var m=AUDIT_CONF[conf]; return m?m.c:'#ef4444'; }
+function stampEpoch(ms){ var d=new Date(ms);
+  return MONTHS[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear()+' \u00b7 '
+    +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2); }
+var AUDIT_FRAMES = [];
+function loadAudit(){
+  fetch('/api/water-usage/ocr-audit?minutes='+minutes).then(function(r){return r.json();}).then(function(a){
+    AUDIT_FRAMES = a.frames||[];
+    var pts = AUDIT_FRAMES.map(function(p){ return {x:Date.parse(p.ts), y:p.cf}; });
+    var cols = AUDIT_FRAMES.map(function(p){ return auditColor(p.conf); });
+    var rawPts = AUDIT_FRAMES.filter(function(p){return p.raw_cf!=null;}).map(function(p){ return {x:Date.parse(p.ts), y:p.raw_cf}; });
+    var ds = [{ label:'committed (lock)', data:pts, parsing:false,
+      showLine:true, borderColor:'rgba(148,163,184,.45)', borderWidth:1, tension:0,
+      pointRadius:3, pointHoverRadius:5, pointBackgroundColor:cols, pointBorderColor:cols }];
+    if (rawPts.length) ds.push({ label:'raw OCR', data:rawPts, parsing:false,
+      showLine:false, pointRadius:2, pointStyle:'crossRot',
+      pointBackgroundColor:'#dc2626', pointBorderColor:'#dc2626' });
+    if (auditC) auditC.destroy();
+    auditC = new Chart(document.getElementById('auditChart'), {
+      type:'line', data:{datasets:ds},
+      options:{responsive:true,maintainAspectRatio:false,
+        onClick:function(evt,els){ for(var k=0;k<els.length;k++){ if(els[k].datasetIndex===0){ var p=AUDIT_FRAMES[els[k].index]; if(p) showAuditFrame(p); return; } } },
+        plugins:{legend:{display:false}, tooltip:{callbacks:{
+          title:function(it){ return it.length? stampEpoch(it[0].parsed.x):''; },
+          label:function(c){ if(c.datasetIndex!==0){ return 'raw OCR '+(c.parsed.y!=null?cfTo9(c.parsed.y):'\u2014'); }
+            var p=AUDIT_FRAMES[c.dataIndex]; if(!p) return '';
+            var s='committed '+(p.cf!=null?cfTo9(p.cf):'\u2014')+' ft\u00b3 ('+p.conf+'/'+p.source+')';
+            if(p.raw_cf!=null) s+=' \u00b7 raw '+cfTo9(p.raw_cf);
+            return s; } }}},
+        scales:{
+          x:{type:'linear', grid:{color:'#eef2f6'}, ticks:{font:{size:9},maxTicksLimit:12,
+              callback:function(v){ var d=new Date(v); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }}},
+          y:{title:{display:true,text:'ft\u00b3'}, ticks:{font:{size:9},
+              callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}}}}
+    });
+    var bc=a.by_conf||{}, legend='';
+    Object.keys(AUDIT_CONF).forEach(function(k){ if(bc[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:'+AUDIT_CONF[k].c+';margin-right:4px"></span>'+AUDIT_CONF[k].label+' ('+bc[k]+')</span>'; });
+    Object.keys(bc).forEach(function(k){ if(!AUDIT_CONF[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:4px"></span>'+esc(k)+' ('+bc[k]+')</span>'; });
+    document.getElementById('auditLegend').innerHTML = legend || '<span style="color:#94a3b8">no archived frames in this window</span>';
+    var derived=(bc.inferred||0)+(bc.propagated||0)+(bc.lock||0)+(bc.medium||0);
+    var note=a.points+' frame(s) plotted'+(a.truncated?(' (most recent '+a.points+' of '+a.total+' \u2014 zoom in to see every frame)'):'');
+    if(a.points) note += ' \u00b7 '+Math.round(100*derived/a.points)+'% derived/held (not a fresh read)';
+    var hasRaw = AUDIT_FRAMES.some(function(p){return p.raw_cf!=null;});
+    note += hasRaw ? ' \u00b7 red \u271a = raw OCR (pre-validation)' : ' \u00b7 raw OCR not yet recorded (starts logging now)';
+    document.getElementById('auditNote').textContent = note;
+  }).catch(function(){ document.getElementById('auditNote').textContent='OCR audit failed to load.'; });
+}
+
+function showAuditFrame(p){
+  var m=document.getElementById('modal');
+  document.getElementById('modal-title').textContent = fullStamp(p.ts);
+  var html='Committed (lock): <b>'+(p.cf!=null?cfTo9(p.cf):'\u2014')+'</b> ft\u00b3 <span style="color:#64748b">('+esc(p.conf)+' / '+esc(p.source)+')</span>';
+  if(p.raw_cf!=null){ var diff=(p.cf!=null)?Math.abs(p.raw_cf-p.cf):0;
+    html += '<br>Raw OCR (pre-validation): <b style="color:#dc2626">'+cfTo9(p.raw_cf)+'</b> ft\u00b3'
+      + (diff>0.05?' <span style="color:#dc2626;font-weight:700">\u26a0 differs from committed by '+diff.toFixed(3)+' ft\u00b3 \u2014 the validator overrode the raw read</span>'
+                  :' <span style="color:#16a34a">\u2713 matches committed</span>'); }
+  else { html += '<br><span style="color:#94a3b8">Raw OCR not recorded for this frame (only frames captured after the raw-read feature shipped have it).</span>'; }
+  document.getElementById('modal-sub').innerHTML = html;
+  document.getElementById('modal-grid').innerHTML = '<div class="fcell"><img loading="lazy" src="/api/cam/archive/img?file='+encodeURIComponent(p.file)+'" style="width:100%"><div class="cap">'+esc(p.file)+'</div></div>';
+  m.classList.add('on');
+}
+
 function load(){
   document.getElementById('chips').innerHTML = RANGES.map(function(r){
     return '<span class="chip'+(r[0]===minutes?' on':'')+'" data-m="'+r[0]+'">'+r[1]+'</span>';
@@ -521,6 +604,7 @@ function load(){
   fetch('/api/water-usage?minutes='+minutes).then(function(r){return r.json();})
     .then(render)
     .catch(function(){ document.getElementById('sub').textContent='Could not load usage.'; });
+  loadAudit();
 }
 load();
 </script>

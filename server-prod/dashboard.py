@@ -1944,6 +1944,55 @@ def create_app(config, engine, weather, billing):
                         "total_gal": total, "flat": flat,
                         "leak_hint": leak_hint})
 
+    @app.route("/api/water-usage/ocr-audit")
+    def api_water_usage_ocr_audit():
+        """FAITHFUL per-frame audit line: ONE point per ARCHIVED FRAME exactly
+        as stored (NO bucketing, NO high-water-mark, NO gap-fill), straight from
+        archive_frame -- the SAME source as the click-through photos. Colored by
+        confidence so derived/propagated points are visibly flagged, plus the
+        RAW per-frame OCR read alongside the committed value once recorded. This
+        is the view you can actually audit the reader with."""
+        import meter_archive
+        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
+        conn = db.get_conn()
+        try:
+            r = conn.execute(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) s,"
+                " strftime('%Y-%m-%dT%H:%M:%S','now','localtime') e",
+                (f"-{minutes} minutes",)).fetchone()
+            start, end = r["s"], r["e"]
+        finally:
+            conn.close()
+        CAP = 4000
+        try:
+            total = meter_archive.count_range(start=start, end=end)
+            # Most-recent CAP frames when a long window overflows (desc + reverse
+            # to ascending), so a 30d view still shows the latest detail.
+            rows = meter_archive.list_range(start=start, end=end,
+                                            order="desc", limit=CAP)
+        except Exception as e:
+            return jsonify({"minutes": minutes, "points": 0, "total": 0,
+                            "truncated": False, "by_conf": {}, "frames": [],
+                            "error": str(e)})
+        frames, by_conf = [], {}
+        for row in rows:
+            conf = row.get("confidence") or "?"
+            by_conf[conf] = by_conf.get(conf, 0) + 1
+            raw = row.get("raw_reading")
+            frames.append({
+                "ts": row["ts"],
+                "cf": row.get("reading_cf"),
+                "conf": conf,
+                "source": row.get("source") or "",
+                "file": row.get("filename") or "",
+                "reviewed": int(row.get("reviewed") or 0),
+                "raw_cf": (raw / 1000.0) if raw is not None else None,
+            })
+        frames.reverse()  # ascending by ts for plotting
+        return jsonify({"minutes": minutes, "points": len(frames),
+                        "total": total, "truncated": total > len(frames),
+                        "by_conf": by_conf, "frames": frames})
+
     @app.route("/api/water-usage/audit")
     def api_water_usage_audit():
         """One-click ACCURACY audit for a usage window. Confirms the chart's
@@ -3609,11 +3658,15 @@ def create_app(config, engine, weather, billing):
         except Exception:
             return None
 
-    def _archive_try_exact_cnn(frame, anchor_value):
+    def _archive_try_exact_cnn(frame, anchor_value, out=None):
         """Read the exact archived frame with constrained CNN.
 
         This is the primary path for archive-row accuracy because it reads the
-        same image shown in the history card.
+        same image shown in the history card. When ``out`` is a dict, the RAW
+        (unconstrained) CNN read for this exact frame is stashed in it
+        (``out['raw']`` / ``out['raw_conf']``) BEFORE any bounding/rejection, so
+        the caller can persist what the OCR actually saw even when the
+        constrained value is rejected and the row falls back to a held value.
         """
         if not ARCHIVE_EXACT_CNN_ENABLED:
             return None
@@ -3623,6 +3676,13 @@ def create_app(config, engine, weather, billing):
                 frame, anchor=a, ceil=ARCHIVE_EXACT_CNN_MAX_ADVANCE)
             if not cnn:
                 return None
+            if out is not None:
+                try:
+                    out["raw"] = (int(cnn.get("value"))
+                                  if cnn.get("value") is not None else None)
+                except Exception:
+                    out["raw"] = None
+                out["raw_conf"] = (cnn.get("confidence") or "")
 
             conf_txt = (cnn.get("confidence") or "").lower()
             try:
@@ -4069,8 +4129,9 @@ def create_app(config, engine, weather, billing):
                         anchor_i = trusted_lock
                     else:
                         anchor_i = prev_i if prev_i is not None else arc_reading
+                    _raw_out = {}
                     if anchor_i is not None:
-                        ex = _archive_try_exact_cnn(frame, anchor_i)
+                        ex = _archive_try_exact_cnn(frame, anchor_i, out=_raw_out)
                         if ex:
                             arc_reading = int(ex["reading"])
                             arc_conf = ex["confidence"]
@@ -4111,10 +4172,14 @@ def create_app(config, engine, weather, billing):
                             arc_conf = "propagated"
                             arc_source = "propagated"
 
+                    _raw_val = _raw_out.get("raw")
                     meter_archive.record(
                         ts_iso, name,
                         reading=arc_reading,
-                        confidence=arc_conf, source=arc_source)
+                        confidence=arc_conf, source=arc_source,
+                        raw_reading=_raw_val,
+                        raw_conf=_raw_out.get("raw_conf"),
+                        raw_source=("cnn" if _raw_val is not None else None))
 
                     # Heal any EXISTING impossible-high history now that we have a
                     # trusted lock — collapses a drifted chain back onto truth.

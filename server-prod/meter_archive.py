@@ -230,6 +230,18 @@ def ensure_schema():
             " updated_ts TEXT"
             ")")
         c.execute("CREATE INDEX IF NOT EXISTS ix_arc_ts ON archive_frame(ts)")
+        # Additive migration: the RAW per-frame OCR read (what the reader saw
+        # BEFORE lock-anchoring/validation), so history can show raw-vs-lock and
+        # finally answer "what did the OCR read at time T?". Idempotent --
+        # ALTER fails harmlessly once the column already exists.
+        for _col, _decl in (("raw_reading", "INTEGER"),
+                            ("raw_conf", "TEXT"),
+                            ("raw_source", "TEXT")):
+            try:
+                c.execute("ALTER TABLE archive_frame ADD COLUMN %s %s"
+                          % (_col, _decl))
+            except Exception:
+                pass
         # Convergence trend: one snapshot row per sample so the monitor can show
         # "perfectable remaining" trending toward zero over time (the single most
         # honest progress metric).
@@ -457,12 +469,23 @@ def audit_summary(hours=168, limit_recent=40):
         c.close()
 
 
-def record(ts, filename, reading=None, confidence="lock", source="lock"):
+def record(ts, filename, reading=None, confidence="lock", source="lock",
+           raw_reading=None, raw_conf=None, raw_source=None):
     """Index a newly archived frame. INSERT OR IGNORE so a re-archive never
-    clobbers a reading a human already refined for the same timestamp."""
+    clobbers a reading a human already refined for the same timestamp.
+
+    ``raw_reading`` is the UNCONSTRAINED per-frame OCR read (what the camera
+    actually saw, BEFORE monotonic/anchor validation) -- stored alongside the
+    committed value so history can answer "what did the OCR read at time T?".
+    It is write-once here and never overwritten by later refinements.
+    """
     base_reading = int(reading) if reading is not None else None
     base_conf = confidence
     base_source = source
+    try:
+        raw_i = int(raw_reading) if raw_reading is not None else None
+    except Exception:
+        raw_i = None
     c = _conn()
     try:
         if LOCK_MONOTONIC and base_source == "lock":
@@ -484,10 +507,12 @@ def record(ts, filename, reading=None, confidence="lock", source="lock"):
         cf = (base_reading / COUNTS_PER_CF) if base_reading is not None else None
         c.execute(
             "INSERT OR IGNORE INTO archive_frame"
-            "(ts,filename,reading,reading_cf,confidence,source,reviewed,updated_ts)"
-            " VALUES(?,?,?,?,?,?,0,?)",
+            "(ts,filename,reading,reading_cf,confidence,source,reviewed,updated_ts,"
+            "raw_reading,raw_conf,raw_source)"
+            " VALUES(?,?,?,?,?,?,0,?,?,?,?)",
             (ts, filename, base_reading, cf, base_conf, base_source,
-             datetime.now().isoformat(timespec="seconds")))
+             datetime.now().isoformat(timespec="seconds"),
+             raw_i, raw_conf, raw_source))
 
         # If this row is a trusted anchor, automatically smooth uncertain rows
         # between the previous trusted anchor and this one.

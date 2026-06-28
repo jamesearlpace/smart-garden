@@ -1,6 +1,6 @@
 # Meter Data Layer — Journey Doc
 
-**Status:** ✅ Canonical ledger built, backfilled, reconciled, kept current, and the **entire `/water-usage` page now reads it** (one source). ⏳ Capture-pipeline re-point + retention flip remain (need James, riskier).
+**Status:** ✅ Canonical ledger built, backfilled, reconciled, kept current, **real-time (capture dual-writes to it)**, and the **entire `/water-usage` page reads it** (one source). ⏳ Retention flip + (optional) retiring the legacy writes remain.
 **Arc dates:** 2026-06-27 → 2026-06-28
 **Goal (James's words):** *"a really high quality, auditable, verifiable data layer, really clean and architected very well"* — so that **clicking any value on a chart shows its image, and the only way they can disagree is the OCR misreading that image.** Foundation for *lots* of future water charts with defensible numbers.
 
@@ -80,7 +80,7 @@ Plus **`meter_correction`** — append-only audit log of every change to a commi
 
 ## What's next (need James — riskier, change live behavior)
 
-1. **Re-point the capture pipeline to write the ledger directly.** Today capture still writes `flow_sample`/`archive_frame` first and the timer imports. The clean end-state is capture → ledger. **The one risky step** — do it with the old path running in parallel until verified.
+1. ✅ **DONE — capture dual-writes to the ledger** (commit `e737ac5`): a fully-guarded `meter_ledger.record_reading()` in `_archive_frame` lands new readings as `origin='live'` within seconds. The legacy writes stay (true dual-write); retiring them is an optional later step once it's proven over time.
 2. **Flip retention** so the canonical numbers are permanent (today `flow_sample` is 30-day; the ledger already keeps everything, but the capture path should target it).
 3. **Future charts** = defensible views on `meter_ledger`, never new patches on `flow_sample`/`archive_frame`.
 4. **Root-cause OCR** (#36/#37/#39) — separate track; the glare misreads are contained but ongoing. Not unattended-safe (CNN is documented dead weight without the hardware encoder-wire fix).

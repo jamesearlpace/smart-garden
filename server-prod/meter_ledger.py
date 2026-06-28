@@ -356,8 +356,46 @@ def sync():
             "total": _count_all()}
 
 
+def record_reading(ts, image_file, committed=None, confidence="lock",
+                   source="lock", raw_reading=None, raw_conf=None,
+                   reader=None, reviewed=0, state=None):
+    """Real-time single-row write from the LIVE capture path (origin='live').
+    Mirrors a backfill row and computes its delta. INSERT OR IGNORE so it never
+    clobbers a row the sync already imported. Self-contained; the caller wraps
+    it in try/except so a ledger hiccup can never break capture. Assumes the
+    schema already exists (created at backfill/sync time)."""
+    committed_cf = (committed / COUNTS_PER_CF) if committed is not None else None
+    c = _conn()
+    try:
+        prev = c.execute(
+            "SELECT committed_cf FROM meter_reading WHERE ts<? "
+            "AND committed_cf IS NOT NULL ORDER BY ts DESC LIMIT 1",
+            (ts,)).fetchone()
+        if committed_cf is None:
+            delta = None
+        elif prev and prev["committed_cf"] is not None:
+            delta = round(committed_cf - prev["committed_cf"], 3)
+        else:
+            delta = 0.0
+        c.execute(
+            "INSERT OR IGNORE INTO meter_reading"
+            "(ts,image_file,raw_reading,raw_conf,reader,committed,committed_cf,"
+            " method,confidence,reviewed,state,delta_cf,origin,ingested_ts)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, image_file,
+             int(raw_reading) if raw_reading is not None else None,
+             raw_conf, reader,
+             int(committed) if committed is not None else None,
+             committed_cf, _map_archive_method(source), confidence,
+             int(reviewed or 0), state, delta, "live",
+             datetime.now().isoformat(timespec="seconds")))
+        c.commit()
+    finally:
+        c.close()
+
+
 # ---------------------------------------------------------------------------
-# Derived metrics (recomputable) — the high-water-mark usage method
+# Derived metrics (recomputable) -- the high-water-mark usage method
 # ---------------------------------------------------------------------------
 def recompute_daily(start=None, end=None):
     """Rebuild usage_daily from meter_reading via the high-water-mark method:

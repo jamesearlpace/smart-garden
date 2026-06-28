@@ -4198,6 +4198,21 @@ def create_app(config, engine, weather, billing):
                         raw_conf=_raw_out.get("raw_conf"),
                         raw_source=("cnn" if _raw_val is not None else None))
 
+                    # Real-time dual-write to the canonical ledger (origin=live)
+                    # so the charts reflect a new reading within seconds, not at
+                    # the next 10-min sync. FULLY GUARDED: a ledger hiccup must
+                    # NEVER break capture.
+                    try:
+                        import meter_ledger as _mlg
+                        _mlg.record_reading(
+                            ts_iso, name, committed=arc_reading,
+                            confidence=arc_conf, source=arc_source,
+                            raw_reading=_raw_val,
+                            raw_conf=_raw_out.get("raw_conf"),
+                            reader=("cnn" if _raw_val is not None else None))
+                    except Exception:
+                        pass
+
                     # Heal any EXISTING impossible-high history now that we have a
                     # trusted lock — collapses a drifted chain back onto truth.
                     if trusted_lock is not None:

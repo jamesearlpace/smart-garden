@@ -1769,11 +1769,15 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/water-usage")
     def api_water_usage():
         """Water usage over time for leak-spotting, at any zoom. Buckets the
-        meter reading (flow_sample.reading_cf, cumulative ft³) into deltas →
-        gallons used per bucket. Bucket size auto-scales to the window
+        meter reading (canonical ledger committed_cf, cumulative ft3) into
+        deltas -> gallons used per bucket. Bucket size auto-scales to the window
         (?minutes=N) so 1 min shows 15s buckets and 12 h shows ~20 min buckets.
-        Flat = no water moving; a steady small step every bucket = a slow leak."""
+        Flat = no water moving; a steady small step every bucket = a slow leak.
+        SINGLE SOURCE: all three series come from meter_ledger -- the same rows
+        the photos come from -- so the meter line and the click-through photos
+        can never disagree except via OCR."""
         from datetime import datetime as _dt
+        import meter_ledger
         GAL = 7.48052
         minutes = query_int("minutes", 60, min_value=1, max_value=129600)
         win_s = minutes * 60
@@ -1781,16 +1785,15 @@ def create_app(config, engine, weather, billing):
         bucket_s = max(15, int(round(win_s / 40 / 15)) * 15)
         conn = db.get_conn()
         try:
-            rows = conn.execute(
-                "SELECT ts, delta_cf, gpm, reading_cf FROM flow_sample "
-                # flow_sample.ts is T-separated; datetime() returns SPACE-
-                # separated, so a plain >= datetime(...) compares wrong and never
-                # bounds the window. Use strftime to build a T-separated bound.
-                "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
-                "ORDER BY ts",
-                (f"-{minutes} minutes",)).fetchall()
+            b = conn.execute(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) s,"
+                " strftime('%Y-%m-%dT%H:%M:%S','now','localtime') e",
+                (f"-{minutes} minutes",)).fetchone()
+            start, end = b["s"], b["e"]
         finally:
             conn.close()
+        rows = meter_ledger.readings_range(start=start, end=end,
+                                           order="asc", limit=500000)
         # METHODOLOGY: usage = how far the meter's HIGH-WATER MARK climbs. The
         # meter is a monotonic odometer, so a NEW HIGH in reading_cf is real
         # water — this includes the big "catch-up" jumps the live lock commits
@@ -1822,11 +1825,13 @@ def create_app(config, engine, weather, billing):
         usage_outliers = 0
         max_usage_jump_cf = 0.0
         for r in rows:
-            accepted = r["gpm"] is not None
-            rc = r["reading_cf"]
+            rc = r["committed_cf"]
             dcf = r["delta_cf"] or 0.0
+            # In the ledger a 'gap'-state row is the lock's over-ceiling catch-up
+            # (the old gpm-NULL case); image-backed rows (state NULL) are normal
+            # reads. Health is derived purely from the committed-cf deltas.
             is_back = dcf < -0.001
-            is_jump = (not accepted) and dcf > 0.001
+            is_jump = (r["state"] == "gap") and dcf > 0.001
             step_n += 1
             if is_back:
                 backward_steps += 1
@@ -1859,8 +1864,8 @@ def create_app(config, engine, weather, billing):
             key = int(ep // bucket_s)
             b = buckets.get(key)
             if b is None:
-                b = {"ts": r["ts"], "gal": 0.0, "gpm_sum": 0.0, "gpm_n": 0,
-                     "cum": cum, "cf": last_cf, "back": 0, "jump": 0}
+                b = {"ts": r["ts"], "gal": 0.0, "cum": cum, "cf": last_cf,
+                     "back": 0, "jump": 0}
                 buckets[key] = b
                 order.append(key)
             b["ts"] = r["ts"]
@@ -1872,9 +1877,6 @@ def create_app(config, engine, weather, billing):
                 b["back"] += 1
             if is_jump:
                 b["jump"] += 1
-            if accepted:
-                b["gpm_sum"] += r["gpm"]
-                b["gpm_n"] += 1
         # Emit ONE point per bucket across the full span between the first and
         # last bucket that actually has data, FILLING any bucket with no samples
         # as a zero-usage "gap" (the 15s sampler/camera was down — NOT real zero
@@ -1901,7 +1903,9 @@ def create_app(config, engine, weather, billing):
                 end_ms = int((k + 1) * bucket_s * 1000)
                 b = buckets.get(k)
                 if b is not None:
-                    gpm = b["gpm_sum"] / b["gpm_n"] if b["gpm_n"] else 0.0
+                    # average flow rate during the bucket, derived from the
+                    # gallons over the bucket duration (defensible, source-clean).
+                    gpm = (b["gal"] / (bucket_s / 60.0)) if bucket_s else 0.0
                     carry_cum = b["cum"]
                     cf = b["cf"] if b["cf"] is not None else carry_cf
                     carry_cf = cf

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Water Usage — Smart Garden</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <style>
 :root{--bg:#f5f7f9;--card:#fff;--border:#e8ecf0;--text:#1a2b3c;--text2:#5f7082;
   --blue:#3b82f6;--green:#22c55e;--amber:#f59e0b;--red:#ef4444}
@@ -227,14 +228,28 @@ function render(d){
     {title:{display:true,text:title}, afterFit:function(s){ s.width = YW; },
      ticks:{font:{size:9}}}, opts||{}); }
 
+  // Selective data labels (only the notable points, never every one) + easier
+  // hover: index mode shows the value when the mouse is anywhere along the x.
+  var DL = window.ChartDataLabels || null;
+  var barMax = gph.reduce(function(m,v){ return (v!=null && v>m)?v:m; }, 0);
+
   if (barC) barC.destroy();
   barC = new Chart(document.getElementById('barChart'), {
     type:'bar',
     data:{labels:labels, datasets:[{label:'gal', data:gph,
       backgroundColor:'#3b82f6', borderRadius:3}]},
+    plugins: DL ? [DL] : [],
     options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
       onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u && !u.gap) showFrames(u); } },
-      plugins:{legend:{display:false}, tooltip:{callbacks:{
+      plugins:{legend:{display:false},
+        datalabels:{
+          display:function(ctx){ var v=ctx.dataset.data[ctx.dataIndex];
+            return v!=null && v >= Math.max(barMax*0.25, 5); },
+          anchor:'end', align:'top', offset:0, clamp:true,
+          color:'#1d4ed8', font:{size:9,weight:'600'},
+          formatter:function(v){ return Math.round(v); } },
+        tooltip:{callbacks:{
         title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
         label:function(c){ return gapFlags[c.dataIndex] ? 'no data (offline)'
           : (c.parsed.y + ' gal'); }}}},
@@ -247,9 +262,16 @@ function render(d){
     data:{labels:labels,
       datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
         borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
-        fill:true, pointRadius:0, borderWidth:2, tension:.2, segment:gapSeg()}]},
+        fill:true, pointRadius:0, pointHoverRadius:4, borderWidth:2, tension:.2, segment:gapSeg()}]},
+    plugins: DL ? [DL] : [],
     options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false}, tooltip:xTooltip()},
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false}, tooltip:xTooltip(),
+        datalabels:{
+          display:function(ctx){ return ctx.dataIndex === ctx.dataset.data.length-1; },
+          anchor:'end', align:'left', offset:6, clamp:true,
+          color:'#1d4ed8', font:{size:10,weight:'700'},
+          formatter:function(v){ return Math.round(v)+' gal'; } }},
       scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
@@ -260,11 +282,21 @@ function render(d){
       datasets:[{label:'meter (ft\u00b3)', data:meterArr.map(function(p){return p.cf;}),
         borderColor:'#0d9488', backgroundColor:'rgba(13,148,136,.08)',
         fill:false, borderWidth:2, tension:.15, spanGaps:true, segment:gapSeg(),
+        pointHoverRadius:4,
         pointRadius:meterArr.map(function(p){return p.anomaly?4:0;}),
         pointBackgroundColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');}),
         pointBorderColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');})}]},
+    plugins: DL ? [DL] : [],
     options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
       plugins:{legend:{display:false},
+        datalabels:{
+          display:function(ctx){ var n=ctx.dataset.data.length;
+            return (ctx.dataIndex===0 || ctx.dataIndex===n-1) && ctx.dataset.data[ctx.dataIndex]!=null; },
+          anchor:'end',
+          align:function(ctx){ return ctx.dataIndex===0 ? 'right' : 'left'; },
+          offset:4, clamp:true, color:'#0f766e', font:{size:9,weight:'600'},
+          formatter:function(v){ return v!=null ? Number(v).toLocaleString(undefined,{maximumFractionDigits:1}) : ''; } },
         tooltip:{callbacks:{
           title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
           label:function(c){ var s=(c.parsed.y!=null

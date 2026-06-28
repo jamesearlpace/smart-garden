@@ -88,7 +88,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="card stack">
   <div class="panel">
-    <div class="cap" id="bar-title">Gallons used per bucket</div>
+    <div class="cap" id="bar-title">Gallons per bar</div>
     <div class="wrap wrap-bar"><canvas id="barChart"></canvas></div>
   </div>
   <div class="panel">
@@ -153,7 +153,8 @@ function makeLabeler(bucket_s, spanDays, multiDay){
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
-  document.getElementById('bar-title').textContent = 'Gallons used per ' + (d.bucket_label||'bucket');
+  document.getElementById('bar-title').innerHTML = 'Gallons per bar'
+    + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label+'</span>' : '');
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
     + (d.total_gal||0)+' gal total this window · meter sampled every 15s'

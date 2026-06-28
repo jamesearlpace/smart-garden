@@ -1378,6 +1378,21 @@ def main():
                           id="daily_balance", max_instances=1,
                           misfire_grace_time=3600)
 
+        # Intra-day balance refreshes (1 PM + 6 PM): bank rain/irrigation into the
+        # VISIBLE balance hours sooner than the 11 PM close. ET is time-pro-rated
+        # (see IrrigationEngine._et_fraction) so these mid-day runs aren't
+        # pessimistically dry. The 11 PM run remains the authoritative close.
+        scheduler.add_job(api_guarded(
+                              "balance_midday", engine.update_daily_balances),
+                          "cron", hour=13,
+                          id="balance_midday", max_instances=1,
+                          misfire_grace_time=3600)
+        scheduler.add_job(api_guarded(
+                              "balance_evening", engine.update_daily_balances),
+                          "cron", hour=18,
+                          id="balance_evening", max_instances=1,
+                          misfire_grace_time=3600)
+
         # Roll up the day's water, savings, weather, and cost into
         # daily_summary at 23:55 — after daily_balance, before midnight.
         scheduler.add_job(api_guarded(
@@ -1411,6 +1426,16 @@ def main():
         scheduler.add_job(api_guarded("daily_digest", alert_monitor.daily_digest),
                           "cron", hour=8,
                           id="daily_digest", max_instances=1,
+                          misfire_grace_time=3600)
+
+        # Daily 7 AM: reconcile yesterday's sprinkler runs against the meter's
+        # actual movement and alert if the reading appears to have frozen (an
+        # independent bug-catch the camera cannot do on its own).
+        import water_reconcile
+        scheduler.add_job(api_guarded("water_reconcile",
+                                      water_reconcile.check_and_alert),
+                          "cron", hour=7,
+                          id="water_reconcile", max_instances=1,
                           misfire_grace_time=3600)
 
         # Confirm alert pipeline at startup (one ntfy = "I'm alive")

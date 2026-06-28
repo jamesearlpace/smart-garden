@@ -2046,6 +2046,16 @@ def create_app(config, engine, weather, billing):
                          "pct": coverage_pct},
             "checks": checks, "verdict": verdict})
 
+    @app.route("/api/water-reconcile")
+    def api_water_reconcile():
+        """Engine-vs-meter daily reconciliation — the independent bug-catch:
+        the irrigation engine logs which zones ran (independent of the camera),
+        so the meter must account for at least that water. meter << engine = a
+        frozen reading; meter >> engine on a no-run day = household use or leak."""
+        import water_reconcile
+        days = query_int("days", 14, min_value=1, max_value=60)
+        return jsonify({"days": days, "table": water_reconcile.daily_table(days)})
+
     @app.route("/api/water-usage/frames")
     def api_water_usage_frames():
         """Captured meter frames that JUSTIFY a usage bar: the reading just

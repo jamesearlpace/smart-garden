@@ -1,7 +1,7 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-27 (RCA filed: the meter graph can't show what the OCR read — issues #40/#41/#42)
+**Last Updated:** 2026-06-28 (canonical meter data layer built + whole `/water-usage` page re-pointed to it — full chronological record in **`meter-data-layer-journey.md`**)
 
 > **RESUME HERE — RCA: the meter graph can't show what the OCR read (session 2026-06-27 eve):**
 >
@@ -13,7 +13,7 @@
 >
 > **Remediation (phased, NOT started):** P0 relabel meter chart "validated lock (not raw OCR)" + flag `propagated`/`inferred` points; **P1** faithful audit line from `archive_frame` (one point/frame, no HWM/carry/bucketing-collapse, color by confidence, click→frame) — low-risk, uses existing data; **P2** persist `raw_reading` at capture **before** bounding/anchoring (THE fix for "what did OCR read at T"); P3 usage outlier guard; P4 root-cause OCR.
 >
-> **Next:** James to confirm starting **P1** before touching the capture pipeline (P2).
+> **SHIPPED overnight 2026-06-27 (commits bfab09f, e960ec0):** P0 relabel + **P1 faithful OCR-audit chart** (new `/api/water-usage/ocr-audit` endpoint, one point per archive_frame, color = confidence, click → photo) + **P2 raw-read persistence** (`archive_frame.raw_reading`/`raw_conf`/`raw_source`; `_archive_frame` records the unconstrained CNN read per frame, free, write-once) + **P3 flag-only** usage-outlier counter in reading-health. VERIFIED live: committed `95029.675` vs raw `95929.678` now persisted + served + plotted; 30d health flags 5 implausible jumps (biggest **+1709.8 gal = the #39 freeze-dump**). Issues **#40, #41 CLOSED**; **#42 open** (flag shipped, accrual-guard deferred — catch-up jumps are often real water). Hard-refresh `/water-usage` to see the audit chart. **Remaining (need James, not unattended-safe):** P3's real accrual guard + P4 OCR root-cause.
 >
 > ---
 >

@@ -50,6 +50,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .auditnum .l{font-size:.72rem;color:var(--text2);line-height:1.2;margin-top:2px}
 .auditcheck{display:flex;gap:8px;padding:3px 0;align-items:flex-start}
 .auditcheck .ck{flex:0 0 auto;font-weight:700}
+.readhealth{font-size:.74rem;margin:5px 2px 0;padding:5px 9px;border-radius:7px;line-height:1.35}
+.rh-ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+.rh-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
   padding:24px;overflow:auto}
 .modal.on{display:block}
@@ -94,6 +97,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <div class="panel">
     <div class="cap">Actual meter reading <span class="capsub">— raw meter ft³</span></div>
     <div class="wrap wrap-meter"><canvas id="meterChart"></canvas></div>
+    <div class="readhealth" id="readHealth"></div>
   </div>
   <div class="stackhint"><b>Click a bar</b> to see the meter photos for that window. All three share one time axis (labels at the bottom); a grey dashed line segment = a data gap (offline).</div>
 </div>
@@ -161,6 +165,28 @@ function render(d){
     b.textContent='✅ Flat — no measurable water use across this window.'; }
   else { b.className='banner muted';
     b.textContent='Some water use this window ('+(d.total_gal||0)+' gal) with quiet buckets in between — normal on/off usage.'; }
+
+  // Reading-health readout: surfaces suspect meter readings in this window so
+  // the meter chart doubles as a reading-correctness audit.
+  var hh = d.health || {}, rhEl = document.getElementById('readHealth');
+  if (rhEl) {
+    // Backward steps are the real correctness problem (a monotonic meter can't
+    // go down). Catch-up jumps are NORMAL fast-flow, so they don't trigger a
+    // warning on their own.
+    if (!hh.samples) { rhEl.className='readhealth'; rhEl.innerHTML=''; }
+    else if (!hh.backward_steps) {
+      rhEl.className='readhealth rh-ok';
+      rhEl.innerHTML='\u2713 Reading health: clean \u2014 0 backward steps, '+hh.pct_monotonic+'% monotonic across '+hh.samples+' samples'
+        +(hh.big_jumps?(' \u00b7 '+hh.big_jumps+' fast-flow catch-up jump(s) \u2014 normal'):'')+'.';
+    } else {
+      rhEl.className='readhealth rh-warn';
+      rhEl.innerHTML='\u26a0 Reading health: <b>'+hh.backward_steps+'</b> backward step(s)'
+        +(hh.max_drop_gal?(' (biggest \u2212'+hh.max_drop_gal+' gal)'):'')
+        +' \u2014 a monotonic meter should never go down, so these are misreads/re-anchors. '
+        +'<span style="color:#ef4444">\u25cf</span> red dot marks each'
+        +(hh.big_jumps?('; <span style="color:#f59e0b">\u25cf</span> amber = fast-flow catch-up (normal)'):'')+'.';
+    }
+  }
 
   var meterArr = d.meter || [];
   // Adaptive x-axis: pick label detail from the bucket grain + the window span
@@ -233,8 +259,10 @@ function render(d){
     data:{labels:labels,
       datasets:[{label:'meter (ft\u00b3)', data:meterArr.map(function(p){return p.cf;}),
         borderColor:'#0d9488', backgroundColor:'rgba(13,148,136,.08)',
-        fill:false, pointRadius:0, borderWidth:2, tension:.15, spanGaps:true,
-        segment:gapSeg()}]},
+        fill:false, borderWidth:2, tension:.15, spanGaps:true, segment:gapSeg(),
+        pointRadius:meterArr.map(function(p){return p.anomaly?4:0;}),
+        pointBackgroundColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');}),
+        pointBorderColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');})}]},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},
         tooltip:{callbacks:{
@@ -242,7 +270,11 @@ function render(d){
           label:function(c){ var s=(c.parsed.y!=null
           ? Number(c.parsed.y).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3})
           : '\u2014')+' ft\u00b3';
-            return gapFlags[c.dataIndex] ? s+' (carried, offline)' : s; }}}},
+            if(gapFlags[c.dataIndex]) s+=' (carried, offline)';
+            var an=meterArr[c.dataIndex]&&meterArr[c.dataIndex].anomaly;
+            if(an==='back') s+=' \u2014 \u26a0 went BACKWARD (misread/re-anchor)';
+            else if(an==='jump') s+=' \u2014 over-ceiling jump (catch-up)';
+            return s; }}}},
       scales:{x:xAxis(true),
         y:yAxis('ft\u00b3',{beginAtZero:false,
           ticks:{font:{size:9},callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}})}}

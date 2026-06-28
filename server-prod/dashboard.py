@@ -1808,9 +1808,27 @@ def create_app(config, engine, weather, billing):
         last_cf = None
         base_cf = None        # reading_cf at the window start (high-water base)
         peak_cf = None        # running high-water mark of reading_cf
+        # Reading-health audit: a monotonic meter should never step DOWN, and a
+        # forward step over the flow ceiling (gpm NULL) is a catch-up/garble.
+        backward_steps = 0    # samples where reading_cf went DOWN (misread/re-anchor)
+        max_drop_cf = 0.0     # biggest single backward step (ft3)
+        big_jumps = 0         # over-ceiling forward jumps (catch-up or garble)
+        step_n = 0
+        nondec_n = 0
         for r in rows:
             accepted = r["gpm"] is not None
             rc = r["reading_cf"]
+            dcf = r["delta_cf"] or 0.0
+            is_back = dcf < -0.001
+            is_jump = (not accepted) and dcf > 0.001
+            step_n += 1
+            if is_back:
+                backward_steps += 1
+                max_drop_cf = max(max_drop_cf, -dcf)
+            else:
+                nondec_n += 1
+            if is_jump:
+                big_jumps += 1
             # Usage = how far the meter's HIGH-WATER MARK climbs. A new high in
             # reading_cf = real water (incl. catch-up jumps after fast flow); a
             # dip is a re-anchor correction (never reduces usage), and re-climbing
@@ -1833,7 +1851,7 @@ def create_app(config, engine, weather, billing):
             b = buckets.get(key)
             if b is None:
                 b = {"ts": r["ts"], "gal": 0.0, "gpm_sum": 0.0, "gpm_n": 0,
-                     "cum": cum, "cf": last_cf}
+                     "cum": cum, "cf": last_cf, "back": 0, "jump": 0}
                 buckets[key] = b
                 order.append(key)
             b["ts"] = r["ts"]
@@ -1841,6 +1859,10 @@ def create_app(config, engine, weather, billing):
             b["cum"] = cum                 # cumulative gallons at bucket end
             if last_cf is not None:
                 b["cf"] = last_cf          # last actual meter reading in bucket
+            if is_back:
+                b["back"] += 1
+            if is_jump:
+                b["jump"] += 1
             if accepted:
                 b["gpm_sum"] += r["gpm"]
                 b["gpm_n"] += 1
@@ -1880,7 +1902,9 @@ def create_app(config, engine, weather, billing):
                     line.append({"t": t_iso, "gal": round(b["cum"], 2)})
                     meter.append({"t": t_iso,
                                   "cf": (round(cf, 3) if cf is not None
-                                         else None)})
+                                         else None),
+                                  "anomaly": ("back" if b["back"]
+                                              else "jump" if b["jump"] else None)})
                 else:
                     # No samples in this bucket -> data gap. Zero usage, hold the
                     # cumulative flat, carry the last meter reading; flag it as an
@@ -1908,9 +1932,15 @@ def create_app(config, engine, weather, billing):
         flat = bool(real_steps) and max(real_steps) < 0.3
         leak_hint = (bool(real_steps) and len(real_steps) >= 5
                      and min(real_steps) > 0.3)
+        health = {"backward_steps": backward_steps,
+                  "max_drop_gal": round(max_drop_cf * GAL, 1),
+                  "big_jumps": big_jumps,
+                  "pct_monotonic": (round(100.0 * nondec_n / step_n, 1)
+                                    if step_n else 100.0),
+                  "samples": step_n}
         return jsonify({"minutes": minutes, "bucket_s": bucket_s,
                         "bucket_label": blabel, "usage": usage, "line": line,
-                        "meter": meter, "gaps": gap_n,
+                        "meter": meter, "gaps": gap_n, "health": health,
                         "total_gal": total, "flat": flat,
                         "leak_hint": leak_hint})
 

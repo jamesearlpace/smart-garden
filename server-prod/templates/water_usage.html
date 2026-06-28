@@ -249,7 +249,11 @@ function render(d){
             return v!=null && v >= Math.max(barMax*0.25, 5); },
           anchor:'end', align:'top', offset:0, clamp:true,
           color:'#1d4ed8', font:{size:9,weight:'600'},
-          formatter:function(v){ return Math.round(v); } },
+          formatter:function(v){ return Math.round(v); },
+          listeners:{
+            enter:function(ctx){ ctx.chart.canvas.style.cursor='pointer'; },
+            leave:function(ctx){ ctx.chart.canvas.style.cursor=''; },
+            click:function(ctx){ var u=LAST_USAGE[ctx.dataIndex]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } } },
         tooltip:{callbacks:{
         title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
         label:function(c){ return gapFlags[c.dataIndex] ? 'no data (offline)'
@@ -272,7 +276,11 @@ function render(d){
           display:function(ctx){ return ctx.dataIndex === ctx.dataset.data.length-1; },
           anchor:'end', align:'left', offset:6, clamp:true,
           color:'#1d4ed8', font:{size:10,weight:'700'},
-          formatter:function(v){ return Math.round(v)+' gal'; } }},
+          formatter:function(v){ return Math.round(v)+' gal'; },
+          listeners:{
+            enter:function(ctx){ ctx.chart.canvas.style.cursor='pointer'; },
+            leave:function(ctx){ ctx.chart.canvas.style.cursor=''; },
+            click:function(){ var u=LAST_USAGE[LAST_USAGE.length-1]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } } }},
       scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
@@ -290,6 +298,7 @@ function render(d){
     plugins: DL ? [DL] : [],
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
+      onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } },
       plugins:{legend:{display:false},
         datalabels:{
           display:function(ctx){ var n=ctx.dataset.data.length;
@@ -297,7 +306,11 @@ function render(d){
           anchor:'end',
           align:function(ctx){ return ctx.dataIndex===0 ? 'right' : 'left'; },
           offset:4, clamp:true, color:'#0f766e', font:{size:9,weight:'600'},
-          formatter:function(v){ return v!=null ? Number(v).toLocaleString(undefined,{maximumFractionDigits:1}) : ''; } },
+          formatter:function(v){ return v!=null ? Number(v).toLocaleString(undefined,{maximumFractionDigits:1}) : ''; },
+          listeners:{
+            enter:function(ctx){ ctx.chart.canvas.style.cursor='pointer'; },
+            leave:function(ctx){ ctx.chart.canvas.style.cursor=''; },
+            click:function(ctx){ var u=LAST_USAGE[ctx.dataIndex]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } } },
         tooltip:{callbacks:{
           title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
           label:function(c){ var s=(c.parsed.y!=null

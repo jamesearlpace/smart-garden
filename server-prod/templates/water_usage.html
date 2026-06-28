@@ -392,21 +392,19 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
     panel.innerHTML='<div style="color:var(--text2)">Auditing this window against the meter…</div>';
     fetch('/api/water-usage/audit?minutes='+minutes).then(function(r){return r.json();}).then(function(a){
       var vc={accurate:'v-accurate',undercount:'v-undercount',review:'v-review'}[a.verdict]||'v-review';
-      var vt={accurate:'✅ Accurate — the chart matches the meter',
-              undercount:'⚠️ Conservative — the meter moved more than the chart counts',
+      var vt={accurate:'✅ Accurate — the chart total matches the meter',
               review:'🔎 Review — re-anchor corrections affect this window'}[a.verdict]||a.verdict;
       var h='<div class="verdict '+vc+'">'+vt+'</div>';
       h+='<div class="auditnums">'
-        + num(a.counted_gal+' gal','Chart counts (validated flow)')
-        + num(a.best_estimate_gal+' gal','Real water that flowed')
-        + num((a.meter&&a.meter.net_gal)+' gal','Physical meter net change')
+        + num(a.chart_total_gal+' gal','Chart total (water used)')
+        + num((a.meter&&a.meter.net_gal)+' gal','Physical meter net')
         + '</div>';
-      var ex=a.excluded||{};
-      if(ex.catchup_count||ex.reanchor_count){
-        h+='<div style="font-size:.8rem;color:var(--text2);margin-bottom:10px">Difference explained: '
-          + (ex.catchup_count?('<b>'+ex.catchup_jumps_gal+' gal</b> in '+ex.catchup_count+' catch-up jump(s) — real water the lock caught up on after fast flow, excluded to stay conservative'):'')
-          + (ex.reanchor_count?((ex.catchup_count?' · ':'')+'<b>'+ex.reanchor_gal+' gal</b> in '+ex.reanchor_count+' re-anchor correction(s) — not real water'):'')
-          + '.</div>';
+      var cx=a.context||{};
+      if(cx.catchup_count||cx.reanchor_count){
+        h+='<div style="font-size:.8rem;color:var(--text2);margin-bottom:10px">'
+          + (cx.catchup_count?('Includes <b>'+cx.catchup_count+'</b> catch-up jump(s) from fast flow, counted as real water. '):'')
+          + (cx.reanchor_count?('<b>'+cx.reanchor_count+'</b> re-anchor correction(s) here do not affect usage — the meter is monotonic.'):'')
+          + '</div>';
       }
       h+=(a.checks||[]).map(function(c){
         return '<div class="auditcheck"><span class="ck" style="color:'+(c.ok?'#16a34a':'#ef4444')+'">'

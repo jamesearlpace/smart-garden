@@ -191,6 +191,12 @@ function render(d){
   }
 
   var meterArr = d.meter || [];
+  // Stash what the graph plotted for each bucket onto the bucket itself, so the
+  // photo modal can show "the graph said X" right next to the actual frames.
+  usage.forEach(function(uu, i){
+    uu.graph_cf   = (meterArr[i] && meterArr[i].cf!=null) ? meterArr[i].cf : null;
+    uu.graph_anom = meterArr[i] ? meterArr[i].anomaly : null;
+  });
   // Adaptive x-axis: pick label detail from the bucket grain + the window span
   // so the axis reads well from a 5-second window out to 3 months.
   var firstT = usage.length ? usage[0].t : '';
@@ -329,6 +335,7 @@ function render(d){
 
 function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
 function fmt9(s){ var d=dig(s); return d.length===9 ? d.slice(0,6)+'.'+d.slice(6) : ''; }
+function cfTo9(cf){ if(cf==null) return ''; var p=Number(cf).toFixed(3).split('.'); return p[0].replace('-','').padStart(6,'0')+'.'+p[1]; }
 function frameCell(x, tag){
   var read = fmt9(x.reading), guess = fmt9(x.guess);
   var disp, badge='';
@@ -393,6 +400,17 @@ function showFrames(u){
   fetch('/api/water-usage/frames?start_ms='+u.start_ms+'&end_ms='+u.end_ms)
     .then(function(r){return r.json();}).then(function(d){
       var f = d.frames || [], html = '';
+      var gcf = cfTo9(u.graph_cf);
+      html += '<div style="grid-column:1/-1;background:#ecfdf5;border:1px solid #a7f3d0;'
+        + 'border-radius:8px;padding:10px 12px;margin-bottom:2px;font-size:.82rem;line-height:1.5">'
+        + '<b style="color:#0f766e">\ud83d\udcca What the graph plotted here:</b> '
+        + (gcf ? '<b style="font-size:1.05rem;color:#0f766e">'+gcf+'</b> ft\u00b3'
+               : '<span style="color:#94a3b8">no meter point (data gap)</span>')
+        + ' &nbsp;\u00b7&nbsp; <b>'+(u.gallons||0)+' gal</b> used this bucket'
+        + (u.graph_anom==='back' ? ' &nbsp;\u00b7&nbsp; <span style="color:#ef4444;font-weight:700">\u26a0 graph flagged a BACKWARD step</span>' : '')
+        + (u.graph_anom==='jump' ? ' &nbsp;\u00b7&nbsp; <span style="color:#b45309;font-weight:700">\u26a0 graph flagged a catch-up JUMP</span>' : '')
+        + '<br><span style="color:#5f7082;font-size:.74rem">The photos below should read the same number. '
+        + 'If a photo clearly shows something different, that frame was misread \u2014 click <b>Fix reading</b>.</span></div>';
       if (d.before){
         html += '<div style="grid-column:1/-1;font-weight:700;color:#5f7082;font-size:.8rem">⬅ Before this window (last reading prior):</div>';
         html += frameCell(d.before, 'BEFORE');

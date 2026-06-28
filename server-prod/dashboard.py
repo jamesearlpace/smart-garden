@@ -1963,7 +1963,7 @@ def create_app(config, engine, weather, billing):
         confidence so derived/propagated points are visibly flagged, plus the
         RAW per-frame OCR read alongside the committed value once recorded. This
         is the view you can actually audit the reader with."""
-        import meter_archive
+        import meter_ledger
         minutes = query_int("minutes", 60, min_value=1, max_value=129600)
         conn = db.get_conn()
         try:
@@ -1976,11 +1976,12 @@ def create_app(config, engine, weather, billing):
             conn.close()
         CAP = 4000
         try:
-            total = meter_archive.count_range(start=start, end=end)
-            # Most-recent CAP frames when a long window overflows (desc + reverse
-            # to ascending), so a 30d view still shows the latest detail.
-            rows = meter_archive.list_range(start=start, end=end,
-                                            order="desc", limit=CAP)
+            # SINGLE SOURCE: the canonical ledger -- the SAME rows the photos
+            # come from -- so a plotted point and its image can only disagree
+            # because of OCR, never because of a second stream.
+            total = meter_ledger.count_readings(start=start, end=end)
+            rows = meter_ledger.readings_range(start=start, end=end,
+                                               order="desc", limit=CAP)
         except Exception as e:
             return jsonify({"minutes": minutes, "points": 0, "total": 0,
                             "truncated": False, "by_conf": {}, "frames": [],
@@ -1992,17 +1993,18 @@ def create_app(config, engine, weather, billing):
             raw = row.get("raw_reading")
             frames.append({
                 "ts": row["ts"],
-                "cf": row.get("reading_cf"),
+                "cf": row.get("committed_cf"),
                 "conf": conf,
-                "source": row.get("source") or "",
-                "file": row.get("filename") or "",
+                "source": row.get("method") or "",
+                "file": row.get("image_file") or "",
                 "reviewed": int(row.get("reviewed") or 0),
                 "raw_cf": (raw / 1000.0) if raw is not None else None,
             })
         frames.reverse()  # ascending by ts for plotting
         return jsonify({"minutes": minutes, "points": len(frames),
                         "total": total, "truncated": total > len(frames),
-                        "by_conf": by_conf, "frames": frames})
+                        "by_conf": by_conf, "frames": frames,
+                        "source": "meter_ledger"})
 
     @app.route("/api/water-usage/audit")
     def api_water_usage_audit():

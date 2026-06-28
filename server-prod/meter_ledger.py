@@ -500,6 +500,50 @@ def reconcile():
 
 
 # ---------------------------------------------------------------------------
+# Query helpers (for charts / the API)
+# ---------------------------------------------------------------------------
+def readings_range(start=None, end=None, limit=4000, image_only=False,
+                   order="desc"):
+    """Readings in [start, end] straight from the canonical ledger -- the same
+    rows the photos come from, so a plotted point and its image can only
+    disagree because of OCR."""
+    c = _conn()
+    try:
+        q = ("SELECT ts, image_file, raw_reading, raw_conf, reader, committed,"
+             " committed_cf, method, confidence, reviewed, state, delta_cf "
+             "FROM meter_reading WHERE committed_cf IS NOT NULL")
+        args = []
+        if start:
+            q += " AND ts>=?"; args.append(start)
+        if end:
+            q += " AND ts<=?"; args.append(end)
+        if image_only:
+            q += " AND image_file IS NOT NULL"
+        q += " ORDER BY ts " + ("ASC" if order == "asc" else "DESC")
+        q += " LIMIT ?"; args.append(int(limit))
+        return [dict(r) for r in c.execute(q, args).fetchall()]
+    finally:
+        c.close()
+
+
+def count_readings(start=None, end=None, image_only=False):
+    c = _conn()
+    try:
+        q = ("SELECT COUNT(*) n FROM meter_reading "
+             "WHERE committed_cf IS NOT NULL")
+        args = []
+        if start:
+            q += " AND ts>=?"; args.append(start)
+        if end:
+            q += " AND ts<=?"; args.append(end)
+        if image_only:
+            q += " AND image_file IS NOT NULL"
+        return int(c.execute(q, args).fetchone()["n"])
+    finally:
+        c.close()
+
+
+# ---------------------------------------------------------------------------
 # small internals
 # ---------------------------------------------------------------------------
 def _count_all():

@@ -1,0 +1,11 @@
+[Unit]
+Description=Smart Garden meter ledger sync (keep the canonical data layer current)
+After=network.target
+
+[Service]
+Type=oneshot
+User=jamesearlpace
+WorkingDirectory=/home/jamesearlpace/smart-garden-server
+ExecStart=/home/jamesearlpace/smart-garden-server/.venv/bin/python /home/jamesearlpace/smart-garden-server/meter_ledger.py sync
+Nice=10
+IOSchedulingClass=idle

@@ -46,7 +46,7 @@ CLI:
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("METER_LEDGER_DB", os.path.join(HERE, "meter_ledger.db"))
@@ -157,7 +157,7 @@ def _map_archive_method(source):
     }.get((source or "").lower(), (source or "held"))
 
 
-def backfill_from_archive():
+def backfill_from_archive(since=None):
     """Image-backed readings (the auditable spine) from archive_frame."""
     if not os.path.exists(ARCHIVE_DB):
         return 0
@@ -166,7 +166,12 @@ def backfill_from_archive():
         cols = {r["name"] for r in src.execute(
             "PRAGMA table_info(archive_frame)")}
         has_raw = "raw_reading" in cols
-        rows = src.execute("SELECT * FROM archive_frame ORDER BY ts").fetchall()
+        if since:
+            rows = src.execute("SELECT * FROM archive_frame WHERE ts>? "
+                               "ORDER BY ts", (since,)).fetchall()
+        else:
+            rows = src.execute(
+                "SELECT * FROM archive_frame ORDER BY ts").fetchall()
     finally:
         src.close()
     now = datetime.now().isoformat(timespec="seconds")
@@ -198,19 +203,23 @@ def backfill_from_archive():
         c.close()
 
 
-def backfill_from_flow_gaps():
+def backfill_from_flow_gaps(since=None):
     """Fill evidence-less gaps from flow_sample (the 15s lock) ONLY where no
     image-backed reading already covers that instant, so the image-backed spine
     stays primary and we don't double-count or re-introduce stream drift."""
     if not os.path.exists(FLOW_DB):
         return 0
-    # Existing timestamps (sorted epochs) to test gap coverage fast.
+    # Existing timestamps (sorted epochs) to test gap coverage fast. On an
+    # incremental sync (since set) only the recent window is needed.
     c = _conn()
     try:
+        if since:
+            ex_rows = c.execute(
+                "SELECT ts FROM meter_reading WHERE ts>=?", (since,)).fetchall()
+        else:
+            ex_rows = c.execute("SELECT ts FROM meter_reading").fetchall()
         existing = sorted(
-            e for (e,) in (
-                (_epoch(row["ts"]),) for row in
-                c.execute("SELECT ts FROM meter_reading").fetchall())
+            e for (e,) in ((_epoch(row["ts"]),) for row in ex_rows)
             if e is not None)
     finally:
         c.close()
@@ -228,9 +237,15 @@ def backfill_from_flow_gaps():
 
     src = _conn(FLOW_DB)
     try:
-        rows = src.execute(
-            "SELECT ts, reading_cf, state FROM flow_sample "
-            "WHERE reading_cf IS NOT NULL ORDER BY ts").fetchall()
+        if since:
+            rows = src.execute(
+                "SELECT ts, reading_cf, state FROM flow_sample "
+                "WHERE reading_cf IS NOT NULL AND ts>? ORDER BY ts",
+                (since,)).fetchall()
+        else:
+            rows = src.execute(
+                "SELECT ts, reading_cf, state FROM flow_sample "
+                "WHERE reading_cf IS NOT NULL ORDER BY ts").fetchall()
     finally:
         src.close()
     now = datetime.now().isoformat(timespec="seconds")
@@ -260,17 +275,39 @@ def backfill_from_flow_gaps():
         c.close()
 
 
-def compute_deltas():
-    """Fill delta_cf = committed_cf - previous committed_cf across the whole
-    ledger (a monotonic odometer; a negative delta is a misread/re-anchor)."""
+def compute_deltas(only_null=False):
+    """Fill delta_cf = committed_cf - previous committed_cf (a monotonic
+    odometer; a negative delta is a misread/re-anchor). With only_null=True,
+    process just the rows missing a delta (new arrivals) -- seeded from the row
+    just before the first gap -- so the cost does not grow with ledger size."""
     c = _conn()
     try:
-        rows = c.execute(
-            "SELECT ts, committed_cf FROM meter_reading "
-            "WHERE committed_cf IS NOT NULL ORDER BY ts").fetchall()
-        prev = None
+        if only_null:
+            first = c.execute(
+                "SELECT MIN(ts) m FROM meter_reading "
+                "WHERE delta_cf IS NULL AND committed_cf IS NOT NULL"
+            ).fetchone()["m"]
+            if first is None:
+                return 0
+            pr = c.execute(
+                "SELECT committed_cf FROM meter_reading "
+                "WHERE ts<? AND committed_cf IS NOT NULL "
+                "ORDER BY ts DESC LIMIT 1", (first,)).fetchone()
+            prev = pr["committed_cf"] if pr else None
+            rows = c.execute(
+                "SELECT ts, committed_cf FROM meter_reading "
+                "WHERE ts>=? AND committed_cf IS NOT NULL ORDER BY ts",
+                (first,)).fetchall()
+        else:
+            prev = None
+            rows = c.execute(
+                "SELECT ts, committed_cf FROM meter_reading "
+                "WHERE committed_cf IS NOT NULL ORDER BY ts").fetchall()
         for r in rows:
-            d = None if prev is None else round(r["committed_cf"] - prev, 3)
+            # The very first reading has no predecessor -> 0.0 (NOT NULL), so a
+            # NULL delta unambiguously means "new row, not yet computed" and the
+            # incremental pass never re-scans the whole ledger.
+            d = 0.0 if prev is None else round(r["committed_cf"] - prev, 3)
             c.execute("UPDATE meter_reading SET delta_cf=? WHERE ts=?",
                       (d, r["ts"]))
             prev = r["committed_cf"]
@@ -286,6 +323,36 @@ def backfill():
     f = backfill_from_flow_gaps()
     d = compute_deltas()
     return {"image_backed": a, "flow_gap_fill": f, "deltas": d,
+            "total": _count_all()}
+
+
+def sync():
+    """Keep the ledger current (for a timer): import new legacy rows,
+    incrementally fill deltas, and rebuild the recent daily rollup. Idempotent.
+    The legacy sources are bounded (flow_sample 30d retention, archive_frame
+    disk-capped) and the delta/daily passes are incremental, so sync cost does
+    not grow with ledger size."""
+    ensure_schema()
+    c = _conn()
+    try:
+        last = c.execute("SELECT MAX(ts) m FROM meter_reading").fetchone()["m"]
+    finally:
+        c.close()
+    # Re-examine a 1-day overlap so late-arriving rows are not missed.
+    since = None
+    if last:
+        try:
+            since = (datetime.fromisoformat(last) - timedelta(days=1)
+                     ).isoformat(timespec="seconds")
+        except Exception:
+            since = None
+    backfill_from_archive(since)
+    backfill_from_flow_gaps(since)
+    nd = compute_deltas(only_null=True)
+    days = recompute_daily(start=(since[:10] if since else None))
+    return {"new_deltas": nd, "days_recomputed": days,
+            "image_backed": _count_origin("backfill:archive_frame"),
+            "flow_gap_fill": _count_origin("backfill:flow_sample"),
             "total": _count_all()}
 
 
@@ -312,7 +379,14 @@ def recompute_daily(start=None, end=None):
         rows = c.execute(q, args).fetchall()
 
         days = {}            # date -> aggregate
+        # Seed the running peak from BEFORE the (re)computed window so the
+        # high-water-mark stays globally correct even on an incremental rebuild.
         peak = None
+        if start:
+            pr = c.execute(
+                "SELECT MAX(committed_cf) m FROM meter_reading "
+                "WHERE ts<? AND committed_cf IS NOT NULL", (start,)).fetchone()
+            peak = pr["m"] if pr else None
         for r in rows:
             day = r["ts"][:10]
             d = days.get(day)
@@ -455,6 +529,8 @@ if __name__ == "__main__":
         print("schema ready at", DB_PATH)
     elif cmd == "backfill":
         print(backfill())
+    elif cmd == "sync":
+        print(sync())
     elif cmd == "recompute":
         print("usage_daily rows:", recompute_daily())
     elif cmd == "stats":

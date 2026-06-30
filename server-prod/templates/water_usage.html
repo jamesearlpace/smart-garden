@@ -15,6 +15,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 a{color:var(--blue);text-decoration:none}
 h1{font-size:1.35rem;margin-bottom:2px}
 .sub{color:var(--text2);font-size:.85rem;margin-bottom:8px}
+.ratesummary{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.ratepill{background:var(--card);border:1px solid var(--border);border-radius:8px;
+  padding:7px 10px;min-width:120px}
+.ratepill .l{font-size:.66rem;color:var(--text2);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.ratepill .n{font-size:1.05rem;font-weight:750;line-height:1.15;margin-top:1px}
+.ratepill .s{font-size:.7rem;color:var(--text2)}
 .bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
@@ -89,6 +95,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <a href="/#cam" style="font-size:.85rem">&larr; Back to dashboard</a>
 <h1>💧 Water Usage Over Time</h1>
 <div class="sub" id="sub">Loading…</div>
+<div class="ratesummary" id="rateSummary" style="display:none"></div>
 
 <div id="banner" class="banner muted">Checking for a slow leak…</div>
 
@@ -269,9 +276,37 @@ function makeLabeler(bucket_s, spanDays, multiDay){
   return function(ts){ return _md(ts) + ' · ' + ts.slice(11,16); };       // Jun 26 · 14:00
 }
 
+function median(xs){
+  if(!xs.length) return 0;
+  var s = xs.slice().sort(function(a,b){ return a-b; });
+  var mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : (s[mid-1] + s[mid]) / 2;
+}
+function fmtRate(v){
+  var n = Number(v);
+  if(!isFinite(n)) return '0';
+  return n >= 10 ? n.toFixed(1) : n.toFixed(2);
+}
+function renderRateSummary(usage){
+  var el = document.getElementById('rateSummary');
+  if(!el) return;
+  var active = usage.filter(function(u){
+    return !u.gap && (u.gallons || 0) > 0 && isFinite(Number(u.gpm));
+  });
+  var gpms = active.map(function(u){ return Number(u.gpm) || 0; });
+  var medGpm = median(gpms);
+  var medGph = medGpm * 60;
+  el.style.display = 'flex';
+  el.innerHTML =
+    '<div class="ratepill"><div class="l">Median GPM</div><div class="n">'+fmtRate(medGpm)+'</div><div class="s">active buckets</div></div>'
+    + '<div class="ratepill"><div class="l">Median GPH</div><div class="n">'+fmtRate(medGph)+'</div><div class="s">same median x 60</div></div>'
+    + '<div class="ratepill"><div class="l">Buckets Used</div><div class="n">'+active.length+'</div><div class="s">nonzero / '+usage.length+' total</div></div>';
+}
+
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
+  renderRateSummary(usage);
   var rateMode = d.rate_mode || state.rate_mode || 'actual';
   document.getElementById('bar-title').innerHTML = 'Gallons per bar'
     + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label
@@ -807,6 +842,8 @@ function load(){
   }).catch(function(e){
     ctlMsg(e.message||'Could not load usage.', true);
     document.getElementById('sub').textContent='Could not load usage.';
+    var rs=document.getElementById('rateSummary');
+    if(rs) rs.style.display='none';
   });
   loadAudit();
 }

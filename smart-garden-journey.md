@@ -1596,3 +1596,23 @@ This stops the engine from making any further automatic decisions until you've d
    - Zone 8 (Grapes): unchanged.
 
 ---
+---
+
+## 2026-06-30 - website zone-label and water-navigation cleanup
+
+Context: The website was displaying mixed internal zone ids (`0-8`) and official zone numbers (`1-9`) in different places, especially around water-usage events. The water tooling was also split across Usage, Cost, and Flow pages with weak cross-navigation.
+
+Changes:
+- Added canonical API fields for displayed zone identity: `zone_number` and `zone_label`.
+- Updated water-usage, dashboard activity/analytics, telemetry, and flow reports to consume `zone_label` instead of inventing zone labels locally.
+- Added `server-prod/tools/check_zone_labels.py` and wired it into `deploy.ps1` so future deploys fail if obvious raw zone-id labels reappear.
+- Made Water a primary mobile nav item, moved Forecast to More, added Water subnav links across Usage/Cost/Flow, and added Home-page Water Tools shortcuts.
+- Hardened dashboard panel navigation so only real panel nav items call `showPanel()`, and panel changes update the URL hash.
+
+Validation:
+- Deployed through guarded `deploy.ps1`; smoke `/login` returned `200`.
+- Live API checks confirmed `zone_id:4` returns `zone_number:5`, `zone_label:"Zone 5 - Southeast"` and `zone_id:0` returns `Zone 1 - Front Yard A`.
+- Live page sweep returned `200` for the main dashboard, water pages, forecast, schedule, sensors, map, calibration, cam pages, and audit.
+- Live API sweep returned JSON/`200` for dashboard, status, forecast, schedule, water usage, water events, OCR audit, flow, water cost, analytics, server health, audit, and cam endpoints.
+
+State: Internal ids remain zero-based for controller/database safety. User-facing website labels now have a backend source of truth and a deploy-time regression guard.

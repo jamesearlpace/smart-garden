@@ -297,26 +297,39 @@ function fmtRate(v){
   if(!isFinite(n)) return '0';
   return n >= 10 ? n.toFixed(1) : n.toFixed(2);
 }
-function renderRateSummary(usage){
+function renderRateSummary(d){
   var el = document.getElementById('rateSummary');
   if(!el) return;
+  var usage = d.usage || [];
   var active = usage.filter(function(u){
     return !u.gap && (u.gallons || 0) > 0 && isFinite(Number(u.gpm));
   });
   var gpms = active.map(function(u){ return Number(u.gpm) || 0; });
   var medGpm = median(gpms);
   var medGph = medGpm * 60;
+  var winMin = 0;
+  if(d.window && d.window.start && d.window.end){
+    var ms = Date.parse(d.window.end) - Date.parse(d.window.start);
+    if(isFinite(ms) && ms > 0) winMin = ms / 60000;
+  }
+  var avgGpm = winMin > 0 ? (Number(d.total_gal || 0) / winMin) : 0;
+  var cov = d.coverage || {};
+  var covText = (cov.ledger_rows != null)
+    ? (cov.ledger_rows + ' rows / ' + (cov.emitted_buckets || usage.length) + ' buckets')
+    : (active.length + ' nonzero / ' + usage.length + ' total');
   el.style.display = 'flex';
   el.innerHTML =
-    '<div class="ratepill"><div class="l">Median GPM</div><div class="n">'+fmtRate(medGpm)+'</div><div class="s">active buckets</div></div>'
+    '<div class="ratepill"><div class="l">Total Gallons</div><div class="n">'+fmtRate(d.total_gal || 0)+'</div><div class="s">selected range</div></div>'
+    + '<div class="ratepill"><div class="l">Window Avg GPM</div><div class="n">'+fmtRate(avgGpm)+'</div><div class="s">includes quiet time</div></div>'
+    + '<div class="ratepill"><div class="l">Median GPM</div><div class="n">'+fmtRate(medGpm)+'</div><div class="s">active buckets</div></div>'
     + '<div class="ratepill"><div class="l">Median GPH</div><div class="n">'+fmtRate(medGph)+'</div><div class="s">same median x 60</div></div>'
-    + '<div class="ratepill"><div class="l">Buckets Used</div><div class="n">'+active.length+'</div><div class="s">nonzero / '+usage.length+' total</div></div>';
+    + '<div class="ratepill"><div class="l">Coverage</div><div class="n">'+active.length+'</div><div class="s">'+esc(covText)+'</div></div>';
 }
 
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
-  renderRateSummary(usage);
+  renderRateSummary(d);
   var rateMode = d.rate_mode || state.rate_mode || 'actual';
   document.getElementById('bar-title').innerHTML = 'Gallons per bar'
     + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label
@@ -923,5 +936,6 @@ loadEvents();
 setInterval(loadEvents, 30000);
 load();
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

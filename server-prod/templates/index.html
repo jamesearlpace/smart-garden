@@ -52,6 +52,7 @@ a{color:var(--blue);text-decoration:none}
 .nav-item:hover{background:var(--bg-sidebar-hover);color:rgba(255,255,255,.85)}
 .nav-item.active{background:rgba(34,197,94,.18);color:#4ade80;font-weight:600}
 .nav-item .icon{font-size:1.15rem;width:24px;text-align:center}
+.nav-section{padding:14px 14px 6px;font-size:.62rem;font-weight:800;color:rgba(255,255,255,.32);text-transform:uppercase;letter-spacing:.08em}
 .sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,.08);font-size:.72rem;color:rgba(255,255,255,.35)}
 .sidebar-footer .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
 .sidebar-footer .status-dot.online{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.5)}
@@ -448,16 +449,19 @@ a{color:var(--blue);text-decoration:none}
     </div>
   </div>
   <div class="sidebar-nav">
+    <div class="nav-section">Core</div>
     <div class="nav-item active" data-panel="home"><span class="icon">🏠</span> Home</div>
     <div class="nav-item" data-panel="zones"><span class="icon">🌿</span> Zones</div>
+    <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📅</span> Schedule</a>
     <div class="nav-item" data-panel="history"><span class="icon">📊</span> History</div>
+    <div class="nav-section">Water</div>
+    <a href="/water-usage" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📈</span> Water Usage</a>
+    <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💵</span> Water Cost</a>
+    <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🩺</span> Flow &amp; Leaks</a>
+    <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
+    <div class="nav-section">Tools</div>
     <a href="/sensor-history" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌡️</span> Sensor History</a>
     <div class="nav-item" data-panel="settings"><span class="icon">⚙️</span> Settings</div>
-    <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
-    <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Schedule</a>
-    <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💵</span> Water Cost</a>
-    <a href="/water-usage" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📈</span> Water Usage</a>
-    <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Flow &amp; Leaks</a>
     <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🎛️</span> Calibrate</a>
     <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
     <div class="nav-item" data-panel="deer"><span class="icon">🦌</span> Deer Repellent</div>
@@ -2151,7 +2155,7 @@ var PANEL_TITLES = {
 function showPanel(id) {
   document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
   document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
-  document.querySelectorAll('.mob-nav-item').forEach(function(n) { n.classList.remove('active'); });
+  document.querySelectorAll('.mob-nav-item,.sg-nav-item,.sg-sheet-item').forEach(function(n) { n.classList.remove('active'); });
 
   // Composite panels: move old panel content into composite containers
   if (id === 'history') {
@@ -2186,7 +2190,7 @@ function moveContent(srcId, targetId) {
   while (src.firstChild) tgt.appendChild(src.firstChild);
 }
 
-document.querySelectorAll('.nav-item[data-panel], .mob-nav-item[data-panel]').forEach(function(item) {
+document.querySelectorAll('.nav-item[data-panel], .mob-nav-item[data-panel], .sg-nav-item[data-panel], .sg-sheet-item[data-panel]').forEach(function(item) {
   item.addEventListener('click', function() { showPanel(item.dataset.panel); });
 });
 

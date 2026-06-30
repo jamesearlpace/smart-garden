@@ -2112,11 +2112,16 @@ def create_app(config, engine, weather, billing):
                   "pct_monotonic": (round(100.0 * nondec_n / step_n, 1)
                                     if step_n else 100.0),
                   "samples": step_n}
+        coverage = {"ledger_rows": step_n,
+                    "actual_buckets": len(buckets),
+                    "interpolated_buckets": len(interp_buckets),
+                    "emitted_buckets": len(usage)}
         return jsonify({"minutes": minutes, "mode": mode,
                         "window": {"start": start, "end": end},
                         "bucket_s": bucket_s, "rate_mode": rate_mode,
                         "bucket_label": blabel, "usage": usage, "line": line,
                         "meter": meter, "gaps": gap_n, "health": health,
+                        "coverage": coverage,
                         "total_gal": total, "flat": flat,
                         "leak_hint": leak_hint})
 
@@ -8412,6 +8417,7 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,s
 .sidebar .nav-item:hover{background:var(--bg-sidebar-hover);color:rgba(255,255,255,.85)}
 .sidebar .nav-item.active{background:rgba(34,197,94,.18);color:#4ade80;font-weight:600}
 .sidebar .nav-item .icon{font-size:1.15rem;width:24px;text-align:center}
+.nav-section{padding:14px 14px 6px;font-size:.62rem;font-weight:800;color:rgba(255,255,255,.32);text-transform:uppercase;letter-spacing:.08em}
 .sidebar-footer{padding:16px 20px;border-top:1px solid rgba(255,255,255,.08);font-size:.72rem;color:rgba(255,255,255,.35)}
 .sidebar-footer .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
 .sidebar-footer .status-dot.online{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.5)}
@@ -8485,13 +8491,19 @@ a{color:var(--blue);text-decoration:none;}
     </div>
   </div>
   <div class="sidebar-nav">
+    <div class="nav-section">Core</div>
     <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
     <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
+    <a href="/moisture-sim" class="nav-item"><span class="icon">📅</span> Schedule</a>
     <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
+    <div class="nav-section">Water</div>
+    <a href="/water-usage" class="nav-item"><span class="icon">📈</span> Water Usage</a>
+    <a href="/costs" class="nav-item"><span class="icon">💵</span> Water Cost</a>
+    <a href="/flow" class="nav-item"><span class="icon">🩺</span> Flow &amp; Leaks</a>
+    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
+    <div class="nav-section">Tools</div>
     <a href="/sensor-history" class="nav-item"><span class="icon">🌡️</span> Sensor History</a>
     <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
-    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
-    <a href="/moisture-sim" class="nav-item"><span class="icon">💧</span> Schedule</a>
     <a href="/calibrate" class="nav-item active"><span class="icon">🎛️</span> Calibrate</a>
     <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
   </div>
@@ -8889,9 +8901,8 @@ restartPoll();</script>
   <div class="mobile-nav-inner">
     <a href="/" class="mob-nav-item"><span class="mob-icon">🏠</span>Home</a>
     <a href="/#zones" class="mob-nav-item"><span class="mob-icon">🌿</span>Zones</a>
-    <a href="/#history" class="mob-nav-item"><span class="mob-icon">📊</span>History</a>
-    <a href="/forecast" class="mob-nav-item"><span class="mob-icon">🌧️</span>Forecast</a>
-    <a href="/moisture-sim" class="mob-nav-item"><span class="mob-icon">💧</span>Schedule</a>
+    <a href="/moisture-sim" class="mob-nav-item"><span class="mob-icon">📅</span>Schedule</a>
+    <a href="/water-usage" class="mob-nav-item"><span class="mob-icon">💧</span>Water</a>
     <a href="/calibrate" class="mob-nav-item active"><span class="mob-icon">🎛️</span>Calibrate</a>
   </div>
 </div>

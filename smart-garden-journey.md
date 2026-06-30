@@ -1616,3 +1616,25 @@ Validation:
 - Live API sweep returned JSON/`200` for dashboard, status, forecast, schedule, water usage, water events, OCR audit, flow, water cost, analytics, server health, audit, and cam endpoints.
 
 State: Internal ids remain zero-based for controller/database safety. User-facing website labels now have a backend source of truth and a deploy-time regression guard.
+
+---
+
+## 2026-06-30 - website navigation and water-analysis stabilization pass
+
+Context: After the zone-label fix, the website still had copied sidebars with different route sets and several water-analysis pages were easier to reach from some pages than others. The water-usage page also needed better scientific context for selected ranges.
+
+Changes:
+- Normalized the main desktop sidebars into Core / Water / Tools groups across dashboard, schedule, forecast, water-cost, sensor-history, and calibration pages.
+- Added Water Usage, Water Cost, Flow & Leaks, and Forecast consistently to the Water group so those related pages are not hidden depending on entry point.
+- Added the shared mobile bottom nav to the lightweight Water Usage and Flow pages.
+- Fixed dashboard SPA active-state handling for the shared mobile nav classes.
+- Added `/api/water-usage` coverage metadata and expanded the top water-usage summary to show total gallons, whole-window average GPM, active-bucket median GPM/GPH, and ledger/bucket coverage.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/flow_monitor.py server-prod/tools/check_zone_labels.py`
+- `python server-prod/tools/check_zone_labels.py`
+- Inline JavaScript syntax check passed for changed plain-JS templates and `_mobilenav.html`.
+- Offline Jinja render pass succeeded for changed templates with expected context keys.
+- Deployed through `deploy.ps1`; smoke `/login` returned `200`.
+
+State: The site now has a more consistent information architecture around the Water pages, and selected water-usage ranges expose enough rate/coverage context to reason about zone usage without treating interpolated bars as committed readings.

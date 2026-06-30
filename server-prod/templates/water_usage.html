@@ -185,6 +185,7 @@ var state = {mode:'relative', minutes:60, bucket_s:'', rate_mode:'actual'};
 var barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
 var lastQuery = '';
 var EVENTS = [];
+var selectedEventId = null;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -792,14 +793,41 @@ function eventLabel(ev){
   return 'Zone '+ev.zone_id+' · '+ev.zone_name+' · '+start+' -> '+end+' · '+dur+gal;
 }
 
+function selectEventRange(ev){
+  if(!ev) return;
+  document.getElementById('startInput').value = localInputValue(ev.select_start || ev.start);
+  document.getElementById('endInput').value = localInputValue(ev.select_end || ev.end);
+  state.mode='absolute';
+}
+
 function loadEvents(){
   var sel=document.getElementById('eventSelect');
   if(!sel) return;
+  var keepId = selectedEventId;
+  if(keepId == null && sel.value !== '' && EVENTS[parseInt(sel.value,10)]) {
+    keepId = EVENTS[parseInt(sel.value,10)].id;
+  }
+  var keepWasOpen = EVENTS.some(function(ev){
+    return String(ev.id) === String(keepId) && ev.open;
+  });
   fetch('/api/water-usage/events?days=14&limit=120&pad_s=30')
     .then(function(r){return r.json();}).then(function(d){
       EVENTS=d.events||[];
       sel.innerHTML='<option value="">Select recent event...</option>'
         + EVENTS.map(function(ev,i){ return '<option value="'+i+'">'+esc(eventLabel(ev))+'</option>'; }).join('');
+      if(keepId != null){
+        for(var i=0;i<EVENTS.length;i++){
+          if(String(EVENTS[i].id) === String(keepId)){
+            sel.value = String(i);
+            selectedEventId = EVENTS[i].id;
+            if(EVENTS[i].open || keepWasOpen){
+              selectEventRange(EVENTS[i]);
+              load();
+            }
+            break;
+          }
+        }
+      }
     }).catch(function(){
       sel.innerHTML='<option value="">Could not load events</option>';
     });
@@ -852,6 +880,7 @@ document.getElementById('applyRange').onclick = function(){
   var e=document.getElementById('endInput').value;
   if(!s || !e){ ctlMsg('Pick both a start and end time.', true); return; }
   if(new Date(e) <= new Date(s)){ ctlMsg('End must be after start.', true); return; }
+  selectedEventId = null;
   state.mode='absolute';
   load();
 };
@@ -860,6 +889,7 @@ document.getElementById('clearRange').onclick = function(){
   document.getElementById('endInput').value='';
   var evSel=document.getElementById('eventSelect');
   if(evSel) evSel.value='';
+  selectedEventId = null;
   state.mode='relative';
   load();
 };
@@ -867,12 +897,11 @@ document.getElementById('grainSelect').onchange = function(){ load(); };
 document.getElementById('rateModeSelect').onchange = function(){ load(); };
 document.getElementById('eventSelect').onchange = function(){
   var idx=this.value;
-  if(idx==='') return;
+  if(idx===''){ selectedEventId = null; return; }
   var ev=EVENTS[parseInt(idx,10)];
   if(!ev) return;
-  document.getElementById('startInput').value = localInputValue(ev.select_start || ev.start);
-  document.getElementById('endInput').value = localInputValue(ev.select_end || ev.end);
-  state.mode='absolute';
+  selectedEventId = ev.id;
+  selectEventRange(ev);
   ctlMsg('Showing '+eventLabel(ev)+' with 30s padding.');
   load();
 };
@@ -882,6 +911,7 @@ window.addEventListener('popstate', function(){
 });
 initStateFromUrl();
 loadEvents();
+setInterval(loadEvents, 30000);
 load();
 </script>
 </body>

@@ -597,6 +597,24 @@ State: Post-cutoff committed/chart history is stabilized and internally consiste
 
 ---
 
+## 2026-06-30 - water-usage actual vs interpolated rate bars
+
+Context: The 5-second rate chart needed an explicit choice between raw committed-row bucket values and an interpolated rate view for windows where sparse accepted meter reads otherwise create gap/spike bars.
+
+Changes:
+- Added `rate_mode=actual|interpolated` to `/api/water-usage`.
+- Added a Bars selector on `/water-usage`: `Actual rows` preserves committed-row bucket deltas; `Interpolated` distributes each accepted high-water meter increase across the elapsed time between accepted readings.
+- Increased per-bucket API precision so many small 5-second bars reconcile with the cumulative total instead of drifting from two-decimal rounding.
+
+Validation:
+- Historical 2026-06-29 21:08:50-21:12:43 at 5s: actual total `6.59 gal`, max bar `1.0622`; interpolated total `6.5899 gal`, max bar `0.4563`.
+- Current 2026-06-30 08:09:30-08:21:53 at 5s: actual total `37.5008 gal`, max bar `0.8378`; interpolated total `37.5007 gal`, max bar `0.2805`.
+- Both modes ended with cumulative line `37.5 gal` for the current window and `6.59 gal` for the historical window.
+
+State: Interpolation is display-layer allocation only. It does not smooth or rewrite committed readings, meter locks, OCR values, or totals.
+
+---
+
 ## Commits (this arc, in order)
 
 | Commit | What |

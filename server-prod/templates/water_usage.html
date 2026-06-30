@@ -19,7 +19,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
 .chip.on{background:var(--text);color:#fff;border-color:var(--text)}
-.controls{display:grid;grid-template-columns:minmax(220px,1.25fr) 1fr 1fr 150px auto auto;gap:8px;align-items:end;
+.controls{display:grid;grid-template-columns:minmax(220px,1.25fr) 1fr 1fr 150px 155px auto auto;gap:8px;align-items:end;
   background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px}
 .ctl label{display:block;font-size:.68rem;font-weight:700;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
 .ctl input,.ctl select{width:100%;height:34px;border:1px solid var(--border);border-radius:7px;background:#fff;
@@ -114,6 +114,12 @@ h1{font-size:1.35rem;margin-bottom:2px}
       <option value="3600">1 hr</option>
     </select>
   </div>
+  <div class="ctl"><label for="rateModeSelect">Bars</label>
+    <select id="rateModeSelect">
+      <option value="actual">Actual rows</option>
+      <option value="interpolated">Interpolated</option>
+    </select>
+  </div>
   <button id="applyRange" class="applybtn">Apply range</button>
   <button id="clearRange" class="applybtn secondary">Use rolling</button>
   <div id="ctlMsg" class="ctlmsg">Use the chips for rolling windows, or pick an exact local date/time range.</div>
@@ -168,7 +174,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
               [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
-var state = {mode:'relative', minutes:60, bucket_s:''};
+var state = {mode:'relative', minutes:60, bucket_s:'', rate_mode:'actual'};
 var barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
 var lastQuery = '';
 var EVENTS = [];
@@ -185,6 +191,7 @@ function ctlMsg(txt, err){
 function queryString(){
   var p=[];
   state.bucket_s = document.getElementById('grainSelect').value || '';
+  state.rate_mode = document.getElementById('rateModeSelect').value || 'actual';
   if(state.mode==='absolute'){
     p.push('start='+enc(document.getElementById('startInput').value));
     p.push('end='+enc(document.getElementById('endInput').value));
@@ -192,6 +199,7 @@ function queryString(){
     p.push('minutes='+enc(state.minutes));
   }
   if(state.bucket_s) p.push('bucket_s='+enc(state.bucket_s));
+  p.push('rate_mode='+enc(state.rate_mode));
   lastQuery=p.join('&');
   return lastQuery;
 }
@@ -229,11 +237,14 @@ function makeLabeler(bucket_s, spanDays, multiDay){
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
+  var rateMode = d.rate_mode || state.rate_mode || 'actual';
   document.getElementById('bar-title').innerHTML = 'Gallons per bar'
-    + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label+'</span>' : '');
+    + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label
+      +' · '+(rateMode==='interpolated'?'interpolated between committed meter points':'actual committed-row buckets')+'</span>' : '');
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
     + (d.total_gal||0)+' gal total this window · ledger sampled at capture cadence'
+    + (rateMode==='interpolated' ? ' · <b style="color:#0d9488">rate interpolation on</b>' : '')
     + (d.gaps ? ' · <b style="color:#94a3b8">'+d.gaps+'</b> gap bucket(s) (offline, shown dashed)' : '')
     + (windowLabel(d) ? '<br><span style="font-size:.78rem">'+windowLabel(d)+'</span>' : '');
   var b = document.getElementById('banner');
@@ -317,6 +328,11 @@ function render(d){
   function yAxis(title, opts){ return Object.assign(
     {title:{display:true,text:title}, afterFit:function(s){ s.width = YW; },
      ticks:{font:{size:9}}}, opts||{}); }
+  function fmtGal(v){
+    var n = Number(v);
+    if (!isFinite(n)) return v;
+    return n >= 10 ? n.toFixed(1) : (n >= 1 ? n.toFixed(2) : n.toFixed(3));
+  }
 
   // Selective data labels (only the notable points, never every one) + easier
   // hover: index mode shows the value when the mouse is anywhere along the x.
@@ -327,7 +343,8 @@ function render(d){
   barC = new Chart(document.getElementById('barChart'), {
     type:'bar',
     data:{labels:labels, datasets:[{label:'gal', data:gph,
-      backgroundColor:'#3b82f6', borderRadius:3}]},
+      backgroundColor:usage.map(function(u){return u.interpolated?'#0d9488':'#3b82f6';}),
+      borderRadius:3}]},
     plugins: DL ? [DL] : [],
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
@@ -346,7 +363,8 @@ function render(d){
         tooltip:{callbacks:{
         title:function(items){ return items.length ? fullLabels[items[0].dataIndex] : ''; },
         label:function(c){ return gapFlags[c.dataIndex] ? 'no data (offline)'
-          : (c.parsed.y + ' gal'); }}}},
+          : (fmtGal(c.parsed.y) + ' gal'
+             + (usage[c.dataIndex]&&usage[c.dataIndex].interpolated?' (interpolated)':'')); }}}},
       scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
 
@@ -773,6 +791,7 @@ document.getElementById('clearRange').onclick = function(){
   load();
 };
 document.getElementById('grainSelect').onchange = function(){ load(); };
+document.getElementById('rateModeSelect').onchange = function(){ load(); };
 document.getElementById('eventSelect').onchange = function(){
   var idx=this.value;
   if(idx==='') return;

@@ -1893,6 +1893,9 @@ def create_app(config, engine, weather, billing):
             return jsonify({"error": "selected grain creates too many buckets; "
                                      "choose a coarser grain or shorter range",
                             "usage": [], "line": [], "meter": []}), 400
+        rate_mode = (request.args.get("rate_mode") or "actual").strip().lower()
+        if rate_mode not in ("actual", "interpolated"):
+            rate_mode = "actual"
         rows = meter_ledger.readings_range(start=start, end=end,
                                            order="asc", limit=500000)
         # METHODOLOGY: usage = how far the meter's HIGH-WATER MARK climbs. The
@@ -1908,10 +1911,14 @@ def create_app(config, engine, weather, billing):
         # All three series are BUCKET-ALIGNED (one point per bucket, identical
         # timestamps) so the bar / cumulative / meter charts share an EXACT x-axis.
         buckets, order = {}, []
+        interp_buckets = {}
+        interp_order = []
         cum = 0.0
         last_cf = None
         base_cf = None        # reading_cf at the window start (high-water base)
         peak_cf = None        # running high-water mark of reading_cf
+        peak_ep = None
+        prev_ep = None
         # Reading-health audit: a monotonic meter should never step DOWN, and a
         # forward step over the flow ceiling (gpm NULL) is a catch-up/garble.
         backward_steps = 0    # samples where reading_cf went DOWN (misread/re-anchor)
@@ -1957,12 +1964,38 @@ def create_app(config, engine, weather, billing):
                 if base_cf is None:
                     base_cf = rc
                     peak_cf = rc
+                    peak_ep = ep
                 elif rc > peak_cf:
                     dgal = (rc - peak_cf) * GAL
                     if (rc - peak_cf) > USAGE_OUTLIER_FT3:
                         usage_outliers += 1
                         max_usage_jump_cf = max(max_usage_jump_cf, rc - peak_cf)
                     peak_cf = rc
+                    start_ep = peak_ep if peak_ep is not None else prev_ep
+                    if dgal > 0 and start_ep is not None and ep > start_ep:
+                        for ik in range(int(start_ep // bucket_s),
+                                        int(ep // bucket_s) + 1):
+                            bs = ik * bucket_s
+                            be = bs + bucket_s
+                            overlap = max(0.0, min(ep, be) - max(start_ep, bs))
+                            if overlap <= 0:
+                                continue
+                            ib = interp_buckets.get(ik)
+                            if ib is None:
+                                ib = {"gal": 0.0, "interpolated": 0}
+                                interp_buckets[ik] = ib
+                                interp_order.append(ik)
+                            ib["gal"] += dgal * (overlap / (ep - start_ep))
+                            ib["interpolated"] += 1
+                    elif dgal > 0:
+                        ib = interp_buckets.get(key)
+                        if ib is None:
+                            ib = {"gal": 0.0, "interpolated": 0}
+                            interp_buckets[key] = ib
+                            interp_order.append(key)
+                        ib["gal"] += dgal
+                        ib["interpolated"] += 1
+                    peak_ep = ep
             cum += dgal
             b = buckets.get(key)
             if b is None:
@@ -1979,6 +2012,7 @@ def create_app(config, engine, weather, billing):
                 b["back"] += 1
             if is_jump:
                 b["jump"] += 1
+            prev_ep = ep
         # Emit ONE point per bucket across the full span between the first and
         # last bucket that actually has data, FILLING any bucket with no samples
         # as a zero-usage "gap" (the 15s sampler/camera was down — NOT real zero
@@ -2004,22 +2038,28 @@ def create_app(config, engine, weather, billing):
                 start_ms = int(k * bucket_s * 1000)
                 end_ms = int((k + 1) * bucket_s * 1000)
                 b = buckets.get(k)
-                if b is not None:
+                ib = interp_buckets.get(k) if rate_mode == "interpolated" else None
+                if b is not None or ib is not None:
                     # average flow rate during the bucket, derived from the
                     # gallons over the bucket duration (defensible, source-clean).
-                    gpm = (b["gal"] / (bucket_s / 60.0)) if bucket_s else 0.0
-                    carry_cum = b["cum"]
-                    cf = b["cf"] if b["cf"] is not None else carry_cf
+                    if rate_mode == "interpolated":
+                        gal = ib["gal"] if ib is not None else 0.0
+                    else:
+                        gal = b["gal"] if b is not None else 0.0
+                    gpm = (gal / (bucket_s / 60.0)) if bucket_s else 0.0
+                    carry_cum += gal
+                    cf = b["cf"] if b is not None and b["cf"] is not None else carry_cf
                     carry_cf = cf
-                    usage.append({"t": t_iso, "gallons": round(b["gal"], 2),
-                                  "gpm": round(gpm, 2), "gap": False,
+                    usage.append({"t": t_iso, "gallons": round(gal, 4),
+                                  "gpm": round(gpm, 3), "gap": False,
+                                  "interpolated": bool(ib is not None),
                                   "start_ms": start_ms, "end_ms": end_ms})
-                    line.append({"t": t_iso, "gal": round(b["cum"], 2)})
+                    line.append({"t": t_iso, "gal": round(carry_cum, 2)})
                     meter.append({"t": t_iso,
                                   "cf": (round(cf, 3) if cf is not None
                                          else None),
-                                  "anomaly": ("back" if b["back"]
-                                              else "jump" if b["jump"] else None)})
+                                  "anomaly": ("back" if b and b["back"]
+                                              else "jump" if b and b["jump"] else None)})
                 else:
                     # No samples in this bucket -> data gap. Zero usage, hold the
                     # cumulative flat, carry the last meter reading; flag it as an
@@ -2057,7 +2097,7 @@ def create_app(config, engine, weather, billing):
                   "samples": step_n}
         return jsonify({"minutes": minutes, "mode": mode,
                         "window": {"start": start, "end": end},
-                        "bucket_s": bucket_s,
+                        "bucket_s": bucket_s, "rate_mode": rate_mode,
                         "bucket_label": blabel, "usage": usage, "line": line,
                         "meter": meter, "gaps": gap_n, "health": health,
                         "total_gal": total, "flat": flat,

@@ -1675,7 +1675,16 @@ def create_app(config, engine, weather, billing):
     def api_run_zone():
         """Run a zone for X minutes (manual override)."""
         zone_id = request_int("id", 0, min_value=0, max_value=len(config["zones"]) - 1)
-        minutes = request_int("minutes", 5, min_value=1, max_value=120)
+        minutes = request_int("minutes", 5, min_value=1, max_value=30)
+        allowed_minutes = {1, 5, 10, 15, 20, 25, 30}
+        if minutes not in allowed_minutes:
+            return jsonify({
+                "ok": False,
+                "zone_id": zone_id,
+                "minutes": minutes,
+                "error": "invalid_minutes",
+                "allowed_minutes": sorted(allowed_minutes),
+            }), 400
         if not zone_installed(zone_id):
             return jsonify({
                 "ok": False,
@@ -1691,9 +1700,10 @@ def create_app(config, engine, weather, billing):
             allow_weather_fetch=False,
             command_timeout=ESP32_MANUAL_TIMEOUT,
             retry=False,
+            manual_runtime_min=minutes,
         )
         # Note: the safety check + decision engine will auto-close
-        # after max_runtime or when soil target is reached
+        # after the selected runtime, max_runtime, or soil target is reached
         if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
             return jsonify({"ok": ok, "zone_id": zone_id, "minutes": minutes, "soil_pct": soil_pct})
         return redirect(url_for("index"))
@@ -6308,13 +6318,21 @@ def create_app(config, engine, weather, billing):
         the Training tab can show the auto-labeled dataset for review."""
         import json as _json
         limit = request.args.get("limit", 60, type=int)
+        distinct = request.args.get("distinct", "1") != "0"
         out = []
         total = 0
+        unique_labels = set()
+        agree_total = 0
+        disagree_total = 0
+        unknown_total = 0
+        by_source = {}
+        skipped_duplicate_labels = 0
         try:
             jpgs = sorted((f for f in os.listdir(BANK_DIR)
                            if f.endswith(".jpg")), reverse=True)
             total = len(jpgs)
-            for name in jpgs[:limit]:
+            seen_labels = set()
+            for name in jpgs:
                 stem = name[:-4]
                 meta = {}
                 try:
@@ -6323,6 +6341,21 @@ def create_app(config, engine, weather, billing):
                 except Exception:
                     pass
                 label = meta.get("label") or stem.split("_")[0]
+                unique_labels.add(label)
+                if meta.get("agree") is True:
+                    agree_total += 1
+                elif meta.get("agree") is False:
+                    disagree_total += 1
+                else:
+                    unknown_total += 1
+                src = str(meta.get("source") or "local")
+                by_source[src] = by_source.get(src, 0) + 1
+                if distinct and label in seen_labels:
+                    skipped_duplicate_labels += 1
+                    continue
+                seen_labels.add(label)
+                if len(out) >= limit:
+                    continue
                 out.append({
                     "file": name,
                     "label": label,
@@ -6330,10 +6363,18 @@ def create_app(config, engine, weather, billing):
                     "agree": meta.get("agree"),
                     "confidence": meta.get("confidence", ""),
                     "fit": meta.get("fit", ""),
+                    "source": src,
                 })
         except FileNotFoundError:
             pass
         return jsonify({"samples": out, "total": total,
+                        "unique_labels": len(unique_labels),
+                        "agree_total": agree_total,
+                        "disagree_total": disagree_total,
+                        "unknown_total": unknown_total,
+                        "by_source": by_source,
+                        "distinct": distinct,
+                        "skipped_duplicate_labels": skipped_duplicate_labels,
                         "dir": BANK_DIR, "max": BANK_MAX})
 
     @app.route("/api/cam/training/img/<path:fname>")

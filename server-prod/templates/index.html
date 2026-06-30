@@ -2101,11 +2101,11 @@ a{color:var(--blue);text-decoration:none}
     </div>
     <div class="card" style="padding:12px">
       <div style="font-size:.78rem;color:var(--text2);margin-bottom:10px;line-height:1.5">
-        Auto-labeled samples banked when the reading is high-confidence. The
-        filename label is the validator's read; <b>green</b> = the raw OCR guess
-        agreed with it (most trustworthy), <b>amber</b> = label came from the
-        physics/odometer logic without raw agreement (review these). These build
-        the dataset for a future custom per-digit model.
+        Representative newest samples from the training bank, one per distinct
+        meter reading by default so idle periods do not flood the page with the
+        same number. The filename label is the validator's read; <b>green</b> =
+        a second reader agreed, <b>amber</b> = trusted by the pipeline but not
+        independently corroborated.
       </div>
       <div id="cam-train-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
         <div style="color:var(--text2);font-size:.8rem">Loading…</div>
@@ -5901,14 +5901,18 @@ function camRefresh() {
 }
 
 function camLoadTraining() {
-  fetch('/api/cam/training?limit=60').then(function(r){return r.json()}).then(function(d){
+  fetch('/api/cam/training?limit=60&distinct=1').then(function(r){return r.json()}).then(function(d){
     var grid = document.getElementById('cam-train-grid');
     var stats = document.getElementById('cam-train-stats');
     if (stats) {
       var shown = (d.samples||[]);
       var agree = shown.filter(function(s){return s.agree===true}).length;
-      stats.textContent = (d.total||0) + ' samples (cap ' + (d.max||0) + ') · ' +
-                          agree + '/' + shown.length + ' OCR-agreed shown';
+      stats.textContent = (d.total||0) + ' samples / ' + (d.unique_labels||0) +
+                          ' readings (cap ' + (d.max||0) + ') - shown ' +
+                          shown.length + ' distinct - ' + agree + '/' +
+                          shown.length + ' corroborated shown - bank ' +
+                          (d.agree_total||0) + '/' + (d.total||0) +
+                          ' corroborated';
     }
     if (!grid) return;
     if (!d.samples || !d.samples.length) {
@@ -5919,10 +5923,12 @@ function camLoadTraining() {
       var border = s.agree === true ? 'var(--green)' : 'var(--amber)';
       var lbl = String(s.label||'');
       var disp = lbl.length === 9 ? (lbl.slice(0,6) + '.' + lbl.slice(6)) : lbl;
+      var sub = s.agree === true ? 'corroborated' : (s.source || 'not corroborated');
       return '<div style="border:2px solid ' + border + ';border-radius:8px;overflow:hidden;background:var(--bg)">' +
         '<img src="/api/cam/training/img/' + encodeURIComponent(s.file) + '" ' +
         'style="width:100%;display:block;transform:rotate(180deg)" loading="lazy">' +
         '<div style="padding:5px 7px;font-family:monospace;font-size:.78rem;font-weight:bold">' + esc(disp) + ' <span style="font-size:.62rem;color:var(--text2)">ft\u00b3</span></div>' +
+        '<div style="padding:0 7px 4px;font-size:.62rem;color:var(--text2)">' + esc(sub) + '</div>' +
         (s.ocr_guess && s.ocr_guess !== s.label ?
           '<div style="padding:0 7px 5px;font-size:.62rem;color:var(--amber)">OCR: ' + esc(s.ocr_guess) + '</div>' : '') +
         '</div>';

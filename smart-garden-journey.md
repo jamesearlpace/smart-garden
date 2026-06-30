@@ -1638,3 +1638,23 @@ Validation:
 - Deployed through `deploy.ps1`; smoke `/login` returned `200`.
 
 State: The site now has a more consistent information architecture around the Water pages, and selected water-usage ranges expose enough rate/coverage context to reason about zone usage without treating interpolated bars as committed readings.
+
+---
+
+## 2026-06-30 - Cam training panel de-duplicated
+
+Context: The dashboard Cam panel's Training Data section showed the newest 60 banked frames verbatim. During idle periods that could render dozens of identical meter labels (for example `095038.155 ft3`) and `0/60 OCR-agreed shown`, which looked like a broken page even though the bank itself was functioning.
+
+Changes:
+- `/api/cam/training` now defaults to `distinct=1`, returning the newest sample per distinct meter reading while still scanning the full bank for totals.
+- Added full-bank counts: unique readings, corroborated/uncorroborated/unknown totals, source counts, and duplicate-label skip count.
+- Updated the Cam panel to request distinct samples and show a clearer representative-sample summary plus per-tile corroboration/source text.
+
+Validation:
+- Python compile passed.
+- Zone-label guard passed.
+- `index.html` inline JavaScript syntax check passed.
+- Offline Jinja render passed.
+- Deployed through `deploy.ps1`; smoke `/login` returned `200`.
+
+State: `/#cam` still opens the dashboard Cam panel, but the Training Data grid now behaves as a review surface instead of a raw newest-frame dump.

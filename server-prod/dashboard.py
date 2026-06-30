@@ -3054,6 +3054,11 @@ def create_app(config, engine, weather, billing):
         limit = query_int("limit", 500, min_value=1, max_value=2000)
         offset = query_int("offset", 0, min_value=0)
         rows = db.get_decision_log(days, zone_id, limit, offset)
+        for row in rows:
+            zid = row.get("zone_id")
+            row["zone_number"] = zone_number(zid)
+            row["zone_name"] = zone_display_name(zid)
+            row["zone_label"] = zone_label(zid)
         return jsonify(rows)
 
     @app.route("/api/analytics/soil")

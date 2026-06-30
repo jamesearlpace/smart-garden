@@ -2173,6 +2173,9 @@ function showPanel(id) {
 
   // Persist active panel so refresh returns to same place
   try { localStorage.setItem('sg-panel', id); } catch(e) {}
+  try {
+    if (id && window.location.pathname === '/') history.replaceState(null, '', '/#' + id);
+  } catch(e) {}
 }
 
 /* Move all children from a source panel into a target container */
@@ -2183,7 +2186,7 @@ function moveContent(srcId, targetId) {
   while (src.firstChild) tgt.appendChild(src.firstChild);
 }
 
-document.querySelectorAll('.nav-item, .mob-nav-item').forEach(function(item) {
+document.querySelectorAll('.nav-item[data-panel], .mob-nav-item[data-panel]').forEach(function(item) {
   item.addEventListener('click', function() { showPanel(item.dataset.panel); });
 });
 

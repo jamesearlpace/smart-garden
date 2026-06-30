@@ -3347,7 +3347,7 @@ function render(d) {
     var cbHtml = '';
     cbHtml += cfgRow('Morning Window', ww.start+' – '+ww.end);
     if (ww.evening_start) cbHtml += cfgRow('Evening Window (drip)', ww.evening_start+' – '+ww.evening_end);
-    if (ww.evening_zones) cbHtml += cfgRow('Evening Zones', ww.evening_zones.map(function(id) { return esc(ZONE_NAMES[id] || 'Zone '+id); }).join(', '));
+    if (ww.evening_zones) cbHtml += cfgRow('Evening Zones', ww.evening_zones.map(function(id) { return esc(ZONE_NAMES[id] || 'Zone '+(id+1)); }).join(', '));
     if (sr) {
       cbHtml += cfgRow('Rain Forecast Skip', '≥ '+sr.rain_forecast_mm+' mm & ≥ '+sr.rain_probability_pct+'% prob');
       cbHtml += cfgRow('Recent Rain Skip', '≥ '+sr.recent_rain_mm+' mm in 24h');
@@ -3754,7 +3754,7 @@ function renderSoilChart(data) {
     var series = data[zoneId] || [];
     if (series.length === 0) continue;
     var color = AN.ZONE_COLORS[idx % AN.ZONE_COLORS.length];
-    var name = ZONE_NAMES[zoneId] || 'Zone ' + zoneId;
+    var name = ZONE_NAMES[zoneId] || 'Zone ' + (Number(zoneId) + 1);
     datasets.push({
       label: name,
       data: series.map(function(p) { return { x: p.ts, y: p.soil_pct }; }),
@@ -5323,7 +5323,7 @@ function renderTelemetry(t) {
     // Fall back to ESP32 status valve data
     valves.forEach(function(v, i) {
       vbHtml += '<tr><td style="font-weight:600">Valve ' + i + '</td>' +
-        '<td>' + (v.name || 'Zone ' + i) + '</td>' +
+        '<td>' + (v.name || 'Zone ' + (i + 1)) + '</td>' +
         '<td style="font-size:.75rem;color:var(--text3)">' + valvePinStr(i) + '</td>' +
         '<td>' + (v.open ? '<span style="color:var(--blue);font-weight:700">OPEN</span>' : 'Closed') + '</td>' +
         '<td>' + (v.openCount || 0) + '</td>' +
@@ -5332,7 +5332,7 @@ function renderTelemetry(t) {
     });
   } else {
     valveList.forEach(function(v, i) {
-      var name = esc(ZONE_NAMES[i] || v.name || 'Zone ' + i);
+      var name = esc(ZONE_NAMES[i] || v.name || 'Zone ' + (i + 1));
       vbHtml += '<tr><td style="font-weight:600">Valve ' + i + '</td>' +
         '<td>' + name + '</td>' +
         '<td style="font-size:.75rem;color:var(--text3)">' + valvePinStr(i) + '</td>' +
@@ -5377,7 +5377,7 @@ function renderTelemetry(t) {
       var deltaColor = (w.soil_after > w.soil_before) ? 'color:var(--green-dark)' : '';
       wbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + esc(w.zone_name || 'Zone ' + w.zone_id) + '</td>' +
+        '<td style="font-weight:600">' + esc(w.zone_name || 'Zone ' + (w.zone_id + 1)) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;' +
           (w.trigger_reason === 'manual' ? 'background:var(--purple);color:white' : 'background:var(--blue-light);color:var(--blue)') +
           '">' + (w.trigger_reason || '—') + '</span></td>' +
@@ -5417,7 +5417,7 @@ function renderTelemetry(t) {
       }
       sbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + esc(s.zone_name || 'Zone ' + s.zone_id) + '</td>' +
+        '<td style="font-weight:600">' + esc(s.zone_name || 'Zone ' + (s.zone_id + 1)) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;background:var(--amber-light);color:#b45309">' + (s.reason || '—') + '</span></td>' +
         '<td>' + (s.est_gallons_saved != null ? fmt(s.est_gallons_saved, 1) : '—') + '</td>' +
         '<td>' + (s.est_cf_saved != null ? fmt(s.est_cf_saved, 2) : '—') + '</td>' +

@@ -563,6 +563,26 @@ Decision: The committed/chart data layer is green and defensible. Do not smooth 
 
 ---
 
+## 2026-06-30 - stabilization deploy and post-deploy audit
+
+Context: Stabilization moved the current known-good OCR/data-layer fixes from a local commit into the live service, then rechecked the deployed endpoints and full post-final-camera DB invariants.
+
+Changes:
+- Committed local stabilization scope as `e4db78a stabilize meter OCR data layer`.
+- Deployed changed production files through guarded `deploy.ps1`: `dashboard.py`, `flow_monitor.py`, `meter_archive.py`, `meter_ledger.py`, `water_reconcile.py`, `index.html`, `login.html`, `water_usage.html`.
+- Deploy backup suffix: `.bak.20260630-071828`; smoke `/login` returned 200.
+
+Validation:
+- Authenticated live `/api/water-usage?minutes=60&bucket_s=5`: `bucket_s=5`, `total_gal=0.0`, `flat=true`, `backward_steps=0`, `usage_outliers=0`, `pct_monotonic=100.0`, `samples=110`.
+- Authenticated live `/api/water-usage/audit?minutes=60`: verdict `accurate`; chart and physical meter both counted `0.0 gal`; `110` ledger rows, all image-backed, `11` fresh OCR, `0` flow-gap rows.
+- Authenticated live `/api/water-usage/ocr-audit?minutes=60`: `points=110`, `raw_mismatches=0`, `by_conf={high:11,inferred:95,propagated:4}`, raw CNN guesses preserved as `low` confidence evidence.
+- Full post-cutoff live DB audit from `2026-06-25T22:00:00`: `archive_rows=11684`, `ledger_rows=11684`, `archive_ledger_mismatches=0`, `archive_without_ledger=0`, `negative_deltas=0`, `direct_cnn_tail_conflicts_unreviewed=0`, `misleading_direct_cnn_raw_diff=0`, `archive_only_misleading_direct_cnn_raw_diff=0`, `authoritative_archive_unreviewed=0`, `material_unreviewed_non_oracle_deltas=0`, `watering_window_unreviewed_positive_deltas=0`.
+- Raw-tail conflict report remains `768` by design. These are visible raw OCR disagreements, not accepted committed/chart values.
+
+State: The deployed committed/chart data layer is stable and green after deployment. The remaining perfection gap is raw OCR accuracy at low confidence, not data-structure integrity.
+
+---
+
 ## Commits (this arc, in order)
 
 | Commit | What |

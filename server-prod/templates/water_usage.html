@@ -188,6 +188,35 @@ function ctlMsg(txt, err){
   el.textContent=txt||'';
   el.className='ctlmsg'+(err?' err':'');
 }
+function initStateFromUrl(){
+  var q = new URLSearchParams(window.location.search || '');
+  var start = q.get('start') || '';
+  var end = q.get('end') || '';
+  var minutes = parseInt(q.get('minutes') || '', 10);
+  var bucket = q.get('bucket_s') || '';
+  var rateMode = q.get('rate_mode') || '';
+  if(start && end){
+    state.mode = 'absolute';
+    document.getElementById('startInput').value = localInputValue(start);
+    document.getElementById('endInput').value = localInputValue(end);
+  } else if(isFinite(minutes) && minutes > 0) {
+    state.mode = 'relative';
+    state.minutes = minutes;
+    document.getElementById('startInput').value = '';
+    document.getElementById('endInput').value = '';
+  } else {
+    document.getElementById('startInput').value = '';
+    document.getElementById('endInput').value = '';
+  }
+  document.getElementById('grainSelect').value = bucket;
+  if(rateMode === 'interpolated' || rateMode === 'actual') {
+    state.rate_mode = rateMode;
+    document.getElementById('rateModeSelect').value = rateMode;
+  } else {
+    state.rate_mode = 'actual';
+    document.getElementById('rateModeSelect').value = 'actual';
+  }
+}
 function queryString(){
   var p=[];
   state.bucket_s = document.getElementById('grainSelect').value || '';
@@ -202,6 +231,12 @@ function queryString(){
   p.push('rate_mode='+enc(state.rate_mode));
   lastQuery=p.join('&');
   return lastQuery;
+}
+function syncUrl(qs){
+  var next = window.location.pathname + (qs ? '?'+qs : '');
+  if(window.location.search !== (qs ? '?'+qs : '')){
+    history.replaceState(null, '', next);
+  }
 }
 function windowLabel(d){
   var w=d&&d.window;
@@ -763,6 +798,7 @@ function load(){
     };
   });
   var qs = queryString();
+  syncUrl(qs);
   fetch('/api/water-usage?'+qs).then(function(r){
     return r.json().then(function(d){ if(!r.ok) throw new Error(d.error||'Could not load usage.'); return d; });
   }).then(function(d){
@@ -803,6 +839,11 @@ document.getElementById('eventSelect').onchange = function(){
   ctlMsg('Showing '+eventLabel(ev)+' with 30s padding.');
   load();
 };
+window.addEventListener('popstate', function(){
+  initStateFromUrl();
+  load();
+});
+initStateFromUrl();
 loadEvents();
 load();
 </script>

@@ -583,6 +583,20 @@ State: The deployed committed/chart data layer is stable and green after deploym
 
 ---
 
+## 2026-06-30 - final stabilization audit
+
+Context: After freezing the CNN on `loc2-v7` and stopping the retrain timer, the live post-final-camera data layer was audited one last time from `2026-06-25T22:00:00`.
+
+Validation:
+- Live CNN remains `loc2-v7` at threshold `0.95`.
+- `smart-garden-server` is active and `/login` returns `200`.
+- Strict post-cutoff DB audit: `archive_rows=11841`, `ledger_rows=11841`, `archive_ledger_mismatches=0`, `archive_without_ledger=0`, `negative_deltas=0`, `direct_cnn_tail_conflicts_unreviewed=0`, `misleading_direct_cnn_raw_diff=0`, `archive_only_misleading_direct_cnn_raw_diff=0`, `authoritative_archive_unreviewed=0`, `material_unreviewed_non_oracle_deltas=0`, `watering_window_unreviewed_positive_deltas=0`.
+- Raw-tail conflict report remains `768` by design; those are preserved raw OCR disagreements, not committed/chart facts.
+
+State: Post-cutoff committed/chart history is stabilized and internally consistent. The raw OCR model is frozen at the exact accepted confidence band, with low-confidence uncertainty still handled by provenance, oracle/manual/reviewed context, and correction logs.
+
+---
+
 ## Commits (this arc, in order)
 
 | Commit | What |

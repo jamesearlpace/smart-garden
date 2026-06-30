@@ -543,3 +543,20 @@ Validation:
 - A read-only test-time-augmentation eval was started but stopped because it was too slow and had produced no results after ~30 minutes; no live service changes were made from that experiment.
 
 Decision: Stop active expensive/aggressive OCR debugging for now. Keep the live direct-CNN threshold at `0.95`, preserve raw OCR failures, rely on oracle/manual/review/context below the accepted band, and let the gated retrain loop improve passively as new verified hard cases accumulate. Do not call the raw OCR "100%"; call the committed data path operationally safe and audited.
+
+## 2026-06-30 - Final stabilization: loc2-v7 frozen, retrain timer stopped
+
+Context: A forced `loc2-v8` retrain was launched after exporting 53 new authoritative post-cutoff labels. It did not need to finish because `loc2-v7` already satisfies the stable operating bar: no authoritative misses at the deployed `0.95` confidence threshold, and the committed data layer is clean.
+
+Actions:
+- Killed the active forced `loc2-v8` retrain before any promotion decision.
+- Stopped `meter-cnn-retrain.timer` in both user and system scopes.
+- Did not start any additional retrain cycles.
+
+Validation:
+- Tower health: `version=loc2-v7`, `threshold=0.95`, `ok=true`, model `/home/jack/meter-cnn/meter_cnn.pt`.
+- `~/meter-cnn/VERSION` is `loc2-v7`.
+- No `retrain.py` processes are running.
+- `meter-cnn-retrain.timer` is inactive in both user and system scopes.
+
+Decision: Leave `loc2-v7` as the stabilized live model. The retrain timer must not be re-enabled at the current cadence: it fires about every 10 minutes while a full retrain takes roughly an hour, which creates duplicate trainer pile-ups. Fix the timer/locking policy before re-enabling retraining.

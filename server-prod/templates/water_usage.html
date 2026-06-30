@@ -19,7 +19,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
 .chip.on{background:var(--text);color:#fff;border-color:var(--text)}
-.controls{display:grid;grid-template-columns:1fr 1fr 150px auto auto;gap:8px;align-items:end;
+.controls{display:grid;grid-template-columns:minmax(220px,1.25fr) 1fr 1fr 150px auto auto;gap:8px;align-items:end;
   background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px}
 .ctl label{display:block;font-size:.68rem;font-weight:700;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
 .ctl input,.ctl select{width:100%;height:34px;border:1px solid var(--border);border-radius:7px;background:#fff;
@@ -95,6 +95,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="bar" id="chips"></div>
 
 <div class="controls">
+  <div class="ctl"><label for="eventSelect">Watering event</label>
+    <select id="eventSelect"><option value="">Loading events...</option></select>
+  </div>
   <div class="ctl"><label for="startInput">Start</label><input id="startInput" type="datetime-local" step="1"></div>
   <div class="ctl"><label for="endInput">End</label><input id="endInput" type="datetime-local" step="1"></div>
   <div class="ctl"><label for="grainSelect">Grain</label>
@@ -168,6 +171,7 @@ var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
 var state = {mode:'relative', minutes:60, bucket_s:''};
 var barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
 var lastQuery = '';
+var EVENTS = [];
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -195,6 +199,10 @@ function windowLabel(d){
   var w=d&&d.window;
   if(!w||!w.start||!w.end) return '';
   return fullStamp(w.start)+' -> '+fullStamp(w.end);
+}
+function localInputValue(ts){
+  if(!ts) return '';
+  return String(ts).slice(0,19);
 }
 
 // Month abbreviations for compact, unambiguous date labels.
@@ -688,6 +696,27 @@ function loadAudit(){
   }).catch(function(){ document.getElementById('auditNote').textContent='OCR audit failed to load.'; });
 }
 
+function eventLabel(ev){
+  var start = ev.start ? fullStamp(ev.start) : '?';
+  var dur = ev.open ? 'running' : (ev.duration_sec!=null ? Math.round(ev.duration_sec/60)+' min' : '? min');
+  var end = ev.open ? 'now' : (ev.end ? ev.end.slice(11,19) : '?');
+  var gal = ev.est_gallons!=null ? (' · est '+Number(ev.est_gallons).toFixed(1)+' gal') : '';
+  return 'Zone '+ev.zone_id+' · '+ev.zone_name+' · '+start+' -> '+end+' · '+dur+gal;
+}
+
+function loadEvents(){
+  var sel=document.getElementById('eventSelect');
+  if(!sel) return;
+  fetch('/api/water-usage/events?days=14&limit=120&pad_s=30')
+    .then(function(r){return r.json();}).then(function(d){
+      EVENTS=d.events||[];
+      sel.innerHTML='<option value="">Select recent event...</option>'
+        + EVENTS.map(function(ev,i){ return '<option value="'+i+'">'+esc(eventLabel(ev))+'</option>'; }).join('');
+    }).catch(function(){
+      sel.innerHTML='<option value="">Could not load events</option>';
+    });
+}
+
 function showAuditFrame(p){
   var m=document.getElementById('modal');
   document.getElementById('modal-title').textContent = fullStamp(p.ts);
@@ -738,10 +767,24 @@ document.getElementById('applyRange').onclick = function(){
 document.getElementById('clearRange').onclick = function(){
   document.getElementById('startInput').value='';
   document.getElementById('endInput').value='';
+  var evSel=document.getElementById('eventSelect');
+  if(evSel) evSel.value='';
   state.mode='relative';
   load();
 };
 document.getElementById('grainSelect').onchange = function(){ load(); };
+document.getElementById('eventSelect').onchange = function(){
+  var idx=this.value;
+  if(idx==='') return;
+  var ev=EVENTS[parseInt(idx,10)];
+  if(!ev) return;
+  document.getElementById('startInput').value = localInputValue(ev.select_start || ev.start);
+  document.getElementById('endInput').value = localInputValue(ev.select_end || ev.end);
+  state.mode='absolute';
+  ctlMsg('Showing '+eventLabel(ev)+' with 30s padding.');
+  load();
+};
+loadEvents();
 load();
 </script>
 </body>

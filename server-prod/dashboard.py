@@ -1766,6 +1766,61 @@ def create_app(config, engine, weather, billing):
     def water_usage_page():
         return render_template("water_usage.html")
 
+    @app.route("/api/water-usage/events")
+    def api_water_usage_events():
+        """Recent watering events for quickly selecting a chart window."""
+        days = query_int("days", 7, min_value=1, max_value=90)
+        limit = query_int("limit", 80, min_value=1, max_value=300)
+        pad_s = query_int("pad_s", 30, min_value=0, max_value=3600)
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE start_ts >= datetime('now','localtime',?) "
+                "ORDER BY start_ts DESC LIMIT ?",
+                (f"-{days} days", limit),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        def zone_name(zid):
+            try:
+                z = config["zones"][int(zid)]
+                return z.get("name") or f"Zone {int(zid) + 1}"
+            except Exception:
+                return f"Zone {zid}"
+
+        out = []
+        for r in rows:
+            start_ts = r["start_ts"]
+            end_ts = r["end_ts"] or now_iso
+            try:
+                sdt = datetime.fromisoformat(start_ts)
+                edt = datetime.fromisoformat(end_ts)
+                sel_start = (sdt - timedelta(seconds=pad_s)).isoformat(
+                    timespec="seconds")
+                sel_end = (edt + timedelta(seconds=pad_s)).isoformat(
+                    timespec="seconds")
+            except Exception:
+                sel_start, sel_end = start_ts, end_ts
+            zid = r["zone_id"]
+            out.append({
+                "id": r["id"],
+                "zone_id": zid,
+                "zone_name": zone_name(zid),
+                "start": start_ts,
+                "end": r["end_ts"],
+                "open": r["end_ts"] is None,
+                "duration_sec": r["duration_sec"],
+                "est_gallons": r["est_gallons"],
+                "trigger_reason": r["trigger_reason"],
+                "select_start": sel_start,
+                "select_end": sel_end,
+            })
+        return jsonify({"events": out, "now": now_iso, "pad_s": pad_s})
+
     def _water_usage_window(default_minutes=60):
         """Resolve the water-usage window from either:
         - ?minutes=N for a rolling local-time window

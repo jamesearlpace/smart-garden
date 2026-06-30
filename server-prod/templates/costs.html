@@ -46,6 +46,10 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', syst
 .main { margin-left: var(--sidebar-w); min-height: 100vh; padding: 24px 32px 80px; max-width: 980px; }
 h1 { font-size: 1.4rem; margin-bottom: 4px; }
 .sub { color: var(--text2); font-size: .85rem; margin-bottom: 16px; }
+.toolnav{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px}
+.toolnav a{font-size:.78rem;font-weight:700;padding:6px 10px;border:1px solid var(--border);
+  border-radius:8px;background:var(--card);color:var(--text2)}
+.toolnav a.active{background:var(--text);border-color:var(--text);color:#fff}
 .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px;
         border: 1px solid var(--border); box-shadow: var(--shadow); }
 .card h2 { font-size: 1rem; margin-bottom: 10px; }
@@ -145,6 +149,11 @@ canvas { max-width: 100%; }
 
 <div class="main">
 <h1>💵 Water Cost</h1>
+<div class="toolnav">
+  <a href="/water-usage">Usage</a>
+  <a class="active" href="/costs">Cost</a>
+  <a href="/flow">Flow &amp; Leaks</a>
+</div>
 <div class="sub">Actual bill tracking from the live water-meter camera</div>
 
 <div id="content"><div class="loading">Loading meter &amp; cost data…</div></div>

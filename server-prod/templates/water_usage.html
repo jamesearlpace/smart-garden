@@ -790,7 +790,7 @@ function eventLabel(ev){
   var dur = ev.open ? 'running' : (ev.duration_sec!=null ? Math.round(ev.duration_sec/60)+' min' : '? min');
   var end = ev.open ? 'now' : (ev.end ? ev.end.slice(11,19) : '?');
   var gal = ev.est_gallons!=null ? (' · est '+Number(ev.est_gallons).toFixed(1)+' gal') : '';
-  return 'Zone '+(Number(ev.zone_id)+1)+' · '+ev.zone_name+' · '+start+' -> '+end+' · '+dur+gal;
+  return (ev.zone_label || ('Zone '+(Number(ev.zone_id)+1)+' · '+ev.zone_name))+' · '+start+' -> '+end+' · '+dur+gal;
 }
 
 function selectEventRange(ev){

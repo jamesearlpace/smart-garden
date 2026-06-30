@@ -3090,7 +3090,7 @@ function render(d) {
     mfHtml = '<div class="empty-state" style="padding:24px">No activity yet</div>';
   } else {
     recent.slice(0, 8).forEach(function(ev) {
-      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
+      var zn = esc(ev.zone_label || ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var isW = ev.type === 'water';
       mfHtml += '<div class="mini-feed-item"><span class="mini-feed-icon">'+(isW ? '💧' : '🧠')+'</span>' +
@@ -3218,7 +3218,7 @@ function render(d) {
   } else {
     recent.forEach(function(ev) {
       var isW = ev.type === 'water';
-      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
+      var zn = esc(ev.zone_label || ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var detail = isW ? 'Watered for '+ev.detail+(ev.gallons ? ' · '+ev.gallons+' gal' : '') : 'Skipped: '+ev.detail;
       var savedLine = !isW && ev.gallons_saved ? '<div class="act-saved">↗ '+ev.gallons_saved+' gal saved</div>' : '';
@@ -3903,7 +3903,7 @@ function renderDecisionLog(decisions) {
   } else {
     decisions.forEach(function(ev) {
       var isW = ev.type === 'water';
-      var zn = esc(ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
+      var zn = esc(ev.zone_label || ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var dur = isW ? (fmtDur(ev.duration_sec) || '—') : '—';
       var gal = ev.gallons != null ? fmt(ev.gallons, 1) : '—';
@@ -4504,7 +4504,7 @@ function loadWateringChart(canvasId, url, hours) {
     var durations = data.map(function(r){ return {x:new Date(r.start_ts),y:Math.round((r.duration_sec || 0) / 60 * 10) / 10}; });
     var colors = data.map(function(r){ return zoneColors[r.zone_id % zoneColors.length]; });
     var tooltipLabels = data.map(function(r){
-      return 'Zone ' + (r.zone_id + 1) + ' (' + (r.trigger_reason || '?') + ')';
+      return (r.zone_label || ('Zone ' + (r.zone_id + 1))) + ' (' + (r.trigger_reason || '?') + ')';
     });
     _ddCharts[canvasId] = new Chart(canvas.getContext('2d'), {
       type: 'bar',
@@ -5377,7 +5377,7 @@ function renderTelemetry(t) {
       var deltaColor = (w.soil_after > w.soil_before) ? 'color:var(--green-dark)' : '';
       wbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + esc(w.zone_name || 'Zone ' + (w.zone_id + 1)) + '</td>' +
+        '<td style="font-weight:600">' + esc(w.zone_label || w.zone_name || 'Zone ' + (w.zone_id + 1)) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;' +
           (w.trigger_reason === 'manual' ? 'background:var(--purple);color:white' : 'background:var(--blue-light);color:var(--blue)') +
           '">' + (w.trigger_reason || '—') + '</span></td>' +
@@ -5417,7 +5417,7 @@ function renderTelemetry(t) {
       }
       sbHtml += '<tr>' +
         '<td>' + time + '</td>' +
-        '<td style="font-weight:600">' + esc(s.zone_name || 'Zone ' + (s.zone_id + 1)) + '</td>' +
+        '<td style="font-weight:600">' + esc(s.zone_label || s.zone_name || 'Zone ' + (s.zone_id + 1)) + '</td>' +
         '<td><span style="font-size:.7rem;padding:2px 6px;border-radius:8px;background:var(--amber-light);color:#b45309">' + (s.reason || '—') + '</span></td>' +
         '<td>' + (s.est_gallons_saved != null ? fmt(s.est_gallons_saved, 1) : '—') + '</td>' +
         '<td>' + (s.est_cf_saved != null ? fmt(s.est_cf_saved, 2) : '—') + '</td>' +

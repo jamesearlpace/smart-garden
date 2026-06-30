@@ -99,7 +99,7 @@ function load(){
       var shown = measured!=null ? measured : (z.config_gpm!=null? z.config_gpm.toFixed(2):'—');
       var src = measured!=null ? 'measured' : 'config (not yet measured)';
       var typ = z.type==='drip' ? '<span class="pill drip">drip</span>' : '<span class="pill spr">sprinkler</span>';
-      return '<div class="zone"><div class="nm">'+esc(z.name)+' '+typ+'</div>'+
+      return '<div class="zone"><div class="nm">'+esc(z.zone_label || z.name)+' '+typ+'</div>'+
         '<div class="gpm">'+shown+'<span style="font-size:.7rem;font-weight:500;color:var(--text2)"> gpm</span></div>'+
         '<div class="meta">'+src+'<br>'+
         (z.median_gpm!=null?('median '+z.median_gpm.toFixed(2)+' · '):'')+

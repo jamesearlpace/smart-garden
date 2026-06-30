@@ -113,6 +113,28 @@ def create_app(config, engine, weather, billing):
             log.warning("cached_esp32_status failed: %s", e)
             return None
 
+    def zone_number(zone_id):
+        """Official user-facing zone number. Internal ids stay 0-based."""
+        try:
+            return int(zone_id) + 1
+        except (TypeError, ValueError):
+            return None
+
+    def zone_display_name(zone_id):
+        try:
+            zid = int(zone_id)
+        except (TypeError, ValueError):
+            return f"Unknown zone {zone_id}"
+        for z in config.get("zones", []):
+            if int(z.get("id", -1)) == zid:
+                return z.get("name") or f"Zone {zid + 1}"
+        return f"Zone {zid + 1}"
+
+    def zone_label(zone_id):
+        zn = zone_number(zone_id)
+        name = zone_display_name(zone_id)
+        return f"Zone {zn} - {name}" if zn is not None else name
+
     def esp32_online_status():
         try:
             return bool(getattr(engine, "is_esp32_online", lambda: False)())
@@ -1785,13 +1807,6 @@ def create_app(config, engine, weather, billing):
         finally:
             conn.close()
 
-        def zone_name(zid):
-            try:
-                z = config["zones"][int(zid)]
-                return z.get("name") or f"Zone {int(zid) + 1}"
-            except Exception:
-                return f"Zone {zid}"
-
         out = []
         for r in rows:
             start_ts = r["start_ts"]
@@ -1809,7 +1824,9 @@ def create_app(config, engine, weather, billing):
             out.append({
                 "id": r["id"],
                 "zone_id": zid,
-                "zone_name": zone_name(zid),
+                "zone_number": zone_number(zid),
+                "zone_name": zone_display_name(zid),
+                "zone_label": zone_label(zid),
                 "start": start_ts,
                 "end": r["end_ts"],
                 "open": r["end_ts"] is None,
@@ -2590,7 +2607,14 @@ def create_app(config, engine, weather, billing):
             (f"-{hours} hours",),
         ).fetchall()
         conn.close()
-        return jsonify([dict(r) for r in rows])
+        out = []
+        for r in rows:
+            item = dict(r)
+            item["zone_number"] = zone_number(item.get("zone_id"))
+            item["zone_name"] = zone_display_name(item.get("zone_id"))
+            item["zone_label"] = zone_label(item.get("zone_id"))
+            out.append(item)
+        return jsonify(out)
 
     @app.route("/api/weather-history")
     def api_weather_history():
@@ -2818,6 +2842,8 @@ def create_app(config, engine, weather, billing):
 
             entry = {
                 "id": zone["id"],
+                "zone_number": zone_number(zone["id"]),
+                "zone_label": zone_label(zone["id"]),
                 "name": zone["name"],
                 "type": zone["type"],
                 "installed": installed,
@@ -2886,6 +2912,9 @@ def create_app(config, engine, weather, billing):
             recent.append({
                 "type": "water", "ts": w["start_ts"],
                 "zone_id": w["zone_id"],
+                "zone_number": zone_number(w["zone_id"]),
+                "zone_name": zone_display_name(w["zone_id"]),
+                "zone_label": zone_label(w["zone_id"]),
                 "detail": detail,
                 "gallons": round(w["est_gallons"], 1) if w.get("est_gallons") else None,
             })
@@ -2893,6 +2922,9 @@ def create_app(config, engine, weather, billing):
             recent.append({
                 "type": "skip", "ts": s["ts"],
                 "zone_id": s["zone_id"],
+                "zone_number": zone_number(s["zone_id"]),
+                "zone_name": zone_display_name(s["zone_id"]),
+                "zone_label": zone_label(s["zone_id"]),
                 "detail": s["reason"],
                 "gallons_saved": round(s["est_gallons_saved"], 1)
                                  if s.get("est_gallons_saved") else None,
@@ -2959,7 +2991,9 @@ def create_app(config, engine, weather, billing):
             watering_detail.append({
                 "id": w.get("id"),
                 "zone_id": w["zone_id"],
-                "zone_name": next((z["name"] for z in config["zones"] if z["id"] == w["zone_id"]), f"Zone {w['zone_id'] + 1}"),
+                "zone_number": zone_number(w["zone_id"]),
+                "zone_name": zone_display_name(w["zone_id"]),
+                "zone_label": zone_label(w["zone_id"]),
                 "start_ts": w["start_ts"],
                 "end_ts": w.get("end_ts"),
                 "duration_sec": w.get("duration_sec"),
@@ -2978,7 +3012,9 @@ def create_app(config, engine, weather, billing):
             skip_detail.append({
                 "id": s.get("id"),
                 "zone_id": s["zone_id"],
-                "zone_name": next((z["name"] for z in config["zones"] if z["id"] == s["zone_id"]), f"Zone {s['zone_id'] + 1}"),
+                "zone_number": zone_number(s["zone_id"]),
+                "zone_name": zone_display_name(s["zone_id"]),
+                "zone_label": zone_label(s["zone_id"]),
                 "ts": s["ts"],
                 "reason": s["reason"],
                 "est_gallons_saved": s.get("est_gallons_saved"),

@@ -216,8 +216,12 @@ def _commit_run_segment(zone_id, gpms, config):
 def _zone_name(config, zone_id):
     for z in (config or {}).get("zones", []):
         if z.get("id") == zone_id:
-            return z.get("name", f"Zone {zone_id}")
-    return f"Zone {zone_id}"
+            return z.get("name", f"Zone {zone_id + 1}")
+    return f"Zone {zone_id + 1}"
+
+
+def _zone_label(config, zone_id):
+    return f"Zone {zone_id + 1} - {_zone_name(config, zone_id)}"
 
 
 def _zone_max_runtime_min(config, zone_id):
@@ -497,7 +501,9 @@ def build_report(config, limit_samples=120):
             est = dict(row) if row else {}
             zones.append({
                 "id": zid,
-                "name": z.get("name", f"Zone {zid}"),
+                "zone_number": zid + 1,
+                "zone_label": _zone_label(config, zid),
+                "name": z.get("name", f"Zone {zid + 1}"),
                 "type": z.get("type"),
                 "config_gpm": z.get("est_gpm"),
                 "measured_gpm": est.get("ewma_gpm"),

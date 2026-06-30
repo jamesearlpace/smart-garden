@@ -450,21 +450,21 @@ a{color:var(--blue);text-decoration:none}
   </div>
   <div class="sidebar-nav">
     <div class="nav-section">Core</div>
-    <div class="nav-item active" data-panel="home"><span class="icon">🏠</span> Home</div>
-    <div class="nav-item" data-panel="zones"><span class="icon">🌿</span> Zones</div>
-    <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📅</span> Schedule</a>
-    <div class="nav-item" data-panel="history"><span class="icon">📊</span> History</div>
+    <div class="nav-item active" data-panel="home"><span class="icon">H</span> Home</div>
+    <div class="nav-item" data-panel="zones"><span class="icon">Z</span> Zones</div>
+    <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">S</span> Schedule</a>
+    <div class="nav-item" data-panel="history"><span class="icon">R</span> History</div>
     <div class="nav-section">Water</div>
-    <a href="/water-usage" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📈</span> Water Usage</a>
-    <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💵</span> Water Cost</a>
-    <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🩺</span> Flow &amp; Leaks</a>
-    <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌧️</span> Forecast</a>
+    <a href="/water-usage" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">U</span> Water Usage</a>
+    <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">$</span> Water Cost</a>
+    <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">F</span> Flow &amp; Leaks</a>
+    <a href="/forecast" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">W</span> Forecast</a>
     <div class="nav-section">Tools</div>
-    <a href="/sensor-history" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🌡️</span> Sensor History</a>
-    <div class="nav-item" data-panel="settings"><span class="icon">⚙️</span> Settings</div>
-    <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🎛️</span> Calibrate</a>
-    <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
-    <div class="nav-item" data-panel="deer"><span class="icon">🦌</span> Deer Repellent</div>
+    <a href="/sensor-history" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">T</span> Sensor History</a>
+    <div class="nav-item" data-panel="settings"><span class="icon">*</span> Settings</div>
+    <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">C</span> Calibrate</a>
+    <div class="nav-item" data-panel="cam"><span class="icon">M</span> Cam</div>
+    <div class="nav-item" data-panel="deer"><span class="icon">D</span> Deer Repellent</div>
   </div>
   <div class="sidebar-footer">
     <span class="status-dot" id="sb-dot"></span>
@@ -2037,30 +2037,30 @@ a{color:var(--blue);text-decoration:none}
 
   <!-- ═══ Cam Panel ═══ -->
   <div class="panel" id="p-cam">
-    <div class="section-header"><h2>📷 Water Meter Cam</h2>
+    <div class="section-header"><h2>Water Meter Cam</h2>
       <span class="aside">
-        <button id="cam-live-btn" onclick="camToggleLive()" class="btn" style="font-size:.78rem;padding:4px 12px">⚡ Live View</button>
-        <button onclick="camToggleFlash()" class="btn" style="font-size:.78rem;padding:4px 12px">💡 Flash</button>
-        <button id="cam-reanchor-btn" onclick="camReanchor()" class="btn" style="font-size:.78rem;padding:4px 12px" title="Ask GPT-4o vision to read the meter and reset the lock to the true value">🤖 AI Re-anchor</button>
+        <button id="cam-live-btn" onclick="camToggleLive()" class="btn" style="font-size:.78rem;padding:4px 12px">Live View</button>
+        <button onclick="camToggleFlash()" class="btn" style="font-size:.78rem;padding:4px 12px">Flash</button>
+        <button id="cam-reanchor-btn" onclick="camReanchor()" class="btn" style="font-size:.78rem;padding:4px 12px" title="Ask GPT-4o vision to read the meter and reset the lock to the true value">AI Re-anchor</button>
       </span>
     </div>
 
     <div class="card" style="text-align:center;padding:16px">
       <div style="margin-bottom:8px">
-        <span id="cam-status" style="color:var(--green);font-size:.85rem">● Live — refreshing every 5s</span>
+        <span id="cam-status" style="color:var(--green);font-size:.85rem">Live - refreshing every 5s</span>
       </div>
       <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px;font-size:.78rem;color:var(--text2)">
         <span>Size</span>
         <input id="cam-size" type="range" min="120" max="600" step="20" value="240"
                oninput="camSetSize(this.value)" style="width:160px;vertical-align:middle">
       </div>
-      <img id="cam-img" alt="Waiting for first image..."
+      <img id="cam-img" alt="Meter camera image"
            style="max-width:100%;max-height:240px;border-radius:8px;border:2px solid var(--border);cursor:pointer;transform:rotate(180deg)"
            onclick="window.open('/api/cam/latest?t='+Date.now(),'_blank')">
       <div id="cam-ts" style="margin-top:6px;font-size:.78rem;color:var(--text2)"></div>
     </div>
 
-    <div class="section-header" style="margin-top:20px"><h2>📊 Meter Readings</h2>
+    <div class="section-header" style="margin-top:20px"><h2>Meter Readings</h2>
       <span class="aside">
         <span id="cam-ocr-status" style="font-size:.72rem;color:var(--text2)"></span>
       </span>
@@ -2093,7 +2093,7 @@ a{color:var(--blue);text-decoration:none}
       </table>
     </div>
 
-    <div class="section-header" style="margin-top:20px"><h2>🧠 Training Data</h2>
+    <div class="section-header" style="margin-top:20px"><h2>Training Data</h2>
       <span class="aside" style="font-size:.78rem;color:var(--text2)">
         <span id="cam-train-stats">—</span>
         <button onclick="camLoadTraining()" class="btn" style="font-size:.74rem;padding:3px 10px;margin-left:8px">↻ Refresh</button>
@@ -5777,9 +5777,9 @@ function camToggleFlash() {
 
 function camReanchor() {
   var btn = document.getElementById('cam-reanchor-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '🤖 Reading…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Reading...'; }
   fetch('/api/cam/reanchor', {method:'POST'}).then(function(r){return r.json()}).then(function(d){
-    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Re-anchor'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'AI Re-anchor'; }
     if (d.ok && d.value != null) {
       var v = String(d.value).padStart(9,'0');
       var disp = v.slice(0,6) + '.' + v.slice(6);
@@ -5791,12 +5791,12 @@ function camReanchor() {
       alert('AI re-anchor failed: ' + (d.error || 'unreadable'));
     }
   }).catch(function(e){
-    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Re-anchor'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'AI Re-anchor'; }
     alert('AI re-anchor error: ' + e);
   });
 }
 
-// ⚡ Live View: rapidly poll /api/cam/capture (fresh frames, NO OCR/recording).
+// Live View: rapidly poll /api/cam/capture (fresh frames, NO OCR/recording).
 // Self-chaining so the next frame is requested only after the current loads —
 // max fps with no overlapping requests, and it can't wedge the server.
 function camToggleLive() {
@@ -5804,13 +5804,13 @@ function camToggleLive() {
   var btn = document.getElementById('cam-live-btn');
   var status = document.getElementById('cam-status');
   if (camLiveOn) {
-    btn.textContent = '⏸ Stop Live';
+    btn.textContent = 'Stop Live';
     btn.style.background = 'var(--green)';
     if (camInterval) { clearInterval(camInterval); camInterval = null; }  // pause 5s refresh
-    if (status) { status.textContent = '⚡ LIVE — aiming mode (not recording)'; status.style.color = 'var(--amber)'; }
+    if (status) { status.textContent = 'LIVE - aiming mode (not recording)'; status.style.color = 'var(--amber)'; }
     camLiveLoop(++camLiveSeq);
   } else {
-    btn.textContent = '⚡ Live View';
+    btn.textContent = 'Live View';
     btn.style.background = '';
     camLiveSeq++;  // cancels the running loop
     if (status) { status.textContent = '● Live — refreshing every 5s'; status.style.color = 'var(--green)'; }
@@ -6087,7 +6087,7 @@ showPanel = function(id) {
     if (camLiveOn) {
       camLiveOn = false; camLiveSeq++;
       var btn = document.getElementById('cam-live-btn');
-      if (btn) { btn.textContent = '⚡ Live View'; btn.style.background = ''; }
+      if (btn) { btn.textContent = 'Live View'; btn.style.background = ''; }
     }
   }
 };

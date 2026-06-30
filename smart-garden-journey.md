@@ -1641,6 +1641,27 @@ State: The site now has a more consistent information architecture around the Wa
 
 ---
 
+## 2026-06-30 - manual zone run duration selector
+
+Context: The Zones/Forecast website had a Run button, but it presented the configured zone runtime and did not let the operator choose a short manual duration from the page.
+
+Changes:
+- Added a compact manual-run duration selector beside each installed zone's Run button on `/moisture-sim` / Forecast all-zones view.
+- Supported durations are exactly `1, 5, 10, 15, 20, 25, 30` minutes.
+- Hardened `/api/run` to reject other durations and pass the selected runtime into the irrigation engine.
+- Added engine-side selected-runtime tracking plus a timer-based manual close, with the existing scheduler and safety timeout still acting as backstops.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/irrigation.py`
+- `python server-prod/tools/check_zone_labels.py`
+- Inline JavaScript syntax check passed after substituting Jinja placeholders.
+- Deployed `dashboard.py`, `irrigation.py`, and `templates/moisture_sim.html` through `deploy.ps1`; smoke `/login` returned `200`.
+- Live file checks confirmed the duration selector, allowed-minute guard, and engine `manual_runtime_min` hook are present; `smart-garden-server` is active.
+
+State: Manual zone runs can now be started from the website for one of the approved durations, and selected manual runs auto-close at the chosen duration instead of waiting for the zone's configured runtime.
+
+---
+
 ## 2026-06-30 - Cam training panel de-duplicated
 
 Context: The dashboard Cam panel's Training Data section showed the newest 60 banked frames verbatim. During idle periods that could render dozens of identical meter labels (for example `095038.155 ft3`) and `0/60 OCR-agreed shown`, which looked like a broken page even though the bank itself was functioning.
@@ -1658,3 +1679,21 @@ Validation:
 - Deployed through `deploy.ps1`; smoke `/login` returned `200`.
 
 State: `/#cam` still opens the dashboard Cam panel, but the Training Data grid now behaves as a review surface instead of a raw newest-frame dump.
+
+---
+
+## 2026-06-30 - Cam panel icon mojibake cleanup
+
+Context: The dashboard Cam page rendered with corrupted emoji/icon text in the sidebar and Cam controls, producing orphan glyphs such as variation marks in copied page text.
+
+Changes:
+- Replaced the main dashboard sidebar icons with ASCII-safe short labels.
+- Replaced the shared mobile nav icons with ASCII-safe labels.
+- Removed emoji/status glyphs from the Cam panel header, buttons, image alt text, and live-view dynamic status strings.
+
+Validation:
+- `index.html` and `_mobilenav.html` inline JavaScript syntax checks passed.
+- Offline Jinja render confirmed the updated Cam strings and sidebar labels.
+- Deployed through `deploy.ps1`; smoke `/login` returned `200`.
+
+State: `/#cam` should no longer show broken icon glyphs in the nav or Cam controls. Other deeper dashboard sections still contain old emoji text, but the visible Cam path and navigation shell are cleaned.

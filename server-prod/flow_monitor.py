@@ -531,9 +531,10 @@ def build_report(config, limit_samples=120):
 # ---------------------------------------------------------------------------
 #  Background sampler — call start() once from create_app()
 # ---------------------------------------------------------------------------
-def start(meter_reader, status_summary_fn, config):
+def start(meter_reader, status_summary_fn, config, reading_cf_fn=None):
     """Spawn the background sampler thread. ``status_summary_fn`` returns the
-    dict with 'active_zones'. ``meter_reader.last_good`` is the live register."""
+    dict with 'active_zones'. ``reading_cf_fn`` may supply the canonical
+    register; otherwise ``meter_reader.last_good`` is used."""
     ensure_schema()
     interval = _cfg(config, "sample_interval_s")
 
@@ -541,8 +542,15 @@ def start(meter_reader, status_summary_fn, config):
         log.info("flow_monitor sampler started (every %ss)", interval)
         while True:
             try:
-                lg = getattr(meter_reader, "last_good", None)
-                reading_cf = (lg / 1000.0) if lg else None
+                reading_cf = None
+                if reading_cf_fn:
+                    try:
+                        reading_cf = reading_cf_fn()
+                    except Exception:
+                        reading_cf = None
+                if reading_cf is None:
+                    lg = getattr(meter_reader, "last_good", None)
+                    reading_cf = (lg / 1000.0) if lg else None
                 try:
                     summ = status_summary_fn() or {}
                     active = summ.get("active_zones", []) or []

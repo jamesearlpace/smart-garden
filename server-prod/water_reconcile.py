@@ -14,12 +14,13 @@ external signal the OCR does not control.
 import datetime as _dt
 
 import database
+import meter_ledger
 
-GAL = 7.48052
 NTFY_URL = "https://ntfy.sh/smart-garden-james"
-FREEZE_MIN_EST_GAL = 50.0   # only judge days where sprinklers actually ran
-FREEZE_RATIO = 0.5          # meter < 50% of the engine estimate = a freeze
-HIGH_NORUN_GAL = 800.0      # no sprinklers but this much moved = worth a look
+FREEZE_MIN_EST_GAL = 50.0    # only judge days where sprinklers actually ran
+FREEZE_RATIO = 0.5           # meter < 50% of the engine estimate = a freeze
+HIGH_NORUN_GAL = 800.0       # no sprinklers but this much moved = worth a look
+LOW_LEDGER_ROWS = 100        # very sparse for a canonical daily ledger
 
 
 def _engine_by_day(conn):
@@ -40,8 +41,8 @@ def _verdict(est, meter, samples):
     if est == 0 and meter > HIGH_NORUN_GAL:
         return "high", (f"no sprinklers but the meter moved {meter:.0f} gal "
                         f"(heavy household use, a leak, or a catch-up dump)")
-    if samples < 4000:
-        return "low_data", f"only {samples} samples that day (capture gaps?)"
+    if samples < LOW_LEDGER_ROWS:
+        return "low_data", f"only {samples} ledger rows that day (capture gaps?)"
     return "ok", ""
 
 
@@ -50,19 +51,22 @@ def daily_table(days=14):
     conn = database.get_conn()
     try:
         eng = _engine_by_day(conn)
-        rows = conn.execute(
-            "SELECT date(ts) d, MIN(reading_cf) lo, MAX(reading_cf) hi, "
-            "COUNT(*) n FROM flow_sample WHERE reading_cf IS NOT NULL "
-            "GROUP BY date(ts) ORDER BY d DESC LIMIT ?", (int(days),)).fetchall()
         out = []
+        rows = meter_ledger.daily_usage_rows(days)
         for r in rows:
-            meter = round((r["hi"] - r["lo"]) * GAL, 1)
-            est, nruns = eng.get(r["d"], (0.0, 0))
+            day = r["date"]
+            meter = round(r["gallons"] or 0.0, 1)
+            samples = int(r["n_readings"] or 0)
+            est, nruns = eng.get(day, (0.0, 0))
             est = round(est, 1)
-            verdict, note = _verdict(est, meter, r["n"])
-            out.append({"date": r["d"], "engine_gal": est, "meter_gal": meter,
+            verdict, note = _verdict(est, meter, samples)
+            out.append({"date": day, "engine_gal": est, "meter_gal": meter,
                         "runs": nruns, "diff_gal": round(meter - est, 1),
-                        "samples": r["n"], "verdict": verdict, "note": note})
+                        "samples": samples,
+                        "image_backed": int(r["n_image_backed"] or 0),
+                        "fresh_reads": int(r["n_fresh_reads"] or 0),
+                        "method": r["method"],
+                        "verdict": verdict, "note": note})
         return out
     finally:
         conn.close()

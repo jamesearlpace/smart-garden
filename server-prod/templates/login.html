@@ -14,6 +14,7 @@
         h1 { font-size: 1.5rem; margin-bottom: 8px; color: #22c55e; }
         .sub { color: #94a3b8; font-size: 0.85rem; margin-bottom: 24px; }
         .google-btn { margin: 20px auto; display: flex; justify-content: center; }
+        .hint { color: #94a3b8; font-size: 0.8rem; margin-top: 10px; display: none; }
         .error { color: #ef4444; font-size: 0.85rem; margin-top: 12px; display: none; }
     </style>
 </head>
@@ -22,35 +23,80 @@
         <h1>🌱 Smart Garden</h1>
         <div class="sub">Sign in with Google to continue</div>
         <div class="google-btn">
-            <div id="g_id_onload"
-                 data-client_id=""
-                 data-callback="onGoogleSignIn"
-                 data-auto_prompt="false">
-            </div>
-            <div class="g_id_signin" data-type="standard" data-size="large"
-                 data-theme="filled_black" data-text="sign_in_with"
-                 data-shape="rectangular" data-logo_alignment="left">
-            </div>
+            <div id="googleSigninBtn"></div>
         </div>
+        <div class="hint" id="modeHint"></div>
         <div class="error" id="error"></div>
     </div>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script>
-        // Fetch client ID from server
-        fetch('/auth/config').then(r => r.json()).then(cfg => {
-            document.getElementById('g_id_onload').setAttribute('data-client_id', cfg.client_id);
-            // Re-init Google button with client ID
-            if (window.google && google.accounts) {
+        const qpMode = new URLSearchParams(window.location.search).get('mode');
+        // Default to popup mode (no redirect URI registration required for GIS
+        // callback flow). Use ?mode=redirect only when OAuth redirect URIs are
+        // explicitly configured in Google Cloud Console.
+        const useRedirectMode = qpMode === 'redirect';
+        let gisInitialized = false;
+
+        function showError(message) {
+            const el = document.getElementById('error');
+            el.style.display = 'block';
+            el.textContent = message;
+        }
+
+        function showModeHint() {
+            if (!useRedirectMode) return;
+            const el = document.getElementById('modeHint');
+            el.style.display = 'block';
+            el.textContent = 'Embedded browser detected: using redirect sign-in (no popup).';
+        }
+
+        function initGoogle(clientId) {
+            if (gisInitialized || !clientId) return;
+            const loginUri = `${window.location.origin}/auth/google`;
+            if (window.google && google.accounts && clientId) {
                 google.accounts.id.initialize({
-                    client_id: cfg.client_id,
-                    callback: onGoogleSignIn
+                    client_id: clientId,
+                    callback: onGoogleSignIn,
+                    ux_mode: useRedirectMode ? 'redirect' : 'popup',
+                    login_uri: loginUri,
+                    auto_select: false
                 });
                 google.accounts.id.renderButton(
-                    document.querySelector('.g_id_signin'),
+                    document.getElementById('googleSigninBtn'),
                     { theme: 'filled_black', size: 'large', text: 'sign_in_with' }
                 );
+                gisInitialized = true;
             }
-        });
+            showModeHint();
+        }
+
+        // Fetch client ID from server
+        fetch('/auth/config')
+            .then(r => r.json())
+            .then(cfg => {
+                const clientId = cfg.client_id;
+                initGoogle(clientId);
+                if (!gisInitialized) {
+                    let tries = 0;
+                    const timer = setInterval(() => {
+                        tries += 1;
+                        initGoogle(clientId);
+                        if (gisInitialized || tries >= 50) {
+                            clearInterval(timer);
+                            if (!gisInitialized) {
+                                showError('Google Sign-In did not load. Refresh and try again.');
+                            }
+                        }
+                    }, 100);
+                }
+            })
+            .catch(() => showError('Unable to load sign-in configuration'));
+
+        const qp = new URLSearchParams(window.location.search);
+        const err = qp.get('error');
+        if (err === 'invalid_token') showError('Sign-in token was invalid. Please try again.');
+        if (err === 'not_authorized') showError('This Google account is not authorized.');
+        if (err === 'csrf') showError('Sign-in security check failed. Please retry.');
 
         function onGoogleSignIn(response) {
             fetch('/auth/google', {
@@ -61,12 +107,10 @@
                 if (data.ok) {
                     window.location.href = '/';
                 } else {
-                    document.getElementById('error').style.display = 'block';
-                    document.getElementById('error').textContent = data.error || 'Not authorized';
+                    showError(data.error || 'Not authorized');
                 }
             }).catch(err => {
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = 'Sign-in failed';
+                showError('Sign-in failed');
             });
         }
     </script>

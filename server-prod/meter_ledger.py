@@ -152,6 +152,9 @@ def _map_archive_method(source):
         "manual": "corrected",
         "oracle": "read",
         "cnn": "read",
+        "constrained_cnn": "read",
+        "raw_tail_cnn": "read",
+        "reviewed_context": "corrected",
         "propagated": "propagated",
         "lock": "held",
     }.get((source or "").lower(), (source or "held"))
@@ -177,6 +180,7 @@ def backfill_from_archive(since=None):
     now = datetime.now().isoformat(timespec="seconds")
     c = _conn()
     n = 0
+    first_changed_ts = None
     try:
         for r in rows:
             committed = r["reading"]
@@ -186,17 +190,67 @@ def backfill_from_archive(since=None):
             raw_conf = r["raw_conf"] if has_raw else None
             reader = (r["raw_source"] if has_raw and r["raw_source"]
                       else None)
+            method = _map_archive_method(r["source"])
+            reviewed = r["reviewed"] or 0
+            existing = c.execute(
+                "SELECT image_file,raw_reading,raw_conf,reader,committed,"
+                " committed_cf,method,confidence,reviewed "
+                "FROM meter_reading WHERE ts=?", (r["ts"],)
+            ).fetchone()
+            if existing is None:
+                c.execute(
+                    "INSERT INTO meter_reading"
+                    "(ts,image_file,raw_reading,raw_conf,reader,committed,"
+                    " committed_cf,method,confidence,reviewed,state,delta_cf,"
+                    " origin,ingested_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (r["ts"], r["filename"], raw, raw_conf, reader, committed,
+                     committed_cf, method, r["confidence"], reviewed, None,
+                     None, "backfill:archive_frame", now))
+                n += 1
+                continue
+
+            committed_changed = (
+                existing["committed"] != committed
+                or round(existing["committed_cf"] or -1, 3) !=
+                round(committed_cf or -1, 3)
+            )
+            changed = (
+                committed_changed
+                or existing["image_file"] != r["filename"]
+                or existing["raw_reading"] != raw
+                or existing["raw_conf"] != raw_conf
+                or existing["reader"] != reader
+                or existing["method"] != method
+                or existing["confidence"] != r["confidence"]
+                or (existing["reviewed"] or 0) != reviewed
+            )
+            if not changed:
+                continue
+
             c.execute(
-                "INSERT OR IGNORE INTO meter_reading"
-                "(ts,image_file,raw_reading,raw_conf,reader,committed,"
-                " committed_cf,method,confidence,reviewed,state,delta_cf,"
-                " origin,ingested_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (r["ts"], r["filename"], raw, raw_conf, reader, committed,
-                 committed_cf, _map_archive_method(r["source"]),
-                 r["confidence"], r["reviewed"] or 0, None, None,
-                 "backfill:archive_frame", now))
-            n += c.total_changes and 1 or 0
+                "UPDATE meter_reading SET image_file=?,raw_reading=?,"
+                " raw_conf=?,reader=?,committed=?,committed_cf=?,method=?,"
+                " confidence=?,reviewed=?,origin='backfill:archive_frame',"
+                " ingested_ts=?,delta_cf=CASE WHEN ? THEN NULL ELSE delta_cf END "
+                "WHERE ts=?",
+                (r["filename"], raw, raw_conf, reader, committed,
+                 committed_cf, method, r["confidence"], reviewed, now,
+                 1 if committed_changed else 0, r["ts"]))
+            if committed_changed:
+                c.execute(
+                    "INSERT INTO meter_correction"
+                    "(ts,at,old_committed,new_committed,method,actor,note) "
+                    "VALUES(?,datetime('now'),?,?,?,?,?)",
+                    (r["ts"], existing["committed"], committed, method,
+                     "system:archive_sync", "archive_frame_update"))
+                if first_changed_ts is None or r["ts"] < first_changed_ts:
+                    first_changed_ts = r["ts"]
         c.commit()
+        if first_changed_ts:
+            c.execute(
+                "UPDATE meter_reading SET delta_cf=NULL WHERE ts>=?",
+                (first_changed_ts,))
+            c.commit()
         # total_changes accounting above is unreliable per-row; report inserts
         return _count_origin("backfill:archive_frame")
     finally:
@@ -577,6 +631,34 @@ def count_readings(start=None, end=None, image_only=False):
         if image_only:
             q += " AND image_file IS NOT NULL"
         return int(c.execute(q, args).fetchone()["n"])
+    finally:
+        c.close()
+
+
+def latest_committed_cf():
+    """Newest canonical committed meter reading in cubic feet."""
+    c = _conn()
+    try:
+        row = c.execute(
+            "SELECT committed_cf FROM meter_reading "
+            "WHERE committed_cf IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        return row["committed_cf"] if row else None
+    finally:
+        c.close()
+
+
+def daily_usage_rows(days=14):
+    """Recent canonical daily usage rows for reconciliation/reporting."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT date, gallons, start_cf, end_cf, n_readings, "
+            "n_image_backed, n_fresh_reads, method "
+            "FROM usage_daily ORDER BY date DESC LIMIT ?",
+            (int(days),),
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         c.close()
 

@@ -452,8 +452,6 @@ a{color:var(--blue);text-decoration:none}
     <a href="/moisture-sim" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Schedule</a>
     <a href="/costs" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💵</span> Water Cost</a>
     <a href="/water-usage" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📈</span> Water Usage</a>
-    <a href="/cam/archive" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🗂️</span> Meter Archive</a>
-    <a href="/cam" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">📷</span> Meter Tools</a>
     <a href="/flow" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">💧</span> Flow &amp; Leaks</a>
     <a href="/calibrate" class="nav-item" style="text-decoration:none;color:inherit"><span class="icon">🎛️</span> Calibrate</a>
     <div class="nav-item" data-panel="cam"><span class="icon">📷</span> Cam</div>
@@ -2399,10 +2397,35 @@ function espSignalColor(rssi) {
 /* ── HOME PANEL ── */
 var _lastData = null; // cache for freshness tracking
 var _ddCharts = {};   // chart instances by canvas id
+var _serverClock = { baseServerMs: null, baseClientMs: null };
+
+function parseTsMs(ts) {
+  if (!ts) return NaN;
+  var ms = new Date(ts).getTime();
+  return isNaN(ms) ? NaN : ms;
+}
+
+function setServerNow(ts) {
+  var ms = parseTsMs(ts);
+  if (!isNaN(ms)) {
+    _serverClock.baseServerMs = ms;
+    _serverClock.baseClientMs = Date.now();
+  }
+}
+
+function nowRefMs() {
+  if (_serverClock.baseServerMs != null && _serverClock.baseClientMs != null) {
+    return _serverClock.baseServerMs + (Date.now() - _serverClock.baseClientMs);
+  }
+  return Date.now();
+}
 
 function timeAgo(ts) {
   if (!ts) return '';
-  var sec = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  var tms = parseTsMs(ts);
+  if (isNaN(tms)) return '';
+  var sec = Math.floor((nowRefMs() - tms) / 1000);
+  if (sec < 0) sec = 0;
   if (sec < 60) return sec + 's ago';
   if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
   if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
@@ -2444,7 +2467,8 @@ function detectAlerts(d) {
 
   // Priority 4: Data stale (>15 min since last health row)
   if (d.health && d.health.ts) {
-    var healthAge = (Date.now() - new Date(d.health.ts).getTime()) / 60000;
+    var healthTsMs = parseTsMs(d.health.ts);
+    var healthAge = isNaN(healthTsMs) ? 999 : (nowRefMs() - healthTsMs) / 60000;
     if (healthAge > 15) {
       alerts.push({level: 'amber', text: 'Data stale — last reading ' + Math.floor(healthAge) + 'm ago'});
     }
@@ -2527,6 +2551,7 @@ function buildSoilCard(z, faults, isPlanned) {
 }
 
 function renderHome(d) {
+  setServerNow(d && d.now ? d.now : null);
   // Debounced "is the chip up" flag — main UI uses this so transient blips
   // don't blank the dashboard. The topbar "live" pill shows raw poll status.
   var online = (d.esp32_online !== undefined) ? !!d.esp32_online : !!d.esp32;
@@ -2568,7 +2593,8 @@ function renderHome(d) {
   // ── FRESHNESS (on all cards) ──
   var freshTs = health.ts || conn.ts || null;
   var freshStr = freshTs ? timeAgo(freshTs) : '';
-  var freshAge = freshTs ? (Date.now() - new Date(freshTs).getTime()) / 60000 : 999;
+  var freshTsMs = parseTsMs(freshTs);
+  var freshAge = (!freshTs || isNaN(freshTsMs)) ? 999 : (nowRefMs() - freshTsMs) / 60000;
   var freshCls = freshAge > 15 ? 'hc-fresh stale' : 'hc-fresh';
   ['hc-uptime-fresh','hc-wifi-fresh','hc-mem-fresh','hc-crash-fresh'].forEach(function(id) {
     var e = document.getElementById(id);
@@ -5829,8 +5855,14 @@ function camRefresh() {
       img.src = url;
       if (ts) {
         if (o.cap) {
-          var capDt = new Date(o.cap);
-          var age = Math.round((Date.now() - capDt.getTime())/1000);
+          var capMs = parseTsMs(o.cap);
+          if (isNaN(capMs)) {
+            ts.textContent = 'Captured: ' + o.cap;
+            return;
+          }
+          var capDt = new Date(capMs);
+          var age = Math.round((nowRefMs() - capMs) / 1000);
+          if (age < 0) age = 0;
           var ageStr = age < 60 ? age + 's ago'
                      : Math.floor(age/60) + 'm ' + (age%60) + 's ago';
           var col = age >= 30 ? 'var(--red)' : (age >= 10 ? 'var(--amber)' : 'var(--text2)');

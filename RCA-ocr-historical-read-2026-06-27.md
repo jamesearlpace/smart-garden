@@ -3,7 +3,7 @@
 **Date:** 2026-06-27
 **Severity:** High — a core capability is missing, and it quietly undermines trust in every historical insight the system produces.
 **Found by:** James, via the `/water-usage` graph-vs-photo mismatch (graph plotted `95029.589`; a frame showed `095929.678`).
-**Status:** Open — remediation not started.
+**Status:** **Phases 0-2 SHIPPED + verified 2026-06-27 night** (raw read now persisted; faithful audit chart live). Phase 3 flag-only shipped. Phase 4 deferred.
 
 ---
 
@@ -82,11 +82,11 @@ Every health check runs on the **cleaned lock stream** or the **watering engine*
 
 ## Remediation (phased)
 
-- **Phase 0 (now) — stop lying by omission.** Relabel the meter chart "validated lock (not raw OCR)"; surface confidence so `propagated`/`inferred` points are visibly flagged.
-- **Phase 1 — faithful audit line from existing data.** Plot one point per `archive_frame` (same source as the photos), **no** high-water-mark, **no** carry-fill, **no** bucketing-collapse, colored by confidence. Click a point → its frame.
-- **Phase 2 — persist the raw read.** Add `raw_reading` (+ reader, conf) written **at capture, before bounding/anchoring**. Overlay raw vs lock. This is what finally answers *"what did the OCR read at time T."*
-- **Phase 3 — usage outlier guard.** Reject a high-water-mark advance that exceeds physical max flow × elapsed; flag instead of silently accruing.
-- **Phase 4 — root-cause OCR** (#36 / #37 / #39): reduce the misread rate at the source.
+- ✅ **Phase 0 (SHIPPED) — stop lying by omission.** Meter chart relabeled "Validated meter lock — the system's committed reading, NOT the raw OCR."
+- ✅ **Phase 1 (SHIPPED) — faithful audit line from existing data.** New `/api/water-usage/ocr-audit` endpoint + an **OCR audit** chart: one point per `archive_frame`, no high-water-mark / carry-fill / bucketing, colored by confidence, click a point → its photo. (commit bfab09f)
+- ✅ **Phase 2 (SHIPPED) — persist the raw read.** `archive_frame` gained `raw_reading`/`raw_conf`/`raw_source`; `_archive_frame` records the unconstrained CNN read per frame (free, from the same call), write-once. Verified live: committed `95029.675` vs raw `95929.678`. Overlaid as red ✚ on the audit chart. Forward-only (no backfill of pre-existing frames). (commit bfab09f)
+- ⏳ **Phase 3 (FLAG-ONLY SHIPPED) — usage outlier guard.** Reading-health now counts implausible single-step new-highs (>20 ft³) and surfaces them (30d: 5 jumps, biggest +1709.8 gal = the #39 freeze-dump). The usage **total is unchanged** — the actual guard is deferred (catch-up jumps are often real; needs a human call). (commit e960ec0)
+- ⛔ **Phase 4 — root-cause OCR** (#36 / #37 / #39): not an unattended task (the CNN is documented dead weight without the hardware encoder-wire fix).
 
 ---
 

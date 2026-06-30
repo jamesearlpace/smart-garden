@@ -59,7 +59,9 @@ PROPAGATED_JSONL = os.path.join(WORK, "propagated_labels.jsonl")  # monotonic cl
 REGRESSION_JSONL = os.path.join(WORK, "regression_labels.jsonl")  # permanent hard-fail tests
 LOG = os.path.join(BASE, "retrain.log")
 
-CROP = (0.02, 0.02, 0.92, 0.46)
+# Final location-2 camera crop. This must match cnn_service.py and train_loc2.py;
+# the old location-1 crop trains/evaluates on the wrong pixels.
+CROP = (0.10, 0.45, 0.84, 0.73)
 ROTATE_180 = True
 IN_H, IN_W = 64, 256
 N_DIGITS, N_CLASSES = 9, 10
@@ -67,6 +69,8 @@ TEST_PCT = 12                  # ~12%% of frames held out forever (by name hash)
 MIN_TEST = 30                  # need at least this many test frames to judge
 MIN_NEW_FRAMES = 25            # skip retrain unless this many new since last run
 MAX_PER_LABEL = 3
+HARD_TRAIN_WEIGHT = 3.0       # oracle-caught failures are the highest-value
+                              # non-held-out training examples
 OUTSIDE_TAIL_TRUST = 0.35      # weak weight for current-range outside labels
 OUTSIDE_TAIL_MAX_ROWS = 300    # cap added outside-tail rows per retrain
 OUTSIDE_TAIL_MAX_PER_LABEL = 2 # avoid flooding near-duplicate values
@@ -672,6 +676,7 @@ def build_rows(clean, trust=None, regression=None, hard=None):
     per = {}
     train, test = [], []
     test_files = set()
+    hard_train_files = set()
     # test frames first (never capped — keep the benchmark complete)
     for f, lbl in sorted(clean.items()):
         if in_test(f):
@@ -715,8 +720,21 @@ def build_rows(clean, trust=None, regression=None, hard=None):
                dict(sorted((k, test_cov.get(k, 0))
                            for k in COVERAGE_CRITICAL_DIGITS))))
 
+    # Add non-held-out hard failures before the per-label cap. These are the
+    # frames the deployed model actually missed; capping them away preserves
+    # exactly the failure mode we are trying to train out.
+    for f, lbl in sorted(clean.items()):
+        if f in test_files or f not in hard:
+            continue
+        train.append({"file": f, "label": lbl,
+                      "w": max(trust.get(f, 1.0), HARD_TRAIN_WEIGHT),
+                      "hard_train": True})
+        hard_train_files.add(f)
+
     for f, lbl in sorted(clean.items()):
         if f in test_files:
+            continue
+        if f in hard_train_files:
             continue
         if per.get(lbl, 0) >= MAX_PER_LABEL:
             continue
@@ -868,8 +886,8 @@ def bump_version():
     cur = "v1"
     if os.path.exists(VERSION_FILE):
         cur = open(VERSION_FILE).read().strip() or "v1"
-    m = re.match(r"v(\d+)", cur)
-    nxt = f"v{int(m.group(1)) + 1}" if m else "v2"
+    m = re.match(r"^(.*?v)(\d+)$", cur)
+    nxt = f"{m.group(1)}{int(m.group(2)) + 1}" if m else "v2"
     return cur, nxt
 
 

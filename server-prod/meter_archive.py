@@ -505,18 +505,20 @@ def record(ts, filename, reading=None, confidence="lock", source="lock",
                     base_source = "propagated"
 
         cf = (base_reading / COUNTS_PER_CF) if base_reading is not None else None
+        reviewed = 1 if str(base_source or "").lower() in ("oracle", "manual") else 0
         c.execute(
             "INSERT OR IGNORE INTO archive_frame"
             "(ts,filename,reading,reading_cf,confidence,source,reviewed,updated_ts,"
             "raw_reading,raw_conf,raw_source)"
-            " VALUES(?,?,?,?,?,?,0,?,?,?,?)",
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (ts, filename, base_reading, cf, base_conf, base_source,
+             reviewed,
              datetime.now().isoformat(timespec="seconds"),
              raw_i, raw_conf, raw_source))
 
         # If this row is a trusted anchor, automatically smooth uncertain rows
         # between the previous trusted anchor and this one.
-        if base_reading is not None and _is_trusted_anchor(base_source, base_conf, 0):
+        if base_reading is not None and _is_trusted_anchor(base_source, base_conf, reviewed):
             _auto_interpolate_to_anchor(c, ts)
 
         c.commit()

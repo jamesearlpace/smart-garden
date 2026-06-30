@@ -1766,6 +1766,56 @@ def create_app(config, engine, weather, billing):
     def water_usage_page():
         return render_template("water_usage.html")
 
+    def _water_usage_window(default_minutes=60):
+        """Resolve the water-usage window from either:
+        - ?minutes=N for a rolling local-time window
+        - ?start=YYYY-MM-DDTHH:MM[:SS]&end=... for an explicit local window
+        """
+        from datetime import datetime as _dt
+
+        def parse_iso_local(name):
+            raw = (request.args.get(name) or "").strip()
+            if not raw:
+                return None
+            try:
+                return _dt.fromisoformat(raw)
+            except ValueError:
+                # datetime-local controls omit seconds; fromisoformat handles
+                # that, but keep a defensive fallback for space-separated input.
+                try:
+                    return _dt.fromisoformat(raw.replace(" ", "T"))
+                except ValueError:
+                    return None
+
+        sdt = parse_iso_local("start")
+        edt = parse_iso_local("end")
+        if sdt or edt:
+            if not sdt or not edt:
+                return None, None, 0, 0, "absolute", "start and end are required"
+            if edt <= sdt:
+                return None, None, 0, 0, "absolute", "end must be after start"
+            win_s = int((edt - sdt).total_seconds())
+            if win_s > 129600 * 60:
+                return None, None, 0, 0, "absolute", "window is too large"
+            return (sdt.isoformat(timespec="seconds"),
+                    edt.isoformat(timespec="seconds"),
+                    max(1, int(round(win_s / 60.0))), win_s, "absolute", None)
+
+        minutes = query_int("minutes", default_minutes, min_value=1,
+                            max_value=129600)
+        edt = _dt.now()
+        sdt = edt - timedelta(minutes=minutes)
+        return (sdt.isoformat(timespec="seconds"),
+                edt.isoformat(timespec="seconds"),
+                minutes, minutes * 60, "relative", None)
+
+    def _water_usage_bucket_s(win_s):
+        fixed = optional_query_int("bucket_s", min_value=5, max_value=86400)
+        if fixed:
+            return fixed
+        # Auto: aim for ~40 buckets, snapped to the 5s capture cadence.
+        return max(5, int(round(win_s / 40 / 5)) * 5)
+
     @app.route("/api/water-usage")
     def api_water_usage():
         """Water usage over time for leak-spotting, at any zoom. Buckets the
@@ -1779,19 +1829,15 @@ def create_app(config, engine, weather, billing):
         from datetime import datetime as _dt
         import meter_ledger
         GAL = 7.48052
-        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
-        win_s = minutes * 60
-        # aim for ~40 buckets, snapped to the 15s sample cadence
-        bucket_s = max(15, int(round(win_s / 40 / 15)) * 15)
-        conn = db.get_conn()
-        try:
-            b = conn.execute(
-                "SELECT strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) s,"
-                " strftime('%Y-%m-%dT%H:%M:%S','now','localtime') e",
-                (f"-{minutes} minutes",)).fetchone()
-            start, end = b["s"], b["e"]
-        finally:
-            conn.close()
+        start, end, minutes, win_s, mode, err = _water_usage_window(60)
+        if err:
+            return jsonify({"error": err, "usage": [], "line": [],
+                            "meter": []}), 400
+        bucket_s = _water_usage_bucket_s(win_s)
+        if int(win_s / bucket_s) > 6000:
+            return jsonify({"error": "selected grain creates too many buckets; "
+                                     "choose a coarser grain or shorter range",
+                            "usage": [], "line": [], "meter": []}), 400
         rows = meter_ledger.readings_range(start=start, end=end,
                                            order="asc", limit=500000)
         # METHODOLOGY: usage = how far the meter's HIGH-WATER MARK climbs. The
@@ -1840,6 +1886,12 @@ def create_app(config, engine, weather, billing):
                 nondec_n += 1
             if is_jump:
                 big_jumps += 1
+            try:
+                ep = _dt.fromisoformat(r["ts"]).timestamp()
+            except Exception:
+                continue
+            key = int(ep // bucket_s)
+
             # Usage = how far the meter's HIGH-WATER MARK climbs. A new high in
             # reading_cf = real water (incl. catch-up jumps after fast flow); a
             # dip is a re-anchor correction (never reduces usage), and re-climbing
@@ -1857,11 +1909,6 @@ def create_app(config, engine, weather, billing):
                         max_usage_jump_cf = max(max_usage_jump_cf, rc - peak_cf)
                     peak_cf = rc
             cum += dgal
-            try:
-                ep = _dt.fromisoformat(r["ts"]).timestamp()
-            except Exception:
-                continue
-            key = int(ep // bucket_s)
             b = buckets.get(key)
             if b is None:
                 b = {"ts": r["ts"], "gal": 0.0, "cum": cum, "cf": last_cf,
@@ -1953,7 +2000,9 @@ def create_app(config, engine, weather, billing):
                   "pct_monotonic": (round(100.0 * nondec_n / step_n, 1)
                                     if step_n else 100.0),
                   "samples": step_n}
-        return jsonify({"minutes": minutes, "bucket_s": bucket_s,
+        return jsonify({"minutes": minutes, "mode": mode,
+                        "window": {"start": start, "end": end},
+                        "bucket_s": bucket_s,
                         "bucket_label": blabel, "usage": usage, "line": line,
                         "meter": meter, "gaps": gap_n, "health": health,
                         "total_gal": total, "flat": flat,
@@ -1968,16 +2017,13 @@ def create_app(config, engine, weather, billing):
         RAW per-frame OCR read alongside the committed value once recorded. This
         is the view you can actually audit the reader with."""
         import meter_ledger
-        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
-        conn = db.get_conn()
-        try:
-            r = conn.execute(
-                "SELECT strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) s,"
-                " strftime('%Y-%m-%dT%H:%M:%S','now','localtime') e",
-                (f"-{minutes} minutes",)).fetchone()
-            start, end = r["s"], r["e"]
-        finally:
-            conn.close()
+        start, end, minutes, _win_s, mode, err = _water_usage_window(60)
+        if err:
+            return jsonify({"minutes": minutes, "mode": mode, "points": 0,
+                            "total": 0, "truncated": False, "by_conf": {},
+                            "by_raw_conf": {}, "by_context_conf": {},
+                            "raw_mismatches": 0, "context_points": 0,
+                            "frames": [], "error": err}), 400
         CAP = 4000
         try:
             # SINGLE SOURCE: the canonical ledger -- the SAME rows the photos
@@ -1986,28 +2032,68 @@ def create_app(config, engine, weather, billing):
             total = meter_ledger.count_readings(start=start, end=end)
             rows = meter_ledger.readings_range(start=start, end=end,
                                                order="desc", limit=CAP)
+            archive_rows = meter_archive.list_range(
+                start=start, end=end, order="desc", limit=CAP)
+            archive_by_ts = {r.get("ts"): r for r in archive_rows}
         except Exception as e:
             return jsonify({"minutes": minutes, "points": 0, "total": 0,
-                            "truncated": False, "by_conf": {}, "frames": [],
+                            "truncated": False, "by_conf": {},
+                            "by_raw_conf": {}, "by_context_conf": {},
+                            "raw_mismatches": 0, "context_points": 0,
+                            "frames": [],
                             "error": str(e)})
-        frames, by_conf = [], {}
+        frames, by_conf, by_raw_conf, by_context_conf = [], {}, {}, {}
+        raw_mismatches = 0
+        context_points = 0
         for row in rows:
-            conf = row.get("confidence") or "?"
+            arc = archive_by_ts.get(row.get("ts")) or {}
+            committed_source = arc.get("source") or row.get("method") or ""
+            conf = arc.get("confidence") or row.get("confidence") or "?"
             by_conf[conf] = by_conf.get(conf, 0) + 1
+            method = row.get("method") or ""
+            raw_reader = row.get("reader") or ""
+            is_context_read = committed_source in (
+                "constrained_cnn", "raw_tail_cnn")
+            if is_context_read:
+                context_points += 1
+                by_context_conf[conf] = by_context_conf.get(conf, 0) + 1
             raw = row.get("raw_reading")
+            raw_conf = row.get("raw_conf") or ""
+            if raw_conf:
+                by_raw_conf[raw_conf] = by_raw_conf.get(raw_conf, 0) + 1
+            raw_cf = (raw / 1000.0) if raw is not None else None
+            committed_cf = row.get("committed_cf")
+            raw_diff_cf = (round(raw_cf - committed_cf, 3)
+                           if raw_cf is not None and committed_cf is not None
+                           else None)
+            if raw_diff_cf is not None and abs(raw_diff_cf) > 0.05:
+                raw_mismatches += 1
             frames.append({
                 "ts": row["ts"],
-                "cf": row.get("committed_cf"),
+                "cf": committed_cf,
                 "conf": conf,
-                "source": row.get("method") or "",
+                "source": committed_source,
+                "ledger_method": method,
                 "file": row.get("image_file") or "",
-                "reviewed": int(row.get("reviewed") or 0),
-                "raw_cf": (raw / 1000.0) if raw is not None else None,
+                "reviewed": max(int(row.get("reviewed") or 0),
+                                int(arc.get("reviewed") or 0)),
+                "context_read": is_context_read,
+                "context_reader": committed_source,
+                "raw_reading": raw,
+                "raw_cf": raw_cf,
+                "raw_conf": raw_conf,
+                "raw_reader": raw_reader,
+                "raw_diff_cf": raw_diff_cf,
             })
         frames.reverse()  # ascending by ts for plotting
-        return jsonify({"minutes": minutes, "points": len(frames),
+        return jsonify({"minutes": minutes, "mode": mode,
+                        "window": {"start": start, "end": end},
+                        "points": len(frames),
                         "total": total, "truncated": total > len(frames),
-                        "by_conf": by_conf, "frames": frames,
+                        "by_conf": by_conf, "by_raw_conf": by_raw_conf,
+                        "by_context_conf": by_context_conf,
+                        "raw_mismatches": raw_mismatches,
+                        "context_points": context_points, "frames": frames,
                         "source": "meter_ledger"})
 
     @app.route("/api/water-usage/audit")
@@ -2018,23 +2104,21 @@ def create_app(config, engine, weather, billing):
         from fast flow (real water, counted), re-anchor corrections (don't
         affect a monotonic meter), and any corrected false-high still sitting
         above the final reading. Verify any window without running scripts."""
+        import meter_ledger
+        import meter_archive
         GAL = 7.48052
-        minutes = query_int("minutes", 60, min_value=1, max_value=129600)
-        conn = db.get_conn()
-        try:
-            rows = conn.execute(
-                "SELECT ts, reading_cf, delta_cf, gpm, state FROM flow_sample "
-                "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
-                "ORDER BY ts",
-                (f"-{minutes} minutes",)).fetchall()
-        finally:
-            conn.close()
+        start, end, minutes, win_s, mode, err = _water_usage_window(60)
+        if err:
+            return jsonify({"error": err, "checks": [], "verdict": "review"}), 400
+        rows = meter_ledger.readings_range(start=start, end=end,
+                                           order="asc", limit=500000)
 
         def g(cf):
             return round((cf or 0.0) * GAL, 2)
 
         samples = len(rows)
-        reads = [r["reading_cf"] for r in rows if r["reading_cf"] is not None]
+        reads = [r["committed_cf"] for r in rows
+                 if r.get("committed_cf") is not None]
         meter_start = reads[0] if reads else None
         meter_end = reads[-1] if reads else None
         meter_delta_cf = (meter_end - meter_start) if reads else 0.0
@@ -2058,15 +2142,22 @@ def create_app(config, engine, weather, billing):
 
         # Context (explains what happened; does NOT drive the total):
         catchup_cf = sum((r["delta_cf"] or 0.0) for r in rows
-                         if r["gpm"] is None and (r["delta_cf"] or 0.0) > 0)
+                         if r.get("state") == "gap"
+                         and (r["delta_cf"] or 0.0) > 0)
         catchup_n = sum(1 for r in rows
-                        if r["gpm"] is None and (r["delta_cf"] or 0.0) > 0)
+                        if r.get("state") == "gap"
+                        and (r["delta_cf"] or 0.0) > 0)
         reanchor_n = sum(1 for r in rows if (r["delta_cf"] or 0.0) < 0)
-        gap_n = sum(1 for r in rows if r["gpm"] is None)
+        gap_n = sum(1 for r in rows if r.get("state") == "gap")
 
         tol_cf = max(0.5 / GAL, 0.02 * abs(meter_delta_cf))
-        expected = max(1, int(minutes * 60 / 15))
+        # The ledger mixes image-backed rows (~5s during flow, ~60s idle) and
+        # flow gap-fill rows (~15s), so coverage is now a ledger density signal,
+        # not a strict 15s sampler pass/fail.
+        expected = max(1, int(win_s / 60))
         coverage_pct = round(100.0 * samples / expected, 1) if expected else 0.0
+        image_backed = sum(1 for r in rows if r.get("image_file"))
+        fresh_reads = sum(1 for r in rows if r.get("method") == "read")
 
         checks = [
             {"name": "Chart total matches the physical meter",
@@ -2088,17 +2179,22 @@ def create_app(config, engine, weather, billing):
                         if reanchor_n
                         else "none — the reading only moved forward")},
             {"name": "Sample coverage",
-             "ok": coverage_pct >= 90.0,
-             "detail": f"{samples} samples of ~{expected} expected "
-                       f"({coverage_pct}%); {gap_n} offline gap sample(s)"},
+             "ok": samples > 0,
+             "detail": f"{samples} ledger rows in this window "
+                       f"({image_backed} image-backed, {fresh_reads} fresh OCR); "
+                       f"{gap_n} flow-gap row(s). Density vs 1/min baseline: "
+                       f"{coverage_pct}%"},
         ]
         verdict = ("accurate" if abs(highwater_cf - meter_delta_cf) < tol_cf
                    else "review")
 
         return jsonify({
             "minutes": minutes, "samples": samples,
-            "window": {"start": rows[0]["ts"] if rows else None,
-                       "end": rows[-1]["ts"] if rows else None},
+            "mode": mode,
+            "source": "meter_ledger",
+            "window": {"start": start, "end": end,
+                       "first_sample": rows[0]["ts"] if rows else None,
+                       "last_sample": rows[-1]["ts"] if rows else None},
             "meter": {
                 "start_cf": round(meter_start, 3) if meter_start is not None else None,
                 "end_cf": round(meter_end, 3) if meter_end is not None else None,
@@ -2107,7 +2203,9 @@ def create_app(config, engine, weather, billing):
             "context": {
                 "catchup_count": catchup_n, "catchup_gal": g(catchup_cf),
                 "reanchor_count": reanchor_n, "lingering_gal": g(lingering_cf),
-                "gap_samples": gap_n},
+                "gap_samples": gap_n,
+                "image_backed": image_backed,
+                "fresh_reads": fresh_reads},
             "coverage": {"samples": samples, "expected": expected,
                          "pct": coverage_pct},
             "checks": checks, "verdict": verdict})
@@ -3030,6 +3128,8 @@ def create_app(config, engine, weather, billing):
         os.environ.get("METER_CONSTRAINED_MAX_STALE", "900"))   # 15 min
     CONSTRAINED_MIN_CEIL = int(os.environ.get("METER_CONSTRAINED_MIN_CEIL", "600"))
     CONSTRAINED_MAX_CEIL = int(os.environ.get("METER_CONSTRAINED_MAX_CEIL", "3000"))
+    CONSTRAINED_MIN_CONF = float(
+        os.environ.get("METER_CONSTRAINED_MIN_CONF", "0.97"))
     # Median smoothing: commit only the (conservative, lower-middle) median of
     # the last N constrained reads, so a cluster of outlier frames can't ratchet
     # the monotonic lock and stick. N=7 tolerates up to 3 outliers in the window;
@@ -3293,7 +3393,7 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_STALE_CNN_MAX_ADVANCE = int(
         os.environ.get("METER_ARCHIVE_STALE_CNN_MAX_ADVANCE", "2500"))
     ARCHIVE_STALE_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_STALE_CNN_MIN_CONF", "0.55"))
+        os.environ.get("METER_ARCHIVE_STALE_CNN_MIN_CONF", "0.97"))
     # Prefer reading the EXACT archived frame (free constrained CNN) instead of
     # inheriting a potentially stale live lock snapshot.
     ARCHIVE_EXACT_CNN_ENABLED = (
@@ -3301,14 +3401,18 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_EXACT_CNN_MAX_ADVANCE = int(
         os.environ.get("METER_ARCHIVE_EXACT_CNN_MAX_ADVANCE", "2500"))
     ARCHIVE_EXACT_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_EXACT_CNN_MIN_CONF", "0.55"))
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_MIN_CONF", "0.97"))
+    ARCHIVE_EXACT_CNN_TAIL_CONFLICT = int(
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_TAIL_CONFLICT", "800"))
+    ARCHIVE_RAW_TAIL_MAX_ADVANCE = int(
+        os.environ.get("METER_ARCHIVE_RAW_TAIL_MAX_ADVANCE", "200"))
     # On-demand window reprocessor knobs (broader-context repair pass).
     ARCHIVE_REPROCESS_MAX_ROWS = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_MAX_ROWS", "180"))
     ARCHIVE_REPROCESS_MAX_ORACLE = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_MAX_ORACLE", "30"))
     ARCHIVE_REPROCESS_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.55"))
+        os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.97"))
     ARCHIVE_REPROCESS_CONSENSUS_COUNTS = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS", "80"))
     # Strict inference mode: use tower CPU (CNN constrained reads over real
@@ -3324,7 +3428,7 @@ def create_app(config, engine, weather, billing):
     STRICT_BACKFILL_MIN_INTERVAL_S = float(
         os.environ.get("METER_STRICT_BACKFILL_MIN_INTERVAL_S", "45"))
     STRICT_BACKFILL_AUTO_ENABLED = (
-        os.environ.get("METER_STRICT_BACKFILL_AUTO_ENABLED", "1") == "1")
+        os.environ.get("METER_STRICT_BACKFILL_AUTO_ENABLED", "0") == "1")
     STRICT_BACKFILL_AUTO_EVERY_S = float(
         os.environ.get("METER_STRICT_BACKFILL_AUTO_EVERY_S", "180"))
     STRICT_BACKFILL_AUTO_WINDOW_MINUTES = int(
@@ -3452,6 +3556,57 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             _archive_state["files"] = _deque()
             log.warning("archive init failed: %s", e)
+
+    def _mirror_archive_update_to_ledger(ts, reading, confidence, source,
+                                         reviewed=True):
+        """Keep meter_ledger aligned when archive history is reread/corrected."""
+        try:
+            import meter_archive
+            import meter_ledger
+            val = int(reading)
+            row = meter_archive.get(ts)
+            method = meter_ledger._map_archive_method(source)
+            c = sqlite3.connect(meter_ledger.DB_PATH, timeout=30)
+            c.row_factory = sqlite3.Row
+            try:
+                cur = c.execute(
+                    "SELECT committed FROM meter_reading WHERE ts=?",
+                    (ts,)).fetchone()
+                if cur is None:
+                    meter_ledger.record_reading(
+                        ts, (row or {}).get("filename"), committed=val,
+                        confidence=confidence, source=source,
+                        raw_reading=(row or {}).get("raw_reading"),
+                        raw_conf=(row or {}).get("raw_conf"),
+                        reader=(row or {}).get("raw_source"),
+                        reviewed=1 if reviewed else 0)
+                    return True
+                old = cur["committed"]
+                if old is not None and int(old) != val:
+                    c.execute(
+                        "INSERT INTO meter_correction"
+                        "(ts,at,old_committed,new_committed,method,actor,note)"
+                        " VALUES(?,?,?,?,?,?,?)",
+                        (ts, datetime.now().isoformat(timespec="seconds"),
+                         int(old), val, method, "archive_sync",
+                         "mirror_archive_update_to_ledger"))
+                c.execute(
+                    "UPDATE meter_reading SET committed=?, committed_cf=?, "
+                    "method=?, confidence=?, reviewed=max(reviewed, ?) "
+                    "WHERE ts=?",
+                    (val, val / 1000.0, method, confidence,
+                     1 if reviewed else 0, ts))
+                c.commit()
+            finally:
+                c.close()
+            try:
+                meter_ledger.compute_deltas()
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            log.warning("archive->ledger mirror failed for %s: %s", ts, e)
+            return False
 
     def _run_strict_backfill(start_ts, end_ts, reason):
         """Background strict inference pass over an archive window.
@@ -3625,6 +3780,72 @@ def create_app(config, engine, weather, billing):
         except Exception:
             return None
 
+    def _low_tail_delta(a, b, width=5):
+        mod = 10 ** int(width)
+        try:
+            da = int(a) % mod
+            db = int(b) % mod
+        except Exception:
+            return None
+        d = abs(da - db)
+        return min(d, mod - d)
+
+    def _archive_try_conflict_reread(frame, raw_value=None):
+        """Unbiased oracle read for anchor/CNN conflicts.
+
+        If the constrained CNN can only fit the frame by changing the raw low
+        digits, the anchor is more suspect than the image. Use the strong model
+        without a hint, and require the raw low tail to corroborate when present.
+        """
+        try:
+            import vision_oracle
+            if not vision_oracle.available():
+                return None
+            res = vision_oracle.read_meter(
+                frame, rotate180=True, hint=None, model=ORACLE_AUTHORITY_MODEL)
+            _record_oracle_spend(res, model_name=ORACLE_AUTHORITY_MODEL)
+            if not (res.get("ok") and res.get("readable")
+                    and res.get("confidence") != "low"
+                    and res.get("value") is not None):
+                return None
+            v = int(res["value"])
+            if raw_value is not None:
+                td = _low_tail_delta(raw_value, v)
+                if td is None or td > ARCHIVE_EXACT_CNN_TAIL_CONFLICT:
+                    return None
+            return {"reading": v, "confidence": res.get("confidence") or "medium",
+                    "source": "oracle"}
+        except Exception:
+            return None
+
+    def _archive_try_raw_tail(frame, anchor_value, raw_value, max_advance):
+        """Salvage a frame when raw CNN got the high digit wrong.
+
+        The CNN often reads the rolling low digits correctly while garbling one
+        of the stable high digits (`0959...` instead of `0950...`). When the raw
+        low tail forms a small forward move from the trusted anchor, commit that
+        anchored-tail value instead of holding the old row flat. This stays
+        conservative: never moves backward, never exceeds the same physical
+        ceiling as the constrained read, and never uses image processing beyond
+        the immutable raw observation already recorded for this frame.
+        """
+        try:
+            a = int(anchor_value)
+            rv = int(raw_value)
+            anchor_s = f"{a:09d}"
+            raw_s = f"{rv:09d}"
+            width = 5
+            cand = int(anchor_s[:-width] + raw_s[-width:])
+            if cand < a:
+                return None
+            if (cand - a) > min(int(max_advance),
+                                int(ARCHIVE_RAW_TAIL_MAX_ADVANCE)):
+                return None
+            return {"reading": cand, "confidence": "medium",
+                    "source": "raw_tail_cnn"}
+        except Exception:
+            return None
+
     def _archive_try_stale_cnn(frame, prev_value):
         """Try a free constrained CNN read for stale-lock archive rows.
 
@@ -3661,6 +3882,11 @@ def create_app(config, engine, weather, billing):
                     v = None
             if v is None:
                 return None
+            raw_v = cnn.get("value")
+            if raw_v is not None:
+                td = _low_tail_delta(raw_v, v)
+                if td is not None and td > ARCHIVE_EXACT_CNN_TAIL_CONFLICT:
+                    return None
             if v < p:
                 return None
             if (v - p) > ARCHIVE_STALE_CNN_MAX_ADVANCE:
@@ -3669,9 +3895,11 @@ def create_app(config, engine, weather, billing):
             vv5 = int((f"{v:09d}")[:5])
             if vv5 < pv5 or vv5 > (pv5 + 2):
                 return None
+            raw_v = cnn.get("value")
+            source = "cnn" if raw_v == v else "constrained_cnn"
             return {"reading": v,
                     "confidence": ("high" if conf_txt == "high" else "medium"),
-                    "source": "cnn"}
+                    "source": source}
         except Exception:
             return None
 
@@ -3700,6 +3928,10 @@ def create_app(config, engine, weather, billing):
                 except Exception:
                     out["raw"] = None
                 out["raw_conf"] = (cnn.get("confidence") or "")
+                try:
+                    out["raw_min_conf"] = float(cnn.get("min_conf", 0.0) or 0.0)
+                except Exception:
+                    out["raw_min_conf"] = 0.0
 
             conf_txt = (cnn.get("confidence") or "").lower()
             try:
@@ -3723,6 +3955,14 @@ def create_app(config, engine, weather, billing):
 
             if v is None:
                 return None
+            raw_v = out.get("raw") if out is not None else None
+            if raw_v is not None:
+                td = _low_tail_delta(raw_v, v)
+                if td is not None and td > ARCHIVE_EXACT_CNN_TAIL_CONFLICT:
+                    if out is not None:
+                        out["anchor_conflict"] = True
+                        out["tail_delta"] = td
+                    return None
             if v < a:
                 return None
             if (v - a) > ARCHIVE_EXACT_CNN_MAX_ADVANCE:
@@ -3731,9 +3971,10 @@ def create_app(config, engine, weather, billing):
             vv5 = int((f"{v:09d}")[:5])
             if vv5 < av5 or vv5 > (av5 + 2):
                 return None
+            source = "cnn" if raw_v == v else "constrained_cnn"
             return {"reading": v,
                     "confidence": ("high" if conf_txt == "high" else "medium"),
-                    "source": "cnn"}
+                    "source": source}
         except Exception:
             return None
 
@@ -3902,6 +4143,9 @@ def create_app(config, engine, weather, billing):
                 if meter_archive.update_reading(
                         ts, v, res.get("confidence", "high"),
                     source="oracle", reviewed=True, force=True):
+                    _mirror_archive_update_to_ledger(
+                        ts, v, res.get("confidence", "high"),
+                        "oracle", reviewed=True)
                     reread += 1
             if reread > 0:
                 _archive_heal_state["reconciles"] += 1
@@ -4006,6 +4250,9 @@ def create_app(config, engine, weather, billing):
                 if meter_archive.update_reading(
                         ts, v, res.get("confidence", "high"),
                     source="oracle", reviewed=True, force=True):
+                    _mirror_archive_update_to_ledger(
+                        ts, v, res.get("confidence", "high"),
+                        "oracle", reviewed=True)
                     corrected += 1
                     note = "auto-corrected to blind read"
             elif not agree:
@@ -4153,6 +4400,24 @@ def create_app(config, engine, weather, billing):
                             arc_reading = int(ex["reading"])
                             arc_conf = ex["confidence"]
                             arc_source = ex["source"]
+                        elif _raw_out.get("anchor_conflict"):
+                            rr = _archive_try_conflict_reread(
+                                frame, raw_value=_raw_out.get("raw"))
+                            if rr:
+                                arc_reading = int(rr["reading"])
+                                arc_conf = rr["confidence"]
+                                arc_source = rr["source"]
+                        else:
+                            raw_min_conf = float(
+                                _raw_out.get("raw_min_conf", 0.0) or 0.0)
+                            if raw_min_conf >= ARCHIVE_EXACT_CNN_MIN_CONF:
+                                rt = _archive_try_raw_tail(
+                                    frame, anchor_i, _raw_out.get("raw"),
+                                    ARCHIVE_EXACT_CNN_MAX_ADVANCE)
+                                if rt:
+                                    arc_reading = int(rt["reading"])
+                                    arc_conf = rt["confidence"]
+                                    arc_source = rt["source"]
 
                     # Monotonic floor for the "lock lags" recovery below: the
                     # previous row — but NEVER above the trusted lock (the meter
@@ -4163,7 +4428,8 @@ def create_app(config, engine, weather, billing):
                             and prev_floor > trusted_lock + ARCHIVE_HEAL_TOL_COUNTS):
                         prev_floor = trusted_lock
 
-                    if (prev_floor is not None
+                    if (arc_source not in ("oracle", "manual")
+                            and prev_floor is not None
                             and (arc_reading is None or arc_reading < prev_floor)):
                         # Preserve monotonic continuity when lock lags, but avoid
                         # pinning forever by first trying a free constrained CNN
@@ -5404,10 +5670,15 @@ def create_app(config, engine, weather, billing):
                 # lag). Plausibility vs the lock is enforced entering the window
                 # AND at commit, and it's forward-only.
                 constrained_text = None
+                try:
+                    cnn_min_conf = float((cnn or {}).get("min_conf", 0.0) or 0.0)
+                except Exception:
+                    cnn_min_conf = 0.0
                 if c_anchor is None:
                     _constr_window.clear()
                 elif (cnn and not cnn_big_jump
-                        and cnn.get("constrained_value") is not None):
+                        and cnn.get("constrained_value") is not None
+                        and cnn_min_conf >= CONSTRAINED_MIN_CONF):
                     cv = int(cnn["constrained_value"])
                     if c_anchor <= cv <= c_anchor + c_ceil:
                         _constr_window.append(cv)
@@ -5502,13 +5773,17 @@ def create_app(config, engine, weather, billing):
         _threading.Thread(target=_ocr_worker, daemon=True, name="ocr-worker").start()
         log.info("OCR worker started -> %s", OCR_TOWER_URL)
 
-    # Flow monitor: correlate the live meter register with which zone is ON to
-    # estimate per-zone GPM (recency-weighted) and detect leaks / overruns /
-    # high-flow anomalies. Isolated module, owns its own tables, read-only on
-    # the meter lock. Background sampler runs independently of the OCR worker.
+    # Flow monitor: correlate the canonical meter ledger with which zone is ON
+    # to estimate per-zone GPM (recency-weighted) and detect leaks / overruns /
+    # high-flow anomalies. Isolated module, owns its own tables; falls back to
+    # the live meter lock if the ledger has no row yet. Background sampler runs
+    # independently of the OCR worker.
     try:
         import flow_monitor
-        flow_monitor.start(meter_reader, status_summary, config)
+        import meter_ledger
+        flow_monitor.start(
+            meter_reader, status_summary, config,
+            reading_cf_fn=meter_ledger.latest_committed_cf)
     except Exception as e:
         log.warning("flow_monitor start failed: %s", e)
 
@@ -7038,7 +7313,13 @@ def create_app(config, engine, weather, billing):
         uncertain = 0
         interpolated = 0
         oracle_calls = 0
-        by_source = {"cnn": 0, "oracle": 0, "propagated": 0, "kept": 0}
+        by_source = {
+            "cnn": 0,
+            "constrained_cnn": 0,
+            "oracle": 0,
+            "propagated": 0,
+            "kept": 0,
+        }
         changes = []
 
         left_anchor_val = prev_val if prev_val is not None else None
@@ -7120,7 +7401,7 @@ def create_app(config, engine, weather, billing):
                                               right_strict=right_strict)):
                                 cands.append({
                                     "value": v,
-                                    "source": "cnn",
+                                    "source": "constrained_cnn",
                                     "confidence": ("high" if min_conf >= 0.8 else "medium"),
                                     "score": min(0.94, 0.72 + (min_conf * 0.30)),
                                     "reason": "cnn-constrained",
@@ -7227,6 +7508,17 @@ def create_app(config, engine, weather, billing):
                 by_source["kept"] += 1
                 continue
 
+            # A propagated value is a continuity fallback, not evidence from
+            # this image. Never let the strict reprocessor downgrade an existing
+            # frame-specific read to a propagated guess; authoritative repair
+            # must come from an oracle/manual correction or a trusted CNN read.
+            if (new_src == "propagated" and cur_val is not None
+                    and (row.get("source") or "") in ("cnn", "oracle", "manual")):
+                by_source["kept"] += 1
+                prev_val = int(cur_val)
+                prev_ep = ep if ep is not None else prev_ep
+                continue
+
             # HARD CEILING: never let a reprocess write a value above the trusted
             # lock (the meter's all-time high). Stops the forward-only walk from
             # re-drifting history upward off a still-high neighbor. If the only
@@ -7255,9 +7547,13 @@ def create_app(config, engine, weather, billing):
 
             if changed:
                 if commit:
+                    reviewed = new_src in ("oracle", "manual")
                     meter_archive.update_reading(
                         ts, int(new_val), new_conf, source=new_src,
-                        reviewed=False, force=True)
+                        reviewed=reviewed, force=True)
+                    _mirror_archive_update_to_ledger(
+                        ts, int(new_val), new_conf, new_src,
+                        reviewed=reviewed)
                     updated += 1
                 else:
                     would_update += 1
@@ -7410,6 +7706,10 @@ def create_app(config, engine, weather, billing):
                 updated = meter_archive.update_reading(
                     ts, rval, res.get("confidence"), source="oracle",
                     reviewed=True)
+                if updated:
+                    _mirror_archive_update_to_ledger(
+                        ts, rval, res.get("confidence"),
+                        "oracle", reviewed=True)
             else:
                 updated = False
         return jsonify({"ok": res.get("ok"), "value": res.get("value"),
@@ -7438,6 +7738,9 @@ def create_app(config, engine, weather, billing):
         old_val = row.get("reading")
         ok = meter_archive.update_reading(
             ts, new_val, "manual", source="manual", reviewed=True)
+        if ok:
+            _mirror_archive_update_to_ledger(
+                ts, new_val, "manual", "manual", reviewed=True)
 
         propagated = 0
         if ok and old_val is not None:
@@ -7727,8 +8030,11 @@ def create_app(config, engine, weather, billing):
             v = "".join(c for c in str(data.get("value", "")) if c.isdigit())
             if v and len(v) == 9:
                 corrected = int(v)
-                meter_archive.update_reading(
-                    ts, corrected, "manual", source="manual", reviewed=True)
+                if meter_archive.update_reading(
+                        ts, corrected, "manual",
+                        source="manual", reviewed=True):
+                    _mirror_archive_update_to_ledger(
+                        ts, corrected, "manual", "manual", reviewed=True)
         meter_archive.record_audit_result(
             ts, stored, corrected if corrected is not None else stored,
             agree, kind="human", source=row.get("source"), model=None,

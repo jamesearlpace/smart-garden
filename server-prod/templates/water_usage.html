@@ -19,6 +19,17 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
 .chip.on{background:var(--text);color:#fff;border-color:var(--text)}
+.controls{display:grid;grid-template-columns:1fr 1fr 150px auto auto;gap:8px;align-items:end;
+  background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.ctl label{display:block;font-size:.68rem;font-weight:700;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+.ctl input,.ctl select{width:100%;height:34px;border:1px solid var(--border);border-radius:7px;background:#fff;
+  color:var(--text);font:inherit;font-size:.82rem;padding:5px 8px}
+.applybtn{height:34px;border:none;border-radius:7px;background:var(--text);color:#fff;font-weight:700;
+  font-size:.8rem;padding:0 14px;cursor:pointer;white-space:nowrap}
+.applybtn.secondary{background:#eef2f6;color:var(--text);border:1px solid var(--border)}
+.ctlmsg{grid-column:1/-1;font-size:.75rem;color:var(--text2);min-height:1em}
+.ctlmsg.err{color:#dc2626;font-weight:600}
+@media (max-width:760px){.controls{grid-template-columns:1fr 1fr}.applybtn{width:100%}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:.95rem;margin-bottom:2px}
 .card .hint{font-size:.78rem;color:var(--text2);margin-bottom:10px}
@@ -83,6 +94,28 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="bar" id="chips"></div>
 
+<div class="controls">
+  <div class="ctl"><label for="startInput">Start</label><input id="startInput" type="datetime-local" step="1"></div>
+  <div class="ctl"><label for="endInput">End</label><input id="endInput" type="datetime-local" step="1"></div>
+  <div class="ctl"><label for="grainSelect">Grain</label>
+    <select id="grainSelect">
+      <option value="">Auto</option>
+      <option value="5">5 sec</option>
+      <option value="10">10 sec</option>
+      <option value="15">15 sec</option>
+      <option value="30">30 sec</option>
+      <option value="60">1 min</option>
+      <option value="300">5 min</option>
+      <option value="900">15 min</option>
+      <option value="1800">30 min</option>
+      <option value="3600">1 hr</option>
+    </select>
+  </div>
+  <button id="applyRange" class="applybtn">Apply range</button>
+  <button id="clearRange" class="applybtn secondary">Use rolling</button>
+  <div id="ctlMsg" class="ctlmsg">Use the chips for rolling windows, or pick an exact local date/time range.</div>
+</div>
+
 <div class="auditrow"><button id="auditBtn" class="auditbtn">🔍 Audit this window for accuracy</button></div>
 <div id="auditPanel" class="auditpanel" style="display:none"></div>
 
@@ -96,7 +129,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
     <div class="wrap wrap-mid"><canvas id="lineChart"></canvas></div>
   </div>
   <div class="panel">
-    <div class="cap">Validated meter lock <span class="capsub">— the system's committed reading (ft³), NOT the raw OCR</span></div>
+    <div class="cap">Validated meter lock <span class="capsub">— the system's committed reading (ft³), not the unconstrained CNN guess</span></div>
     <div class="wrap wrap-meter"><canvas id="meterChart"></canvas></div>
     <div class="readhealth" id="readHealth"></div>
   </div>
@@ -104,8 +137,8 @@ h1{font-size:1.35rem;margin-bottom:2px}
 </div>
 
 <div class="card">
-  <div class="cap">OCR audit — every archived frame, exactly as read
-    <span class="capsub">— no bucketing, no high-water-mark, no gap-fill. Same source as the photos. Color = confidence; click a point → its photo.</span></div>
+  <div class="cap">OCR audit — every archived frame
+    <span class="capsub">— committed/context read plus the unconstrained CNN guess. No bucketing, no high-water-mark, no gap-fill.</span></div>
   <div class="wrap" style="height:260px"><canvas id="auditChart"></canvas></div>
   <div id="auditLegend" style="display:flex;flex-wrap:wrap;gap:12px;font-size:.72rem;margin-top:8px;color:var(--text2)"></div>
   <div id="auditNote" style="font-size:.72rem;color:var(--text2);margin-top:4px"></div>
@@ -132,10 +165,37 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <script>
 var RANGES = [[1,'1m'],[30,'30m'],[60,'1h'],[180,'3h'],[360,'6h'],[720,'12h'],
               [1440,'24h'],[10080,'7d'],[43200,'30d'],[129600,'3mo']];
-var minutes = 60, barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
+var state = {mode:'relative', minutes:60, bucket_s:''};
+var barC = null, lineC = null, meterC = null, auditC = null, LAST_USAGE = [];
+var lastQuery = '';
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function enc(s){ return encodeURIComponent(String(s||'')); }
+function ctlMsg(txt, err){
+  var el=document.getElementById('ctlMsg');
+  if(!el) return;
+  el.textContent=txt||'';
+  el.className='ctlmsg'+(err?' err':'');
+}
+function queryString(){
+  var p=[];
+  state.bucket_s = document.getElementById('grainSelect').value || '';
+  if(state.mode==='absolute'){
+    p.push('start='+enc(document.getElementById('startInput').value));
+    p.push('end='+enc(document.getElementById('endInput').value));
+  } else {
+    p.push('minutes='+enc(state.minutes));
+  }
+  if(state.bucket_s) p.push('bucket_s='+enc(state.bucket_s));
+  lastQuery=p.join('&');
+  return lastQuery;
+}
+function windowLabel(d){
+  var w=d&&d.window;
+  if(!w||!w.start||!w.end) return '';
+  return fullStamp(w.start)+' -> '+fullStamp(w.end);
+}
 
 // Month abbreviations for compact, unambiguous date labels.
 var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -165,8 +225,9 @@ function render(d){
     + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label+'</span>' : '');
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
-    + (d.total_gal||0)+' gal total this window · meter sampled every 15s'
-    + (d.gaps ? ' · <b style="color:#94a3b8">'+d.gaps+'</b> gap bucket(s) (offline, shown dashed)' : '');
+    + (d.total_gal||0)+' gal total this window · ledger sampled at capture cadence'
+    + (d.gaps ? ' · <b style="color:#94a3b8">'+d.gaps+'</b> gap bucket(s) (offline, shown dashed)' : '')
+    + (windowLabel(d) ? '<br><span style="font-size:.78rem">'+windowLabel(d)+'</span>' : '');
   var b = document.getElementById('banner');
   if (!usage.length){ b.className='banner muted'; b.textContent='No data in this window yet.'; }
   else if (d.leak_hint){ b.className='banner warn';
@@ -500,7 +561,7 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
   btn.onclick=function(){
     panel.style.display='block';
     panel.innerHTML='<div style="color:var(--text2)">Auditing this window against the meter…</div>';
-    fetch('/api/water-usage/audit?minutes='+minutes).then(function(r){return r.json();}).then(function(a){
+    fetch('/api/water-usage/audit?'+queryString()).then(function(r){return r.json();}).then(function(a){
       var vc={accurate:'v-accurate',undercount:'v-undercount',review:'v-review'}[a.verdict]||'v-review';
       var vt={accurate:'✅ Accurate — the chart total matches the meter',
               review:'🔎 Review — re-anchor corrections affect this window'}[a.verdict]||a.verdict;
@@ -527,8 +588,10 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
 
 // ── OCR AUDIT (faithful per-frame line straight from archive_frame) ──
 // One point per ARCHIVED FRAME exactly as stored: no bucketing, no high-water
-// mark, no gap-fill. Same source as the click-through photos. Color = the
-// stored confidence, so derived/propagated points are visibly flagged.
+// mark, no gap-fill. Same source as the click-through photos. Committed points
+// are colored by committed confidence; crosses are the unconstrained CNN guess,
+// which is kept as raw evidence and may differ from the context-constrained
+// committed read.
 var AUDIT_CONF = {
   high:{c:'#16a34a',label:'high (real read)'},
   manual:{c:'#2563eb',label:'manual (human)'},
@@ -544,17 +607,37 @@ function stampEpoch(ms){ var d=new Date(ms);
     +('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2); }
 var AUDIT_FRAMES = [];
 function loadAudit(){
-  fetch('/api/water-usage/ocr-audit?minutes='+minutes).then(function(r){return r.json();}).then(function(a){
+  fetch('/api/water-usage/ocr-audit?'+queryString()).then(function(r){return r.json();}).then(function(a){
     AUDIT_FRAMES = a.frames||[];
     var pts = AUDIT_FRAMES.map(function(p){ return {x:Date.parse(p.ts), y:p.cf}; });
     var cols = AUDIT_FRAMES.map(function(p){ return auditColor(p.conf); });
-    var rawPts = AUDIT_FRAMES.filter(function(p){return p.raw_cf!=null;}).map(function(p){ return {x:Date.parse(p.ts), y:p.raw_cf}; });
+    var committedVals = pts.filter(function(p){ return p.y!=null; }).map(function(p){ return p.y; });
+    var yMin = null, yMax = null, rawOutliers = 0;
+    if (committedVals.length) {
+      yMin = committedVals.reduce(function(m,v){ return Math.min(m,v); }, committedVals[0]);
+      yMax = committedVals.reduce(function(m,v){ return Math.max(m,v); }, committedVals[0]);
+      var pad = Math.max((yMax-yMin)*0.18, 0.035);
+      yMin -= pad; yMax += pad;
+    }
+    // The unconstrained CNN guess can be wildly wrong; do not let those crosses
+    // flatten the committed meter line. Clip only the plotted y-position, keep
+    // the real value on the point for the tooltip.
+    var rawPts = AUDIT_FRAMES.filter(function(p){return p.raw_cf!=null;}).map(function(p){
+      var y = p.raw_cf, clipped = '';
+      if (yMin!=null && yMax!=null) {
+        if (y < yMin) { y = yMin + (yMax-yMin)*0.02; clipped='low'; rawOutliers++; }
+        else if (y > yMax) { y = yMax - (yMax-yMin)*0.02; clipped='high'; rawOutliers++; }
+      }
+      return {x:Date.parse(p.ts), y:y, raw_cf:p.raw_cf, raw_conf:p.raw_conf||'?',
+        raw_reader:p.raw_reader||'', raw_diff_cf:p.raw_diff_cf, clipped:clipped};
+    });
+    var rawCols = rawPts.map(function(p){ return auditColor(p.raw_conf); });
     var ds = [{ label:'committed (lock)', data:pts, parsing:false,
       showLine:true, borderColor:'rgba(148,163,184,.45)', borderWidth:1, tension:0,
       pointRadius:3, pointHoverRadius:5, pointBackgroundColor:cols, pointBorderColor:cols }];
-    if (rawPts.length) ds.push({ label:'raw OCR', data:rawPts, parsing:false,
+    if (rawPts.length) ds.push({ label:'unconstrained CNN', data:rawPts, parsing:false,
       showLine:false, pointRadius:2, pointStyle:'crossRot',
-      pointBackgroundColor:'#dc2626', pointBorderColor:'#dc2626' });
+      pointBackgroundColor:rawCols, pointBorderColor:rawCols });
     if (auditC) auditC.destroy();
     auditC = new Chart(document.getElementById('auditChart'), {
       type:'line', data:{datasets:ds},
@@ -562,26 +645,45 @@ function loadAudit(){
         onClick:function(evt,els){ for(var k=0;k<els.length;k++){ if(els[k].datasetIndex===0){ var p=AUDIT_FRAMES[els[k].index]; if(p) showAuditFrame(p); return; } } },
         plugins:{legend:{display:false}, tooltip:{callbacks:{
           title:function(it){ return it.length? stampEpoch(it[0].parsed.x):''; },
-          label:function(c){ if(c.datasetIndex!==0){ return 'raw OCR '+(c.parsed.y!=null?cfTo9(c.parsed.y):'\u2014'); }
+          label:function(c){ if(c.datasetIndex!==0){
+            var rp=c.raw||{}, suffix=rp.clipped?(' (off-scale '+rp.clipped+')'):'';
+            return 'unconstrained CNN '+(rp.raw_cf!=null?cfTo9(rp.raw_cf):'\u2014')
+              +' ft\u00b3 ('+(rp.raw_conf||'?')+'/'+(rp.raw_reader||'cnn')+')'+suffix;
+          }
             var p=AUDIT_FRAMES[c.dataIndex]; if(!p) return '';
-            var s='committed '+(p.cf!=null?cfTo9(p.cf):'\u2014')+' ft\u00b3 ('+p.conf+'/'+p.source+')';
-            if(p.raw_cf!=null) s+=' \u00b7 raw '+cfTo9(p.raw_cf);
+            var src = p.context_read ? 'context-constrained '+(p.context_reader||'cnn') : p.source;
+            var s='committed '+(p.cf!=null?cfTo9(p.cf):'\u2014')+' ft\u00b3 ('+p.conf+'/'+src+')';
+            if(p.raw_cf!=null) s+=' \u00b7 unconstrained '+cfTo9(p.raw_cf)+' ('+(p.raw_conf||'?')+')';
             return s; } }}},
         scales:{
           x:{type:'linear', grid:{color:'#eef2f6'}, ticks:{font:{size:9},maxTicksLimit:12,
               callback:function(v){ var d=new Date(v); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }}},
-          y:{title:{display:true,text:'ft\u00b3'}, ticks:{font:{size:9},
+          y:{title:{display:true,text:'ft\u00b3'}, min:yMin, max:yMax, ticks:{font:{size:9},
               callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}}}}
     });
-    var bc=a.by_conf||{}, legend='';
+    var bc=a.by_conf||{}, br=a.by_raw_conf||{}, bx=a.by_context_conf||{}, legend='';
+    legend += '<span style="font-weight:700;color:#334155">Committed:</span>';
     Object.keys(AUDIT_CONF).forEach(function(k){ if(bc[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:'+AUDIT_CONF[k].c+';margin-right:4px"></span>'+AUDIT_CONF[k].label+' ('+bc[k]+')</span>'; });
     Object.keys(bc).forEach(function(k){ if(!AUDIT_CONF[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:4px"></span>'+esc(k)+' ('+bc[k]+')</span>'; });
+    if(Object.keys(bx).length){
+      legend += '<span style="font-weight:700;color:#334155;margin-left:8px">Context CNN:</span>';
+      Object.keys(AUDIT_CONF).forEach(function(k){ if(bx[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:'+AUDIT_CONF[k].c+';margin-right:4px"></span>'+AUDIT_CONF[k].label+' ('+bx[k]+')</span>'; });
+      Object.keys(bx).forEach(function(k){ if(!AUDIT_CONF[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:4px"></span>'+esc(k)+' ('+bx[k]+')</span>'; });
+    }
+    if(Object.keys(br).length){
+      legend += '<span style="font-weight:700;color:#334155;margin-left:8px">Unconstrained CNN:</span>';
+      Object.keys(AUDIT_CONF).forEach(function(k){ if(br[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:'+AUDIT_CONF[k].c+';margin-right:4px"></span>'+AUDIT_CONF[k].label+' ('+br[k]+')</span>'; });
+      Object.keys(br).forEach(function(k){ if(!AUDIT_CONF[k]) legend += '<span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:4px"></span>'+esc(k)+' ('+br[k]+')</span>'; });
+    }
     document.getElementById('auditLegend').innerHTML = legend || '<span style="color:#94a3b8">no archived frames in this window</span>';
-    var derived=(bc.inferred||0)+(bc.propagated||0)+(bc.lock||0)+(bc.medium||0);
     var note=a.points+' frame(s) plotted'+(a.truncated?(' (most recent '+a.points+' of '+a.total+' \u2014 zoom in to see every frame)'):'');
-    if(a.points) note += ' \u00b7 '+Math.round(100*derived/a.points)+'% derived/held (not a fresh read)';
+    var derived=(bc.inferred||0)+(bc.propagated||0)+(bc.lock||0);
+    if(a.points && derived) note += ' \u00b7 committed '+Math.round(100*derived/a.points)+'% derived/held';
+    if(a.context_points) note += ' \u00b7 '+a.context_points+' context-constrained CNN read(s)';
     var hasRaw = AUDIT_FRAMES.some(function(p){return p.raw_cf!=null;});
-    note += hasRaw ? ' \u00b7 red \u271a = raw OCR (pre-validation)' : ' \u00b7 raw OCR not yet recorded (starts logging now)';
+    note += hasRaw ? ' \u00b7 \u271a = unconstrained CNN guess (raw evidence)' : ' \u00b7 unconstrained CNN not recorded for this window';
+    if(a.raw_mismatches) note += ' \u00b7 '+a.raw_mismatches+' unconstrained guess(es) differ from committed';
+    if(rawOutliers) note += ' \u00b7 '+rawOutliers+' unconstrained outlier(s) pinned to the chart edge';
     document.getElementById('auditNote').textContent = note;
   }).catch(function(){ document.getElementById('auditNote').textContent='OCR audit failed to load.'; });
 }
@@ -589,12 +691,13 @@ function loadAudit(){
 function showAuditFrame(p){
   var m=document.getElementById('modal');
   document.getElementById('modal-title').textContent = fullStamp(p.ts);
-  var html='Committed (lock): <b>'+(p.cf!=null?cfTo9(p.cf):'\u2014')+'</b> ft\u00b3 <span style="color:#64748b">('+esc(p.conf)+' / '+esc(p.source)+')</span>';
+  var src=p.context_read ? ('context-constrained '+(p.context_reader||'cnn')) : p.source;
+  var html='Committed: <b>'+(p.cf!=null?cfTo9(p.cf):'\u2014')+'</b> ft\u00b3 <span style="color:#64748b">('+esc(p.conf)+' / '+esc(src)+')</span>';
   if(p.raw_cf!=null){ var diff=(p.cf!=null)?Math.abs(p.raw_cf-p.cf):0;
-    html += '<br>Raw OCR (pre-validation): <b style="color:#dc2626">'+cfTo9(p.raw_cf)+'</b> ft\u00b3'
-      + (diff>0.05?' <span style="color:#dc2626;font-weight:700">\u26a0 differs from committed by '+diff.toFixed(3)+' ft\u00b3 \u2014 the validator overrode the raw read</span>'
+    html += '<br>Unconstrained CNN guess: <b style="color:#dc2626">'+cfTo9(p.raw_cf)+'</b> ft\u00b3 <span style="color:#64748b">('+(esc(p.raw_conf||'?'))+')</span>'
+      + (diff>0.05?' <span style="color:#dc2626;font-weight:700">\u26a0 differs from committed by '+diff.toFixed(3)+' ft\u00b3 \u2014 context/validator overrode it</span>'
                   :' <span style="color:#16a34a">\u2713 matches committed</span>'); }
-  else { html += '<br><span style="color:#94a3b8">Raw OCR not recorded for this frame (only frames captured after the raw-read feature shipped have it).</span>'; }
+  else { html += '<br><span style="color:#94a3b8">Unconstrained CNN guess not recorded for this frame.</span>'; }
   document.getElementById('modal-sub').innerHTML = html;
   document.getElementById('modal-grid').innerHTML = '<div class="fcell"><img loading="lazy" src="/api/cam/archive/img?file='+encodeURIComponent(p.file)+'" style="width:100%"><div class="cap">'+esc(p.file)+'</div></div>';
   m.classList.add('on');
@@ -602,16 +705,43 @@ function showAuditFrame(p){
 
 function load(){
   document.getElementById('chips').innerHTML = RANGES.map(function(r){
-    return '<span class="chip'+(r[0]===minutes?' on':'')+'" data-m="'+r[0]+'">'+r[1]+'</span>';
+    return '<span class="chip'+(state.mode==='relative'&&r[0]===state.minutes?' on':'')+'" data-m="'+r[0]+'">'+r[1]+'</span>';
   }).join('');
   document.querySelectorAll('.chip').forEach(function(ch){
-    ch.onclick = function(){ minutes = parseInt(ch.getAttribute('data-m'),10); load(); };
+    ch.onclick = function(){
+      state.mode='relative';
+      state.minutes = parseInt(ch.getAttribute('data-m'),10);
+      ctlMsg('Rolling '+ch.textContent+' window.');
+      load();
+    };
   });
-  fetch('/api/water-usage?minutes='+minutes).then(function(r){return r.json();})
-    .then(render)
-    .catch(function(){ document.getElementById('sub').textContent='Could not load usage.'; });
+  var qs = queryString();
+  fetch('/api/water-usage?'+qs).then(function(r){
+    return r.json().then(function(d){ if(!r.ok) throw new Error(d.error||'Could not load usage.'); return d; });
+  }).then(function(d){
+    ctlMsg(state.mode==='absolute' ? 'Showing exact local range.' : ('Rolling '+state.minutes+' minute window.'));
+    render(d);
+  }).catch(function(e){
+    ctlMsg(e.message||'Could not load usage.', true);
+    document.getElementById('sub').textContent='Could not load usage.';
+  });
   loadAudit();
 }
+document.getElementById('applyRange').onclick = function(){
+  var s=document.getElementById('startInput').value;
+  var e=document.getElementById('endInput').value;
+  if(!s || !e){ ctlMsg('Pick both a start and end time.', true); return; }
+  if(new Date(e) <= new Date(s)){ ctlMsg('End must be after start.', true); return; }
+  state.mode='absolute';
+  load();
+};
+document.getElementById('clearRange').onclick = function(){
+  document.getElementById('startInput').value='';
+  document.getElementById('endInput').value='';
+  state.mode='relative';
+  load();
+};
+document.getElementById('grainSelect').onchange = function(){ load(); };
 load();
 </script>
 </body>

@@ -414,3 +414,132 @@ then the conclusion flips: the **lock** is wrong, not the reads → auto-re-anch
 **Verified live (2026-06-23 14:40):** after a service restart left the lock stale-low at `94,740,084` while the meter actually read ~`94,791,096` (~51 ft³ / ~382 gal gap, far beyond the 15 ft³ cap), the system healed itself: `AUTO-HEAL: lock 94740084 -> 094791096 (8 agreeing reads + 2 authority confirms over 208s) — stuck lock recovered with NO manual step`. Post-heal: `truth_guard.active=false`, `auto_heal.heals=1`. No human re-anchor was performed.
 
 **Supersedes the "Do NOT manually re-anchor" guidance for this failure mode** — there is no longer a manual step; the system recovers on its own.
+## 2026-06-29 - loc2-v4 fixed-camera hard-frame retrain
+
+Context: The camera has been locked in its final position since `2026-06-25T22:00 Pacific`, so pre-cutoff ground truth is no longer useful for judging this model. The data-layer goal is no fake smoothing: raw OCR errors must stay visible, and only defensible committed values should feed the charts.
+
+Changes:
+- Updated `cnn/retrain.py` and `cnn_service.py` to use the final location-2 crop `(0.10, 0.45, 0.82, 0.73)` instead of the old location-1 crop.
+- Fixed version bumping so `loc2-vN` promotes correctly.
+- Added hard-frame training inclusion before `MAX_PER_LABEL`, with `HARD_TRAIN_WEIGHT=3.0`, so current oracle-caught misses are not accidentally excluded from training.
+- Exported reviewed post-cutoff archive frames into the training/eval set and retrained on the tower.
+
+Result:
+- Promoted `loc2-v4`.
+- Retrain eval: held-out hard frames `144`; challenger fixed `14`, newly broke `3`, net `+11`; regression set remained clean.
+- Post-cutoff reviewed fixed-camera export direct score: `5707/5799 = 98.414%` full-9 exact.
+- High-confidence band: `min_conf >= 0.90` scored `3798/3798 = 100.0%` exact on that export. The `>=0.70` band still had misses with `loc2-v4`, so production was tightened to `0.90`.
+
+State: `loc2-v4` is materially better than `loc2-v3`, but raw OCR is not yet at the "virtually perfect" bar. Remaining misses are concentrated in low rolling digits and glare/ambiguity cases. The safe operating policy is to accept only the exact high-confidence band and keep oracle/review/context commits explicitly labeled.
+
+## 2026-06-29 - loc2-v5 after fixing bad post-cutoff ground truth
+
+Context: A visual review of the remaining fixed-camera misses found a poisoned manual label block: `2026-06-28T20:30:16 -> 21:45:16` was labeled/committed as `95031090`, but representative images plainly read `95031097`. This lowered honest model scoring and trained the CNN toward the wrong final digit.
+
+Changes:
+- Corrected the archive/ledger plateau to `95031097` after DB backups.
+- Appended manual-label overrides for the existing `095031090_*_oracle.jpg` training-bank files so they train as `095031097`.
+- Forced a new tower retrain and promoted `loc2-v5`.
+- Raised server-side production acceptance to `min_conf >= 0.97`; `loc2-v5` has three post-cutoff misses above `0.90`, with the highest remaining miss at `0.957`.
+
+Result:
+- Promoted `loc2-v5`.
+- Gated retrain: hard holdout full-9 `0.410` vs corrected `loc2-v4` champion `0.333`.
+- Ground-truth replay: challenger `0.940/0.815` vs champion `0.938/0.801`.
+- Hard-frame eval: champion missed `96/144`; challenger fixed `13`, newly broke `2`, net `+11`.
+- Regression set: `0/9` misses.
+- Corrected post-cutoff eval: `5723/5799 = 98.689%` full-9 exact.
+
+State: this confirms bad ground truth was a real limiter. The model improved after correcting it, but raw OCR still is not virtually perfect. The remaining work is to continue finding and correcting poisoned labels and separating physically ambiguous rolling digits from crisp visible truth; do not relax the production gate below `0.97` without a fresh confidence-band proof.
+
+## 2026-06-29 - Expanded live HTTP eval and current hard-frame export
+
+Context: The `loc2-v5` direct eval had only covered the earlier fixed-camera export. More post-cutoff archive rows had accumulated, and the live raw conflict report showed a repeated false-low class (`95035782` while committed/oracle was `95036782`). The next pass evaluated the live production CNN service over HTTP from the Acer, avoiding tower SSH.
+
+Changes:
+- Added `ocr-harness/eval_live_cnn_http.py`, a read-only evaluator that walks Acer archive rows, POSTs the actual JPEGs to `http://192.168.0.120:5201/cnn`, and reports exact-match, confidence bands, per-position accuracy, and sorted misses.
+- Added a source filter so authoritative visual truth (`oracle`, `manual`, `reviewed_context`) can be scored separately from propagated/held committed rows.
+- Added `ocr-harness/summarize_live_cnn_misses.py` to turn miss JSONL into review queues: repeated label/prediction pairs for training and high-confidence manual-label disagreements for visual review.
+- Re-ran the archive training export on the Acer. It added 410 new post-cutoff authoritative image copies/manual-label rows to `~/meter-training`/`~/cnn-dataset-oracle`, without modifying live meter DBs.
+
+Validation:
+- Full committed archive HTTP eval: `9435/10343 = 91.221%` exact. This intentionally includes propagated committed rows and is not a pure visual-truth metric.
+- Authoritative-only HTTP eval: `5884/6073 = 96.888%` exact.
+- Authoritative confidence calibration remains safe at the production gate: `min_conf >= 0.97` scored `939/939 = 100%` exact. `>=0.90` is still unsafe (`83/85`).
+- The top true high-confidence miss is real after visual inspection: `2026-06-28T15:46:23`, image reads `095030115`, live CNN predicts `095030175` at `min_conf=0.957`.
+- Remaining authoritative misses are concentrated at digit position 5 (`100` misses) and low rolling digits. The dominant repeated pair is `095036782 -> 095035782` (`97` misses), now exported for the next retrain.
+- Two high-confidence manual-label disagreements remain review candidates, not auto-corrections: `2026-06-28T20:26:06` (`095030800 -> 095030807`) and `2026-06-28T20:28:41` (`095031000 -> 095031007`). Temporal context is plausible enough that they were not rewritten from a glance.
+
+State: raw OCR remains below the "virtually perfect" bar, but the next hard-frame batch is now in the training bank. The `0.97` production gate is still supported by expanded live evidence. Tower shell access as `jack` through the Acer was not available in this pass, so the next promotion requires restoring/using tower access or the retrain timer.
+
+## 2026-06-29 - GPT-4o verified label repairs and loc2-v6 retrain in progress
+
+Context: The expanded live HTTP eval found two high-confidence manual-label disagreements near `2026-06-28T20:26` and `20:28`, plus one true high-confidence CNN miss at `2026-06-28T15:46:23`. Because bad ground truth had already limited the CNN once, these candidates were checked with the authority model before being used as training truth.
+
+Changes:
+- Added `ocr-harness/oracle_check_candidates.py` to run non-mutating authority-model checks against specific archived JPEGs using the live service environment.
+- Added `ocr-harness/repair_20260628_manual_labels.py` to apply only oracle-verified manual-label repairs, with backups and ledger recomputation.
+- Used GPT-4o authority reads to verify five bad post-cutoff committed labels from `2026-06-28T20:25:56` through `20:28:41`.
+- Corrected those five archive and ledger rows, preserving raw OCR, adding ledger correction rows, and appending training-label overrides for the old exported filenames.
+- Exported the repaired archive again; it added 8 more post-cutoff training rows after the 5-row repair.
+
+Validation:
+- Backups created before writes: `meter_archive.db.bak.20260629-184949`, `meter_ledger.db.bak.20260629-184949`, and `manual_labels.jsonl.bak.20260629-184949`.
+- Repaired values: `095030793`, `095030807`, `095030813`, `095030827`, and `095031007`.
+- Local harness scripts compile cleanly.
+- Post-repair committed-layer audit is still green: archive/ledger mismatches `0`, archive rows without ledger `0`, negative deltas `0`, unreviewed authoritative rows `0`, material unreviewed non-oracle deltas `0`, watering-window unreviewed positive deltas `0`.
+- Raw OCR conflict count remains nonzero by design; bad raw reads are preserved as evidence instead of being smoothed away.
+- A `loc2-v6` tower retrain started after the 410-row export and before the final 5-row repair export. At epoch 35 it was beating the live `loc2-v5` champion on hard-frame full-9 accuracy (`0.534` vs `0.518`), but it had not promoted yet.
+
+State: The committed data layer remains clean after the verified repairs. Raw OCR is still not at the "virtually perfect" bar. Next action is to let `loc2-v6` finish, confirm promotion, then rerun the live HTTP authoritative eval; if the model did not include the final 8 repaired rows or fails the confidence-band proof, force a follow-up retrain from the repaired training bank.
+
+## 2026-06-29 - loc2-v6 promoted, loc2-v7 rejected, production gate still exact
+
+Context: After the GPT-4o verified label repairs and expanded hard-frame export, `loc2-v6` finished training and was evaluated against the fixed-camera post-cutoff archive. A follow-up `loc2-v7` retrain was forced after the final repair/export to make sure the newest corrections did not produce a better challenger.
+
+Changes:
+- Promoted `loc2-v6` on the tower. Gate: hard-frame full-9 `0.545 > 0.518` champion; ground-truth replay `0.946/0.823` vs `0.941/0.810`; hard-frame net `+5`; regression set `0/9`.
+- Forced `loc2-v7` after exporting the final repair rows. It was rejected: hard-frame full-9 `0.549 <= 0.554` refreshed `loc2-v6` champion; ground-truth replay was worse; hard-frame net `-1`; regression set remained `0/9`.
+- Paused `meter-cnn-retrain.timer` during the forced run to prevent concurrent trainers, killed duplicate scheduler-started processes, then restored the timer.
+
+Validation:
+- Live health after promotion: `version=loc2-v6`.
+- Final authoritative live HTTP eval over `oracle`, `manual`, and `reviewed_context`: `5992/6120 = 97.909%` full-9 exact.
+- Production gate remains empirically exact: `min_conf >= 0.97` scored `3557/3557 = 100%`; `>=0.90` remains unsafe (`352/356`).
+- Remaining raw misses: `128`, concentrated in the last rolling digit (`117`) and dominated by `095029589 -> 095029583` (`55`) at low confidence.
+
+State: `loc2-v6` is the best live CNN. Raw OCR is much better but still not virtually perfect, so production must keep the `0.97` commit gate and use oracle/manual/reviewed context below that. The current failure tail is low-confidence final-digit ambiguity, not a chart smoothing problem.
+
+## 2026-06-30 - right-edge crop fix promoted as loc2-v7; threshold raised to 0.95
+
+Context: The dominant remaining post-cutoff miss after `loc2-v6` was `095029589 -> 095029583` (`55` misses), concentrated on the final rolling digit. Crop-guide overlays showed the last digit was tight against the right edge/glare in the location-2 crop `(0.10, 0.45, 0.82, 0.73)`.
+
+Changes:
+- Added crop-guide and crop-variant harnesses under `ocr-harness/`.
+- Tested live weights across crop variants. The targeted `095029589` cluster went from `24/79 = 30.38%` exact on the old crop to `79/79 = 100%` at right edge `0.84`; wider variants over-shot and degraded.
+- Updated tower and local CNN crop to `(0.10, 0.45, 0.84, 0.73)` for `retrain.py` and `cnn_service.py`.
+- Forced a gated retrain with the new crop. `loc2-v7` promoted: strict full-9 `0.549 > 0.538`; ground-truth replay roughly tied; hard-frame eval net `+2`.
+- Raised the live `meter-cnn` threshold from `0.90` to `0.95` via systemd drop-in and code default after live eval showed `>=0.90` was not exact but `>=0.95` was exact.
+- Exported 53 newest reviewed archive frames into the training bank and forced a follow-up `loc2-v8` retrain. It was rejected: strict `0.544 <= 0.549`, hard-frame net `-1`, so live stayed on `loc2-v7`.
+
+Validation:
+- Live health: `version=loc2-v7`, `threshold=0.95`, crop right edge `0.84`.
+- Authoritative live HTTP eval after promotion (`oracle`, `manual`, `reviewed_context`): `6051/6151 = 98.374%` full-9 exact.
+- Confidence calibration after promotion: `min_conf >= 0.95` scored `1834/1834 = 100%`; `>=0.97` scored `488/488 = 100%`; `>=0.90` remained unsafe (`2011/2019`).
+- Remaining misses dropped to `100`; dominant prior cluster `095029589 -> 095029583` disappeared. Remaining misses are mostly final/rolling low-digit ambiguity, with top repeated pairs only `4` and `3` occurrences.
+- `meter-cnn-retrain.timer` was restored after each forced run.
+
+State: `loc2-v7` is the live champion and is safer than `loc2-v6` because the crop now includes the final digit correctly and the direct-commit threshold is calibrated to the exact band. Raw OCR is still not literally 100% across all frames, but accepted high-confidence direct CNN reads are gated at an empirically exact threshold; lower-confidence reads must continue to be oracle/manual/review/context, with raw guesses preserved.
+
+## 2026-06-30 - Operational stop point: raw OCR not perfect, accepted band exact
+
+Context: James asked whether the current result is good enough. The answer is yes for production operation and committed chart data, but no for mathematically complete raw OCR perfection.
+
+Validation:
+- Fresh live health: `version=loc2-v7`, `threshold=0.95`; `meter-cnn-retrain.timer` active.
+- Fresh authoritative HTTP eval (`oracle`, `manual`, `reviewed_context`): `6094/6194 = 98.386%` full-9 exact.
+- Confidence calibration: `min_conf >= 0.95` scored `1807/1807 = 100%`; `>=0.97` scored `489/489 = 100%`; `>=0.90` remains unsafe (`2033/2041`).
+- Remaining misses are still exactly `100`, concentrated in the final rolling digits; top repeated pair is only `095034101 -> 095034100` (`4` examples).
+- A read-only test-time-augmentation eval was started but stopped because it was too slow and had produced no results after ~30 minutes; no live service changes were made from that experiment.
+
+Decision: Stop active expensive/aggressive OCR debugging for now. Keep the live direct-CNN threshold at `0.95`, preserve raw OCR failures, rely on oracle/manual/review/context below the accepted band, and let the gated retrain loop improve passively as new verified hard cases accumulate. Do not call the raw OCR "100%"; call the committed data path operationally safe and audited.

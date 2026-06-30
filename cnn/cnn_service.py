@@ -44,10 +44,10 @@ def _model_version():
         return "v1"
 
 # --- must match cnn/config.py used at training time ---
-CROP = (0.02, 0.02, 0.92, 0.46)
+CROP = (0.10, 0.45, 0.84, 0.73)
 IN_H, IN_W = 64, 256
 N_DIGITS, N_CLASSES = 9, 10
-CONF_THRESHOLD = float(os.environ.get("METER_CNN_THRESHOLD", "0.90"))
+CONF_THRESHOLD = float(os.environ.get("METER_CNN_THRESHOLD", "0.95"))
 ROTATE_180 = True
 
 _clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))

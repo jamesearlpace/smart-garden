@@ -423,7 +423,30 @@ class MeterReader:
     # ------------------------------------------------------------------
     def get_readings(self, limit=100):
         with self.lock:
-            return list(reversed(self.readings[-limit:]))
+            rows = list(reversed(self.readings[-limit:]))
+        display_rows = []
+        for row in rows:
+            last = display_rows[-1] if display_rows else None
+            same_stale_run = (
+                last is not None
+                and row.get("stale") is True
+                and last.get("stale") is True
+                and row.get("fresh_read") is not True
+                and last.get("fresh_read") is not True
+                and str(row.get("reading") or "") == str(last.get("reading") or "")
+                and str(row.get("confidence") or "") == str(last.get("confidence") or "")
+            )
+            if same_stale_run:
+                if "_collapsed" not in last:
+                    last["_collapsed"] = 1
+                last["_collapsed"] += 1
+                last["_collapsed_oldest_ts"] = row.get("ts") or last.get("_collapsed_oldest_ts")
+                last["_collapsed_oldest_captured"] = (
+                    row.get("captured") or last.get("_collapsed_oldest_captured")
+                )
+                continue
+            display_rows.append(dict(row))
+        return display_rows
 
     # ------------------------------------------------------------------
     def record_oracle_reading(self, value, captured_ts=None, note="AI vision read"):

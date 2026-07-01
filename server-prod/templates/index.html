@@ -5955,7 +5955,24 @@ function camLoadReadings() {
       return;
     }
 
-    tbody.innerHTML = d.readings.map(function(r, _ri) {
+    var displayReadings = [];
+    (d.readings || []).forEach(function(r) {
+      var last = displayReadings.length ? displayReadings[displayReadings.length - 1] : null;
+      var sameStaleRun = last && r.stale === true && last.stale === true
+        && r.fresh_read !== true && last.fresh_read !== true
+        && String(r.reading || '') === String(last.reading || '')
+        && String(r.note || '') === String(last.note || '')
+        && String(r.confidence || '') === String(last.confidence || '');
+      if (sameStaleRun) {
+        last._collapsed = (last._collapsed || 1) + 1;
+        last._collapsed_oldest_ts = r.ts || last._collapsed_oldest_ts;
+        last._collapsed_oldest_captured = r.captured || last._collapsed_oldest_captured;
+        return;
+      }
+      displayReadings.push(r);
+    });
+
+    tbody.innerHTML = displayReadings.map(function(r, _ri) {
       var c = r.confidence === 'high' ? 'var(--green)' :
               r.confidence === 'medium' ? 'var(--amber)' :
               r.confidence === 'low' ? 'var(--red)' : 'var(--text2)';
@@ -5985,7 +6002,7 @@ function camLoadReadings() {
         return parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
       }
       if (isNaN(dft3) || (r.delta_ft3 == null || r.delta_ft3 === '\u2014')) {
-        var older = d.readings[_ri + 1];
+        var older = displayReadings[_ri + 1];
         if (older) {
           var cur = parseShownFt3(r.reading_ft3);
           var prv = parseShownFt3(older.reading_ft3);
@@ -6051,9 +6068,20 @@ function camLoadReadings() {
       var confColor = isStale ? 'var(--amber)' : c;
       var ridAttr = r.id ? ' onclick="location.href=\'/cam/reading/' + encodeURIComponent(r.id) + '\'" title="Click to inspect this reading + its captured image"' : '';
       var clickStyle = r.id ? 'cursor:pointer;' : '';
+      var collapsed = r._collapsed || 1;
+      var noteText = r.note || '';
+      if (collapsed > 1) {
+        noteText += (noteText ? ' - ' : '') + 'collapsed ' + collapsed + ' repeated stale frames';
+      }
+      var tsText = r.ts || '\u2014';
+      var capturedText = r.captured || '\u2014';
+      if (collapsed > 1) {
+        tsText += ' .. ' + (r._collapsed_oldest_ts || '');
+        capturedText += ' .. ' + (r._collapsed_oldest_captured || '');
+      }
       return '<tr style="' + clickStyle + rowStyle + '"' + ridAttr + '>' +
-        '<td style="padding:4px 8px;white-space:nowrap">' + esc(r.ts) + '</td>' +
-        '<td style="padding:4px 8px;white-space:nowrap;color:var(--text2)">' + esc(r.captured || '\u2014') + '</td>' +
+        '<td style="padding:4px 8px;white-space:nowrap">' + esc(tsText) + '</td>' +
+        '<td style="padding:4px 8px;white-space:nowrap;color:var(--text2)">' + esc(capturedText) + '</td>' +
         '<td style="padding:4px 8px;font-family:monospace;color:' + gapColor + '">' + esc(r.gap || '\u2014') + '</td>' +
         '<td style="padding:4px 8px;font-family:monospace;color:' + lagColor + '">' + esc(r.lag || '\u2014') + '</td>' +
         '<td style="padding:4px 8px;font-family:monospace;color:var(--text2)">' + esc(String(r.queue != null ? r.queue : '\u2014')) + '</td>' +
@@ -6066,7 +6094,7 @@ function camLoadReadings() {
         '<td style="padding:4px 8px;font-family:monospace;color:' + dColor + '">' + esc(r.rate || '\u2014') + '</td>' +
         '<td style="padding:4px 8px;font-size:.72rem;color:' + kindColor + '">' + kindLabel + '</td>' +
         '<td style="padding:4px 8px;color:' + confColor + '">' + esc(r.confidence) + '</td>' +
-        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2)">' + esc(r.note || '') + '</td>' +
+        '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2)">' + esc(noteText) + '</td>' +
         '<td style="padding:4px 8px;font-size:.7rem;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(raw) + '</td>' +
         '</tr>';
     }).join('');

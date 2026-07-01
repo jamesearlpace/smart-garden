@@ -5961,7 +5961,6 @@ function camLoadReadings() {
       var sameStaleRun = last && r.stale === true && last.stale === true
         && r.fresh_read !== true && last.fresh_read !== true
         && String(r.reading || '') === String(last.reading || '')
-        && String(r.note || '') === String(last.note || '')
         && String(r.confidence || '') === String(last.confidence || '');
       if (sameStaleRun) {
         last._collapsed = (last._collapsed || 1) + 1;

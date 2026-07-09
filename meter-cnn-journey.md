@@ -9,6 +9,277 @@
 > 192.168.0.120, `~/meter-cnn/`), the Flask app + lock run on the Acer
 > (192.168.0.109, `~/smart-garden-server/`).
 
+## ⚠️ RECURRING LOOP — READ THIS BEFORE "just retrain the CNN"
+
+**This exact problem has recurred at least 4 times (2026-06-16, 06-21, 07-04, 07-08). It is a STRUCTURAL loop, not a bug you can retrain away. If you're here because "the meter shows wrong readings / raw CNN is garbage again," you are in the loop. Don't just retrain — that's step 4 of the loop.**
+
+**The loop:**
+1. The physical meter advances into a NEW leading-edge digit range.
+2. The CNN has ~no verified training data there → it collapses the high/middle digits, snapping the value back toward its last-trained range (e.g. 2026-07-08: true `095354`, raw CNN `095054` — the `3` read as `0`).
+3. We diagnose "CNN ~0% / high-digit regression." (True, but expected.)
+4. We bank gpt-4o-oracle labels of current frames + gated-retrain → new champion (v5→v6→v8) → fixed *within the just-labeled range only*.
+5. The gpt-4o oracle's quota/rate limit runs out (HTTP 429). Because the oracle is ALSO the live reader + recovery + label source, grading and labeling stop and the display goes stale. **This 429 is the real user-visible failure every time** (happened again 2026-07-08 during the water-usage repair — Azure rate-limited the bulk reads).
+6. The meter keeps climbing → new leading edge → GOTO 1.
+
+**What does NOT break the loop (documented dead-ends — do NOT re-propose without new evidence):**
+- Retraining again (temporary; the meter always outruns the freshly-labeled range within days).
+- Manual re-anchoring (trains nothing — "bailing water, not fixing the leak").
+- Multi-frame fusion (glare is systematic, not random → confidently wrong; offline-proven).
+- Lowering the accept threshold to make the CNN "look active" (commits wrong reads).
+- A polarizing lens / hardware fix (James will not buy one — off the table).
+- Constrained decode promoted to truth (positive-feedback flaw; left DISABLED).
+
+**Root structural cause:** the CNN is perpetually one step behind the meter's leading edge, and it can only learn a range AFTER the expensive, rate-limited gpt-4o oracle labels it — but that same oracle is the live reader AND recovery path on one shared metered quota, so it keeps running out. Reader + labeler + recovery are a single metered dependency that structurally can't keep up.
+
+**Durable EXITS (the only things that actually break the loop — pursue these, not another retrain):**
+1. **Move the oracle/labeler to a LOCAL vision model on the tower** (jackmint already runs `ollama` with `moondream`, plus `meter-ocr`). Unmetered → it can read + grade + label every frame continuously and never 429. This removes the quota bottleneck behind every documented outage, and it matches the 3-server plan (vision compute on the tower). **Highest leverage.** (Caveat: validate a local VLM's digit accuracy vs gpt-4o first — moondream is 1B and unproven on this LCD.)
+2. **Pre-train the CNN across the FULL future digit range** with synthetic Sensus-LCD renders (all `09xxxx…` prefixes, not just recent ones), so it is never out-of-distribution at the leading edge.
+3. **Accept whole-cubic-foot as the honest ceiling** — read positions 0–6 reliably (they drive the usage total) and stop fighting the mid-roll last 2 digits (blur-limited, ~unwinnable).
+
+**Live state 2026-07-08 evening:** tower CNN = `loc2-v9` (threshold 0.95), promoted by a strict oracle-only retrain after exporting 348 newly reviewed archive frames. The committed water-usage values are currently correct because they were re-anchored from real photo reads on 07-08 (see `meter-data-layer-journey.md`), NOT because the CNN is now a safe single-frame authority. `loc2-v9` improves the hard benchmark, but the durable production path is still the guarded low-digit phase tracker plus sparse trusted anchors.
+
+**Live state 2026-07-09 (issue #43 — the loop bit us again, via budget this time):** the meter FROZE for ~15h at `95376.901` because the 07-08 local-first experiment throttled the oracle to `$10/mo` AND the budget pacer measured spend against the wrong window (calendar month vs Natalie's real 10th→9th Azure cycle) → `daily_cap_effective=0` → oracle fully off → CNN blind at the `9548x` edge → nothing could read → frozen. ~797 gal unmeasured. Fixed: `zzzz-oracle-live-first.conf` (`BUDGET_ENABLED=0` removes the lock, `DAILY_CAP=1500` ceiling, `CYCLE_START_DAY=10`, `BANK_ENABLED=1`), removed the `$10` throttle, re-anchored to `95485.318` via the reliable stop→write-`meter_state.json`→start method (the `/reanchor-manual` API only moved the in-memory lock, not the committed ledger). Reader live again, banking gold, feeding the gated retrain. Full RCA: `rca-meter-freeze-2026-07-09.md` + GitHub issue #43.
+
+---
+
+## 2026-07-08 — "Out-of-the-box" reader exploration (gpt-4o TPM bump, local VLM, Azure Read)
+
+Session goal: get a cheaper/more reliable reader than the metered gpt-4o. Findings:
+
+**gpt-4o rate limit raised.** Azure deployment `smartgardenai1490` gpt-4o capacity **20K→48K TPM** (regional limit 49K). The 429s were a per-minute TPM cap, NOT a spent budget. It's on Natalie's VS Enterprise sub (~$150/mo credit = the real "monthly budget"). See `/memories/repo/smart-garden-meter.md` for the exact `az` command.
+
+**Tower can't run a strong local VLM.** GTX 970 = 4 GB VRAM. `moondream:1b` (1.3 GB) and `qwen2.5:3b` text (2.24 GB) fit fully on GPU. But `qwen2.5vl:3b` **vision** is **8.6 GB** → only 166 MB fit on GPU, rest on CPU → **minutes/frame, impractical.** So a GPU-resident vision model on this box is limited to ~≤3.5 GB (moondream-class, untested for digit accuracy). Bench script: `ocr-harness/bench_local_vlm.py` (vs gpt-4o truth in reread_cache).
+
+**Azure AI Vision "Read" OCR — promising, cheap, but needs preprocessing.** Dedicated vision resource `water-meter-vision-382d9` is DELETED (DNS dead); use the live AIServices `smartgardenai1490` at `eastus.api.cognitive.microsoft.com` (AZURE_OPENAI_KEY works for `/computervision/imageanalysis:analyze?api-version=2024-02-01&features=read`). Bench script: `ocr-harness/bench_azure_read.py`. Result on 13 real frames: **the correct meter digits are usually present in the raw OCR** (e.g. `095361945` exact; `195376592` = right digits + stray leading `1`), but strict 9-digit match was ~8% because of: (1) SENSUS logo + "Mfg Date 06/2016 Replace by 06/2036" text on the meter face polluting the read, (2) a stray leading char (the "S" misread as `1`) shifting the number, (3) glare on the high `095` digits — the SAME failure that kills the CNN. A quick hand-guessed LCD crop made it WORSE (clipped digits; note the 180° rotation mirrors the crop box).
+
+**Conclusion (reframes the whole problem):** OCR capability is NOT the blocker — **gpt-4o AND Azure Read both read these digits.** The universal missing piece across every method (CNN, gpt-4o, Azure, PaddleOCR) is **preprocessing: a correct tight digit crop + deglare + anchoring the static high `095` digits** (they barely change day-to-day). That's a bounded engineering task, not model-shopping.
+
+**Recommended next step:** reuse the tower CNN's EXISTING digit-region crop ("loc2", on the tower at `/home/jack/meter-cnn/`, not in this repo) → feed that clean crop to Azure Read (cheap) → score. If cheap OCR nails a clean crop, it becomes the free always-available reader and the recurring loop is broken. Also consider: track low-digit deltas + re-anchor high digits daily; and (hardware, James-resistant) a pulse/reed sensor to skip OCR entirely.
+
+**Tower networking gap:** `jackmint` (192.168.0.120) is on a FLAKY WiFi card — dropped to 100% loss under the model-download load, needed a reboot, ~12 ms/5% loss even when "healthy" (vs the NUC/Acer wired gigabit <1 ms/0%). TO-DO: wire it (onboard RJ-45 or a ~$15 USB-gigabit dongle like the Acer's). Not urgent for reads (tiny payloads, inference-bound) but essential for reliability if the tower becomes the primary reader.
+
+---
+
+## 2026-07-08 — Azure Read clean-crop benchmark: not enough with current camera quality
+
+Context: James's immediate frustration is meter camera quality. We tested the highest-leverage idea from the OCR exploration: reuse the CNN's loc2 crop and feed clean crops to Azure Read instead of the noisy full frame.
+
+Changes:
+- Extended `ocr-harness/bench_azure_read.py` to benchmark crop variants (`legacy`, `loc2`, `loc2_pad`, `loc2_wide`, `digit_strip`, `digit_strip_pad`) and preprocessing variants (`rgb`, `gray`, `contrast`, `binary`) against the Jul 8 gpt-4o reread truth cache.
+- Added optional `SAVE_CROPS=/tmp/...` output for visual inspection and suffix scoring (`suffix6`, `suffix5`) to measure whether Azure can at least read low digits for a future anchored-high-digits reader.
+- Ran the harness on the Acer against archived meter frames and the live Azure AI Vision endpoint. No service/data changes.
+
+Result:
+- First focused pass (`N=6`, 9 picked frames after recency inclusion; `legacy`, `loc2`, `loc2_pad` x `rgb`, `contrast`, `binary`): best variant was only `loc2_pad/rgb`, `exact9=1/9`, `first6=1/9`. Contrast/binary generally made Azure read nothing.
+- Second pass (`N=12`, 15 picked frames; `loc2_pad`, `legacy`, `digit_strip_pad`, RGB only): `best_any_variant` was `exact9=1/15`, `first6=1/15`, `suffix6=2/15`, `suffix5=3/15`.
+- Visual crop inspection showed the real blocker: the current camera/crop often clips or washes out the left/high digits, while wider crops include crisp `Mfg Da` text that Azure reads instead of the faint LCD. Tight odometer strips remove the label but then Azure often reads nothing or only partial low digits.
+
+Decision: Do **not** keep spending Azure calls on the current image stream as a reader. Azure Read may still be useful after camera/framing/lighting improves, but with today's camera quality it is not a cheap always-on replacement. The next lever is physical/image quality: get all 9 digits fully in frame with margin, reduce glare, and produce a crop where the odometer digits are sharper than the surrounding label text; then rerun `bench_azure_read.py`.
+
+---
+
+## 2026-07-08 — Creative software path: low-digit phase tracker prototype
+
+Context: James said the camera quality cannot realistically be improved further and asked for software to get the rest of the way. The right reframing is **not** "read all 9 digits from one bad frame"; it is "track a monotonic physical counter over time."
+
+Prototype:
+- Added read-only harness `ocr-harness/eval_temporal_constrained_cnn.py`.
+- It evaluates two non-OCR-style strategies against the Jul 6-8 gpt-4o truth cache:
+  - tower CNN constrained decode: ask `/cnn?anchor=<lock>&ceil=<physical_window>` for the most likely value inside a plausible meter window.
+  - suffix tracker: ignore broken high digits, use the CNN's low 3-5 digits as phase evidence, and choose the physically plausible next counter value whose suffix best matches.
+
+Findings:
+- Raw full-9 CNN exact remained `0/468`; full-frame OCR is the wrong target.
+- Naively accepting every constrained decode eventually latches to a wrong high-digit path and fails over long windows.
+- On a short 120-frame active-window sample, `suffix4_tol25` was promising: median error `6` counts (`0.045 gal`), `101/119` frames within `100` counts (`0.75 gal`), but with rare large slips.
+- Over the full cache with 10-minute truth resets simulating sparse trusted anchors, `suffix4` still had a useful median (`65` counts = `0.486 gal`) but p95 failed from discrete `10k`-count slips. That is a guardrail/consensus problem, not a camera-quality problem.
+- Event-local evaluation is the important result. Running `eval_temporal_constrained_cnn.py --events --summary-only` across 18 Jul 6-8 watering events showed:
+  - raw full-9 CNN: `0/458` exact.
+  - naive constrained full-value decode: median run-total error `2277.5` counts = `17.037 gal`; p90 `12013` counts.
+  - `suffix4_tol25`: median run-total error `56` counts = `0.419 gal`; p90 `157` counts = `1.17 gal`; `348/458` frame locks within `100` counts.
+  - worst suffix4 event was still off by `768` counts = `5.745 gal`, so this is not deployable without slip detection.
+- James correctly pointed out the final camera location started earlier than Jul 6-8. Added archive-backed truth mode (`--truth-source archive`) and reran on post-final-location data from `2026-06-25T22:00:00`:
+  - early slice through Jun 28: 9 events, `suffix4_tol25` was effectively exact (`median=0`, p90 `6` counts).
+  - full post-final-location holdout: 87 events / 2971 evaluated frame transitions. `suffix4_tol25` had median run-total error `6` counts = `0.045 gal`, p90 `68` counts = `0.509 gal`, max `768` counts = `5.745 gal`, and `2813/2971` frame locks within `100` counts.
+  - independent event-slope estimates did not beat greedy suffix4, but they are useful as a disagreement guard. With a 250-count greedy-vs-slope disagreement guard, 74/87 events would auto-accept with median `0.045 gal`, p90 `0.516 gal`, max `2.977 gal`, and 13 events would be flagged for sparse oracle/manual anchoring. With a 150-count guard, 62/87 events auto-accept, median `0.045 gal`, p90 `0.516 gal`, max `2.828 gal`, and 25 events are flagged.
+
+Decision: The next software direction is a **run-local meter tracker**:
+1. Keep high digits anchored from the last trusted oracle/manual/ledger anchor.
+2. During active watering, use low 4 digit phase tracking plus physical max-flow and known zone-rate priors.
+3. Require multi-frame consensus before allowing a suffix rollover or a 10k-count high-digit carry.
+4. Hold/mark uncertain instead of committing when the tracker loses lock.
+5. Use sparse gpt-4o/human anchors only to reset the high-order state, not to read every frame.
+
+This is more promising than more Azure Vision calls on the current camera image. It is not ready to silently replace oracle/manual reads. Practical promotion path: use suffix4 as a **low-cost run estimator** with a quality grade. Auto-accept only when suffix4 and an independent event-slope check agree; otherwise mark the run `needs_anchor` and spend one sparse oracle/human read at the end of the run.
+
+---
+
+## 2026-07-08 - Phase-tracker decision layer tuned on final-location holdout
+
+Context: After the first suffix-tracker result, James asked why the test was limited to Jul 6-8. The camera had been in its final location earlier, so the holdout was expanded to all archive-backed truth after `2026-06-25T22:00:00`.
+
+Changes:
+- Extended `ocr-harness/eval_temporal_constrained_cnn.py` with a production-shaped decision layer. It evaluates each watering event with:
+  - greedy `suffix4_tol25` low-digit phase tracking.
+  - independent event-slope estimate as a disagreement check.
+  - suffix coverage, minimum frame count, and zone-rate prior checks.
+  - `auto_accept` vs `needs_anchor` vs `reject` classification.
+- Added decision-profile tuning output to the event summary. This is still read-only/offline; no live service or meter data was changed.
+
+Validation:
+- Full post-final-location holdout: `87` watering events, `2971` evaluated frame transitions.
+- Raw full-9 CNN remained unusable for this purpose; the useful signal is the low 4 digits plus counter physics.
+- Plain `suffix4_tol25`: median run-total error `6` counts (`0.045 gal`), p90 `68` counts (`0.509 gal`), max `768` counts (`5.745 gal`), frame locks within 100 counts `2813/2971 = 94.68%`.
+- Tuned conservative profile: `guard_counts=400`, `min_coverage=0.85`, zone-rate ratio `[0.5, 1.8]`.
+- That profile auto-accepted `40/87` historical events, marked `45` `needs_anchor`, and rejected `2`; accepted-event median error `0.015 gal`, p90 `0.374 gal`, max `0.711 gal`.
+- Flag reasons across non-auto events: `low_suffix_coverage=22`, `zone_rate_outlier=25`, `too_few_frames=10`, `suffix_slope_disagree=3`.
+
+Decision: Do not spend more effort trying to make Azure Read solve the current camera image. The better next implementation is a guarded event-local meter tracker: auto-commit only the conservative profile, mark the rest `needs_anchor`, and use one sparse oracle/human end anchor to resolve uncertain runs. This makes software absorb much of the bad camera quality without pretending every frame is readable.
+
+Next:
+- Implement the phase tracker behind a feature flag as a candidate event total provider, not as a raw per-frame reader.
+- Store the decision grade and reasons on each event so Water Usage can show `auto_accept` vs `needs_anchor`.
+- Keep oracle/manual anchors as the authority for flagged events and as periodic high-digit resets.
+
+---
+
+## 2026-07-08 - Phase tracker deployed in Water Usage shadow mode
+
+Context: James wants the software path pushed as far as practical without silently corrupting the meter ledger. The first holdout used live tower HTTP reads; production can only depend on persisted `meter_reading.raw_reading`, so the deployed path was tuned against persisted raw evidence.
+
+Changes:
+- Added `server-prod/meter_phase_tracker.py`, a pure-Python read-only tracker that estimates event gallons from:
+  - last committed reading before the event as the high-digit anchor.
+  - raw CNN low-4-digit suffix during the event.
+  - monotonic counter physics and max-flow ceiling.
+  - independent event-slope estimate, suffix coverage, frame count, and zone-rate checks.
+- Wired `/api/water-usage` to include `phase_tracker{}` and added a Water Usage card showing `auto_accept`, `needs_anchor`, and `reject` events. This is shadow mode only: `writes_ledger=false`.
+- Deployed `meter_phase_tracker.py`, `dashboard.py`, and `templates/water_usage.html` to the Acer with timestamped backups and restarted `smart-garden-server`.
+- Follow-up improvement: added `server-prod/tools/refresh_phase_tracker_cache.py` and `meter_phase_tracker.db`, a separate shadow cache of current tower-CNN reprocess reads. The API now uses a hybrid rule:
+  - persisted ledger raw profile: `guard_counts=150`, `min_coverage=0.65`, zone ratio `[0.35, 2.5]`.
+  - current-CNN phase cache profile: stricter `guard_counts=50`, `min_coverage=0.65`, zone ratio `[0.35, 2.5]`.
+  - if both sources pass but disagree by more than 1 gallon, the event becomes `needs_anchor`.
+
+Validation:
+- Local and remote compile passed: `python3 -m py_compile meter_phase_tracker.py dashboard.py`.
+- `/login` returned `200`; service restarted active.
+- Authenticated `/api/water-usage?start=2026-07-08T00:00:00&end=2026-07-08T10:20:00&bucket_s=60` still reported total `823.76 gal`, integrity `missing_median=0`, `outlier=1`, and the tracker returned `13` events all `needs_anchor`. That is correct: several candidates are close, but persisted raw coverage/slope agreement is too weak in that repaired window and one event candidate is badly wrong.
+- Long-window persisted-raw smoke test (`2026-06-25T22:00:00` to `2026-07-08T10:20:00`) returned `88` events: `20 auto_accept`, `56 needs_anchor`, `12 reject`; accepted-event max shadow error `0.576 gal`, p90 `0.554 gal`.
+- Reprocessed the same long window through the current tower CNN into the separate phase cache (`5067` frames cached, no missing images/errors). A loose cache-only profile accepted `30` events but allowed a `1.13 gal` miss, so it was rejected.
+- Deployed hybrid live result for that long window: `24 auto_accept`, `55 needs_anchor`, `9 reject`; accepted-event max shadow error `0.576 gal`, p90 `0.554 gal`; auto-accept sources were `10 ledger_raw`, `4 phase_cache`, `10 both`.
+- After the strict `loc2-v9` retrain, refreshed the phase cache for the same `5067` frames. The live API still returned `24 auto_accept`, `55 needs_anchor`, `9 reject`; accepted-event max shadow error was `0.554 gal`, p90 `0.554 gal`. Auto-accept sources shifted to `13 ledger_raw`, `4 phase_cache`, `7 both`. This is a useful negative result: v9 improves the CNN benchmark, but it does not make the event tracker safe enough to broaden production auto-acceptance.
+
+Decision: The safe deployed shape is now visible in the product: accept only when persisted raw or stricter current-CNN cache evidence is strong, otherwise surface `needs_anchor`. This is the closest software-only route to durable accuracy with the current camera because it prevents bad OCR from becoming invisible truth.
+
+Next:
+- Run shadow mode for new events and compare against authority/manual anchors.
+- If the live card keeps accepted-event error under 1 gallon, add a DB-backed candidate table so decisions are retained historically.
+- Only after retained shadow evidence stays clean should `auto_accept` events be allowed to fill missing event totals; `needs_anchor` must continue to require sparse authority/human confirmation.
+
+---
+
+## 2026-07-08 - Strict high-quality retrain promoted `loc2-v9`
+
+Context: James asked whether more training should be done and specifically whether the dataset was limited to the highest-quality data. A normal retrain initially tried to include weak outside-tail labels; that was stopped. The accepted run used only oracle/reviewed training data plus the existing synthetic/recombined support, with outside-tail weak labels disabled.
+
+Changes:
+- Exported `348` newly reviewed high-quality archive labels before `2026-07-08T00:00:00` into the tower training bank.
+- Ran a one-off strict tower retrain with `OUTSIDE_TAIL_TRUST=0.0`, `OUTSIDE_TAIL_MAX_ROWS=0`, and `OUTSIDE_TAIL_MAX_PER_LABEL=0`.
+- The training log reported `1082` trusted propagation labels, `0` outside-tail labels, `7141` corrected manual overlay rows, `193` confirmed rows, and `8063` trusted labels in replay.
+
+Validation:
+- Champion `loc2-v8` hard benchmark: per-digit `0.817`, full-9 `0.498`.
+- Challenger `loc2-v9` hard benchmark: per-digit `0.858`, full-9 `0.511`.
+- Ground-truth replay improved from `0.936/0.798` to `0.946/0.806` digit/full-9 over `8063` trusted labels.
+- Hard-frame eval: challenger fixed `5`, newly broke `2`, net `+3`.
+- Regression set remained `0/9` for both champion and challenger.
+- The gate promoted `loc2-v9`; tower `/health` now reports `version=loc2-v9`, model `/home/jack/meter-cnn/meter_cnn.pt`, threshold `0.95`.
+
+Decision: This was the right retrain: high-quality labels only, hard-frame gate, no weak tail poisoning. It is a real incremental model improvement, not a full solution. The v9 phase-cache refresh did not broaden safe production auto-acceptance beyond `24/88` events, so Water Usage must keep treating the tracker as guarded shadow evidence until it has enough anchor coverage to prove broader accuracy.
+
+Next: Keep collecting high-quality reviewed/oracle labels, but prioritize the event tracker and anchor workflow over chasing full-9 single-frame CNN accuracy. The near-term production improvement is to spend sparse trusted anchors on `needs_anchor` events, then let the low-digit tracker handle the easy events with explicit error bounds.
+
+---
+
+## 2026-07-08 - Phase tracker anchor queue deployed
+
+Context: The shadow tracker was useful but still stopped at "needs_anchor" without making that state actionable. James pushed to keep going toward the actual goal: durable accuracy despite the camera.
+
+Changes:
+- Extended `meter_phase_tracker.db` with `phase_event_decision`, a shadow-only table that persists every tracker decision by `watering_event.id`.
+- `/api/water-usage` now writes the current shadow decisions to that table whenever it evaluates a window. This does **not** write `meter_reading`, `watering_event`, `archive_frame`, or `flow_sample`.
+- Added `/api/water-usage/phase-tracker/queue` to inspect persisted decisions by window/decision.
+- Added `anchor_request{}` to each non-auto tracker event. It recommends two real-photo anchors: a start-side frame and an end-side frame, each with timestamp, image file, method/confidence, and a small frame-window for the existing photo modal.
+- Updated the Water Usage tracker card to show anchor buttons for `needs_anchor`/`reject` rows. Buttons open the existing frame modal and correction flow around the recommended photo.
+- Fixed early-reject tracker results so they keep `event_id`, `start`, `end`, and zone metadata; otherwise four insufficient-row rejects could not be persisted.
+
+Validation:
+- Local and remote `py_compile` passed.
+- Deployed to Acer with timestamped backups and restarted `smart-garden-server`; service active.
+- Full post-final-location window (`2026-06-25T22:00:00` to `2026-07-08T10:20:00`) still reports the same tracker decision profile: `24 auto_accept`, `55 needs_anchor`, `9 reject`.
+- Persisted table now matches that live API exactly: `88` rows total with `24/55/9`.
+- Queue check: all `55` `needs_anchor` rows have two recommended anchor frames.
+- July 8 repair window remains unchanged: total `823.76 gal`, `missing_median=0`, `outlier=1`, and `13/13` events stay `needs_anchor`.
+
+Decision: This is the correct next production shape. The software now separates "safe enough to estimate" from "needs sparse authority" and keeps a durable work queue without corrupting canonical history. The next promotion step is not automatic ledger writing yet; it is to resolve queue items with trusted photo/oracle anchors, compare the tracker candidate against those resolved totals, and only then allow `auto_accept` to fill missing event totals.
+
+Next:
+- Add a small resolver tool that consumes two trusted anchor readings for one queued event, computes the authoritative event gallons, and records the comparison in the phase DB.
+- After enough resolved queue rows stay under the target error bound, add a guarded writer for `auto_accept` only. `needs_anchor` and `reject` must remain blocked until authority resolves them.
+
+---
+
+## 2026-07-08 - Resolver, guarded writer, and continuous timer shipped
+
+Context: James correctly pushed that stopping at a queue still did not achieve the goal. The next requirement was an end-to-end path: evaluate, validate, safely apply only proven auto-accept totals, and keep running.
+
+Changes:
+- Added `phase_event_resolution` in `meter_phase_tracker.db`.
+- Added `tools/resolve_phase_tracker_queue.py`, which resolves persisted tracker decisions against canonical ledger shadow truth and records candidate/authority/error/status.
+- Added `/api/water-usage/phase-tracker/resolutions` and surfaced `resolution_summary` inside `/api/water-usage phase_tracker{}`.
+- Added `tools/apply_phase_tracker_auto_accept.py`, a guarded writer for `watering_event.est_gallons/est_cf` only:
+  - dry-run by default.
+  - applies only `auto_accept_validated` rows.
+  - requires promotion gate pass.
+  - backs up `smart-garden.db` before writes.
+  - records each write in `phase_event_apply`.
+  - skips already-applied rows to avoid repeat audit spam.
+- Added `tools/run_phase_tracker_pipeline.py`, an end-to-end runner:
+  - optional phase-cache refresh.
+  - local Water Usage API evaluation/persistence.
+  - resolution scoring.
+  - optional guarded auto-apply.
+  - supports `--gate-start` so a small recent window can use the full validation corpus as the safety gate.
+- Fixed an important feedback flaw: the tracker no longer prefers mutable `watering_event.est_gallons` as its prior when a zone prior exists. Zone median/estimate is the primary prior; event estimate is fallback only.
+- Added a `frame_error_spread` guard: auto-accept requires `p95_frame_error_counts <= 100`. Evidence sweep showed this was the clean break point; `<=100` kept zero failures, while `<=125` let a `1.13 gal` bad accept through.
+- Installed and enabled systemd timer `smart-garden-phase-tracker.timer` on the Acer. It runs every 30 minutes:
+  - `run_phase_tracker_pipeline.py --days 2 --refresh-cache --apply-auto --require-integrity-ok --target-error-gal 0.75 --min-validated 20 --gate-start 2026-06-25T22:00:00`
+  - The first timer run completed successfully as a no-op because current two-day integrity is not OK; blocked-by-integrity exits success so the timer stays healthy.
+
+Validation:
+- No-feedback + p95 guard full validation window (`2026-06-25T22:00:00` to `2026-07-08T10:20:00`): `34 auto_accept`, `45 needs_anchor`, `9 reject`.
+- Resolver at `0.75 gal` target: `34` auto-accept rows, `0` failures, max accepted error `0.486 gal`.
+- Guarded writer applied `43` validated event-estimate rows total (`24` before feedback fix, then `19` under the stricter p95/no-feedback profile), with backups:
+  - `/home/jamesearlpace/meter-history-backups/20260708-215045-phase-auto-accept-preapply`
+  - `/home/jamesearlpace/meter-history-backups/20260708-215816-phase-auto-accept-preapply`
+- Post-apply dry-run is idempotent: `0` pending preview rows, `34` skipped as already applied under the current guard.
+- July 8 hard window still has ledger total `823.76 gal`, `missing_median=0`, and the known `outlier=1`. The timer refuses current two-day auto-writes while that integrity warning is present.
+- Timer state verified: `smart-garden-phase-tracker.timer` enabled/active; next run scheduled; last service run exited `0/SUCCESS`.
+- Follow-up after the post-10:27 visual-anchor ledger repair: broadened validation back to camera cutover (`2026-06-24T17:03:00` to `2026-07-08T22:27:35`). Current result: `35 auto_accept`, `81 needs_anchor`, `17 reject`; promotion gate still passes at `<=0.75 gal` with `0` auto failures and max accepted error `0.486 gal`.
+- Hardened long cache refreshes with `--allow-errors` so a single tower timeout is reported but does not abort an otherwise useful historical validation run.
+- Adjusted `run_phase_tracker_pipeline.py --require-integrity-ok`: missing medians / error-severity warnings still block writes; median-outlier warnings alone do not. This matches the Water Usage semantics: outliers are review warnings, not proof the meter failed.
+
+Decision: The production path is now end-to-end but guarded:
+1. auto-accept only if tracker decision passes the no-feedback profile and p95 frame-spread guard,
+2. validate against ledger shadow truth with target `<=0.75 gal`,
+3. apply only validated auto-accept rows,
+4. block recent-window auto-writes if Water Usage integrity is not OK,
+5. keep all uncertain rows in the anchor queue.
+
+Remaining hard limit: this still depends on the canonical ledger being correct enough to act as authority. When the ledger integrity card is not OK, the timer deliberately stops before canonical writes and leaves the queue for manual/oracle anchor resolution.
+
+---
+
 ## TL;DR
 - **✅ STUCK-LOCK ROOT CAUSE FIXED — self-healing now automatic (2026-06-23, see bottom entry "Self-healing stuck-lock recovery"):** The accuracy bug below (lock anchored wrong vs the glass, in EITHER direction) persisted because the per-frame physics cap (`ORACLE_MAX_ADVANCE`) blocked every honest correction once the lock was wrong by more than the cap — so the meter could only recover via a manual re-anchor. Root cause: **trust was gated by MAGNITUDE, not by EVIDENCE STRENGTH.** Fix: a consensus auto-heal — when many independent reads over minutes agree, cluster tightly (not erratic garble), and the authority model confirms on fresh frames, the system concludes the LOCK is wrong and auto-re-anchors to the live consensus (no hardcoded value, no human step). **Verified live:** lock auto-corrected `94740084 → 94791096` after a restart left it ~51 ft³ stale-low — 8 agreeing reads + 2 authority confirms over 208s, fully automatic. Works in both directions for any future stuck-lock cause.
 - **🚨 ORIGINAL ACCURACY BUG (2026-06-23 — see bottom entry "Archive readings anchored ~42 ft³ high"):** The archive/history readings were reading **HIGH vs the physical meter glass** (e.g. system `094830801` while the LCD plainly shows `094788507`, ~+42 ft³ / ~315 gal). Systematic (positions 4–9), and the wrong values increase smoothly frame-to-frame, so the dashboard looked healthy. The **persistence** of this (the lock being unable to self-correct) is now fixed by the auto-heal above; per-frame read accuracy under glare is still imperfect but the system now recovers automatically instead of staying stranded.
@@ -560,3 +831,46 @@ Validation:
 - `meter-cnn-retrain.timer` is inactive in both user and system scopes.
 
 Decision: Leave `loc2-v7` as the stabilized live model. The retrain timer must not be re-enabled at the current cadence: it fires about every 10 minutes while a full retrain takes roughly an hour, which creates duplicate trainer pile-ups. Fix the timer/locking policy before re-enabling retraining.
+
+## 2026-07-04 - loc2-v7 high/middle digit regression at current leading edge
+
+Context: Water Usage spot checks showed the graph's committed reading and the clicked frame's raw CNN guess did not match. The graph/ledger sync bug was fixed separately; this pass investigated whether raw CNN accuracy had regressed.
+
+Findings:
+- Yes, it used to be more accurate in the accepted band. On 2026-06-30, `loc2-v7` scored `6094/6194 = 98.386%` authoritative exact, with `min_conf >= 0.95` exact.
+- Current live oracle-graded samples are `0/18` for `loc2-v7`, and July 4 is `0/5`.
+- The raw failure is systematic high/middle digit loss, not the previous low rolling digit tail: examples include `095028829 -> 095138820`, `095037792 -> 095137187`, and `095030982 -> 095150906`.
+- Tower health is still `loc2-v7`, threshold `0.95`, so this is not an obvious service rollback.
+- The current image is still framed and human-readable, but contrast/glare around the middle/high digits is weak.
+- Constrained decoding on recent oracle frames is informative but not reliable enough to promote: in a 40-frame sample, about half were close and many were ~1000 counts off.
+
+Action:
+- Logged `BUG-meter-cnn-high-digit-regression-2026-07-04.md`.
+- Fixed a latent server config hazard: live archive/constrained CNN acceptance was still overridden to `0.70`, despite the `loc2-v7` proof only supporting `0.95`. Updated `dashboard.py` defaults and `deploy.ps1`, deployed `dashboard.py`, and verified live env now sets all archive/reprocess/constrained CNN gates to `0.95`.
+
+State: Raw CNN should be considered degraded on current `0951xx` leading-edge frames. Continue using committed oracle/manual/propagated readings for Water Usage; preserve raw guesses as evidence. Durable fix is retraining/fine-tuning with verified current `09513x-09515x` frames, followed by a new confidence-band proof before relaxing any gate.
+
+Follow-up:
+- Added 14 explicit `codex_visual_label` rows from rotated/enlarged current LCD crops (`095138871` through `095154201`) with no oracle calls.
+- Exported the broader verified archive window from `2026-07-04T05:45:00`: 174 eligible rows, 160 new image copies/manual-label rows, all raw-CNN-wrong.
+- Found and fixed a retrainer issue: synthetic rows were still generated around stale hardcoded `094...` prefixes. `cnn/retrain.py` now builds synthetic high-order prefixes from the newest trusted labels, so current examples synthesize around prefixes like `09514`/`09515`.
+- First forced retrain with only the 14 visual labels did not promote: challenger `0.544 <= 0.549`, hard-frame net `-1`.
+- Second forced retrain with 160 current labels promoted `loc2-v8`: refreshed gate `0.546 > 0.517`, ground-truth replay full-9 `0.822` vs champion `0.808`, hard-frame eval fixed 6 and broke 0.
+- Post-promotion read-only current eval over 199 oracle frames since `2026-07-04T05:45:00`: positions 0-5 were `199/199` correct, pos6 `197/199`, pos7 `180/199`, pos8 `108/199`. This confirms the high/middle digit collapse is materially fixed, while final rolling digits remain weak.
+- No current sample reached `min_conf >= 0.95`, so direct CNN acceptance remains effectively off for now. Fresh live raw guesses are now close and in-range (`095162721` vs committed `095162726`), but still `raw_conf=low`; committed Water Usage should keep using oracle/manual/propagated ledger values.
+
+## 2026-07-08 - tower-first OCR/retrain operations
+
+Context: OpenAI spend was exhausted/low, so the gaming tower should do as much meter work as possible and paid vision should only be a sparse authority check.
+
+Actions:
+- Verified tower services healthy: `meter-ocr` on `5200`, `meter-cnn` on `5201`, and `ollama` active.
+- Live CNN is now `loc2-v8` at threshold `0.95`. The threshold remains strict because current raw reads are still low-confidence on the rolling/right digits.
+- Tried local `moondream` on a recent archived frame; it did not produce a usable meter reading, so it is not a drop-in replacement for GPT-4o authority reads.
+- Re-enabled `meter-cnn-retrain.timer` safely with a 2-hour cadence and a `flock`-guarded service:
+  - old cadence: about every 10 minutes, which caused duplicate trainer pile-ups because a full retrain can take roughly 1-2 hours.
+  - new cadence: `OnBootSec=10min`, `OnUnitActiveSec=2h`, `RandomizedDelaySec=5min`.
+  - service command: `/usr/bin/flock -n /home/jack/meter-cnn/retrain.lock .../retrain.py`.
+- Immediate timer run skipped correctly: `new frames since last retrain: 0 (threshold 25)`.
+
+Decision: Keep the tower as the heavy local OCR/training box. Use OpenAI/Azure only for sparse anchor frames that unblock stale-lock repair or training labels. Do not lower the `0.95` commit gate without a fresh confidence-band proof.

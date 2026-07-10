@@ -53,9 +53,9 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
   Write-Host "=== Iteration $i (elapsed $([int]$elapsed) min) ===" -ForegroundColor Cyan
 
   # Fresh codex exec each iteration: small context, re-reads UX-AUDIT.md.
-  # Prompt is piped via stdin ('-' sentinel) to avoid arg word-splitting.
-  $prompt | codex exec --skip-git-repo-check --sandbox workspace-write `
-    --output-schema $schema -o $outJson - 2>&1 | Out-Null
+  # Prompt via file-redirect through cmd /c (gives codex a proper stdin EOF;
+  # piping via PowerShell hangs under -File).
+  cmd /c "codex exec --skip-git-repo-check --sandbox workspace-write --output-schema `"$schema`" -o `"$outJson`" - < `"$promptTxt`"" 2>&1 | Out-Null
 
   if (-not (Test-Path $outJson)) {
     Add-Content $logFile "- iter $i : NO verdict file produced - stopping (check codex auth/errors)."

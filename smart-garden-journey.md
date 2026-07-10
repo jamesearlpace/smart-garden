@@ -1,7 +1,25 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-06-28 (canonical meter data layer built + whole `/water-usage` page re-pointed to it — full chronological record in **`meter-data-layer-journey.md`**)
+**Last Updated:** 2026-07-08 (water-meter history re-repaired from real photos, guardrails added, and OCR path reframed — details in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+
+## 2026-07-08 - Meter data repair + OCR next step pointer
+
+Context: A long meter/fleet session repaired the July 6-8 water history and rechecked the tower-first OCR plan. Keep the detailed chronology in the meter-specific journey docs; this master doc only points to the current state.
+
+Changes and validation:
+- `meter-data-layer-journey.md` now holds the canonical July 6-8 evidence-based repair: 499 real archived meter frames re-read, Jul 8 total corrected to `823.76 gal`, Grapes 07:35 corrected to about `67 gal`, and unlogged whole-house movement kept unattributed instead of assigned to a zone.
+- `meter_ledger.run_rate_stats()` now bridges clean read segments across sparse interpolated rows with `clean_max_gap_s=120`, so repaired windows still produce real per-event medians.
+- `/api/water-usage` now returns `integrity{}` and `/water-usage` shows a Data integrity card. Live spot-check for `2026-07-08T00:00:00 -> 10:20:00` returned `missing_median_count=0`, one `median_outlier` warning for Zone 8 Garden at `09:21:50`, and total `823.76 gal`.
+- `meter-cnn-journey.md` now documents the recurring CNN leading-edge loop and the 2026-07-08 OCR exploration: tower `jackmint` runs `meter-cnn` `loc2-v9` at threshold `0.95`, local large VLMs are impractical on the GTX 970, and Azure Read OCR is not reliable enough on the current camera stream even with loc2-style crops.
+- Highest-leverage next step changed after testing: implement the guarded low-digit phase tracker in `ocr-harness/eval_temporal_constrained_cnn.py` as a feature-flagged event-total candidate. On the post-final-location holdout (`87` events since `2026-06-25T22:00:00`), conservative tuning auto-accepted `40/87` events with accepted-event max error `0.711 gal`; the other events should be marked `needs_anchor` and resolved with one sparse oracle/human end anchor.
+- Follow-through: the tracker is now deployed read-only in Water Usage shadow mode via `server-prod/meter_phase_tracker.py` and `/api/water-usage phase_tracker{}`. Persisted raw-CNN evidence is weaker than the live HTTP harness, so a separate current-CNN phase cache was added (`meter_phase_tracker.db`, refreshed by `tools/refresh_phase_tracker_cache.py`) and guarded with a stricter hybrid rule. Long-window smoke test now auto-accepts `24/88` events with accepted-event max shadow error `0.554 gal`; July 8 repair-window events correctly stay `needs_anchor`.
+- Strict high-quality retrain follow-up: exported `348` newly reviewed archive labels, disabled weak outside-tail labels, and promoted tower CNN `loc2-v9` (`loc2-v8` hard full-9 `0.498` -> `loc2-v9` `0.511`; replay full-9 `0.798` -> `0.806`). After refreshing all `5067` phase-cache frames with v9, the live shadow tracker remained `24 auto_accept / 55 needs_anchor / 9 reject`, so the model improved but did not justify broader automatic trust.
+- Anchor-queue follow-through: `meter_phase_tracker.db` now persists every shadow event decision in `phase_event_decision`, `/api/water-usage/phase-tracker/queue` exposes the queue, and each `needs_anchor`/`reject` row carries two recommended real-photo anchors for the existing frame modal/correction flow. Full-window validation persisted `88` rows matching the live API exactly (`24/55/9`), and all `55` `needs_anchor` rows had two frame recommendations. Canonical meter/watering data is still untouched.
+- End-to-end follow-through: added resolver/writer/pipeline tooling and enabled `smart-garden-phase-tracker.timer` on the Acer. Current guarded profile uses zone priors first, rejects high frame-spread (`p95_frame_error_counts > 100`), validates auto-accepts against ledger truth at `<=0.75 gal`, and applies only validated `auto_accept` rows to `watering_event.est_gallons/est_cf` with backups + phase audit rows. Full-window current validation: `34 auto_accept / 45 needs_anchor / 9 reject`, `0` auto failures, max accepted error `0.486 gal`; `43` validated event estimates have been applied. The timer runs every 30 minutes but blocks writes when Water Usage integrity is not OK; current Jul 8 two-day window blocks because of the known Zone 8 median outlier.
+- Follow-up after James noticed the 720-minute page still showed blanks/zero: found a real post-10:27 ledger flatline at `095376.901 ft3` while photos advanced to `095432.150`. Applied `tools/repair_20260708_post1027_visual_anchors.py` with backup `/home/jamesearlpace/meter-history-backups/20260708-223058-post1027-visual-anchors-preapply`; last-12-hour total is now about `395.5 gal`, missing medians dropped `6 -> 0`, and the zone table shows physical meter totals/GPMs. Broadened tracker validation back to camera cutover: `35 auto_accept / 81 needs_anchor / 17 reject`, `0` auto failures, max accepted error `0.486 gal`.
+
+Verification note: `smart-garden-server` live API and tower HTTP services were spot-checked from the LAN. The Azure TPM bump could not be independently rechecked from the live host because `az` was not available/logged in there during this documentation pass; keep the existing `meter-cnn-journey.md` note unless a later Azure CLI check contradicts it.
 
 > **RESUME HERE — RCA: the meter graph can't show what the OCR read (session 2026-06-27 eve):**
 >
@@ -1647,6 +1665,7 @@ Context: The Zones/Forecast website had a Run button, but it presented the confi
 
 Changes:
 - Added a compact manual-run duration selector beside each installed zone's Run button on `/moisture-sim` / Forecast all-zones view.
+- Added the same duration selector to the main dashboard Zones panel and irrigation map side panel.
 - Supported durations are exactly `1, 5, 10, 15, 20, 25, 30` minutes.
 - Hardened `/api/run` to reject other durations and pass the selected runtime into the irrigation engine.
 - Added engine-side selected-runtime tracking plus a timer-based manual close, with the existing scheduler and safety timeout still acting as backstops.
@@ -1655,10 +1674,30 @@ Validation:
 - `python -m py_compile server-prod/dashboard.py server-prod/irrigation.py`
 - `python server-prod/tools/check_zone_labels.py`
 - Inline JavaScript syntax check passed after substituting Jinja placeholders.
-- Deployed `dashboard.py`, `irrigation.py`, and `templates/moisture_sim.html` through `deploy.ps1`; smoke `/login` returned `200`.
-- Live file checks confirmed the duration selector, allowed-minute guard, and engine `manual_runtime_min` hook are present; `smart-garden-server` is active.
+- Deployed `dashboard.py`, `irrigation.py`, `templates/moisture_sim.html`, and later `templates/index.html` through `deploy.ps1`; smoke `/login` returned `200`.
+- Live file checks confirmed the duration selectors, allowed-minute guard, and engine `manual_runtime_min` hook are present; `smart-garden-server` is active.
 
-State: Manual zone runs can now be started from the website for one of the approved durations, and selected manual runs auto-close at the chosen duration instead of waiting for the zone's configured runtime.
+State: Manual zone runs can now be started from Forecast, the main Zones panel, and the irrigation map for one of the approved durations, and selected manual runs auto-close at the chosen duration instead of waiting for the zone's configured runtime.
+
+---
+
+## 2026-06-30 - water-usage sprinkler-zone median report
+
+Context: The Water Usage page needed bottom-of-page reporting for median water usage per sprinkler zone.
+
+Changes:
+- Added `zone_report` to `/api/water-usage`, grouped by installed sprinkler zones.
+- The report includes selected-window run count, median gallons/run, median GPM, and total gallons, plus a 90-day baseline run count, median gallons/run, median GPM, and last run.
+- Added a bottom card to `templates/water_usage.html` that renders the zone report whenever the selected range reloads.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/irrigation.py`
+- `python server-prod/tools/check_zone_labels.py`
+- `node --check` on the extracted Water Usage inline JavaScript.
+- Deployed `dashboard.py` and `templates/water_usage.html` through `deploy.ps1`; smoke `/login` returned `200`.
+- Authenticated live API check for `/api/water-usage?minutes=60&rate_mode=actual` returned 7 sprinkler-zone report rows with selected-window and 90-day baseline medians.
+
+State: `/water-usage` now has a bottom report showing median per-run water usage by sprinkler zone.
 
 ---
 
@@ -1697,3 +1736,458 @@ Validation:
 - Deployed through `deploy.ps1`; smoke `/login` returned `200`.
 
 State: `/#cam` should no longer show broken icon glyphs in the nav or Cam controls. Other deeper dashboard sections still contain old emoji text, but the visible Cam path and navigation shell are cleaned.
+
+---
+
+## 2026-07-01 - full website data/UI audit pass
+
+Context: Deep audit request for every page and the data quality behind the public sprinkler site, with specific suspicion around the Cam page and Water Usage over-time data.
+
+Changes:
+- Fixed `/api/schedule-7day` so zero-minute weather-scaled runs are not emitted or treated as soil refills. Manual/off drip zones remain out of the auto schedule.
+- Added canonical `meter_ledger.latest_committed_reading()` and `meter_ledger.usage_for_window()` helpers.
+- Updated the Cam APIs and dashboard Cam panel to show the accepted ledger meter reading separately from stale raw OCR lower-bound rows.
+- Updated Water Usage zone medians to use physical meter ledger gallons when the run window is covered and plausible, with explicit fallback counts for configured estimates.
+- Added the missing `cam_device.html` template so `/cam-device` no longer 500s and now shows cam upload/WiFi/OCR/archive telemetry.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/meter_ledger.py server-prod/irrigation.py server-prod/flow_monitor.py`
+- `python server-prod/tools/check_zone_labels.py`
+- Inline JS syntax checks passed for `index.html`, `water_usage.html`, and `cam_device.html`.
+- Deployed through `deploy.ps1` in three guarded steps; smoke `/login` returned `200` each time.
+- Live checks: schedule has no zero-minute rows and no manual drip schedule rows; `/api/water-usage/audit?minutes=60` verdict `accurate`, source `meter_ledger`; `/api/cam/readings` returns accepted ledger reading `95045.723 ft3` separately from stale raw OCR `095029589`; crawled primary pages and cam tool pages all returned `200`, with `/forecast-vs-actual` redirecting successfully to `/forecast`.
+
+State: The main site pages are serving, the worst misleading numbers are corrected or explicitly labeled, and Cam/Water Usage now separate accepted data from stale/raw evidence.
+
+---
+
+## 2026-07-01 - Water Usage bug audit and trust boundary
+
+Context: Follow-up audit asked whether Water Usage data was bug-free. Live event-window checks found two real bugs.
+
+Findings:
+- Event windows before the stabilized meter-ledger cutoff could show huge impossible usage totals from old OCR/re-anchor history, while the audit still said `accurate` because chart total matched the same high-water math.
+- Exact event windows could undercount the first boundary interval because `/api/water-usage` started from the first ledger row inside the selected window and ignored the immediately prior row.
+
+Changes:
+- Added a Water Usage trust boundary at `2026-06-25T22:00:00`.
+- `/api/water-usage/events` now excludes untrusted pre-cutoff events by default and returns the trust cutoff metadata.
+- `/api/water-usage` and `/api/water-usage/audit` return `trust` metadata and mark pre-cutoff windows as review/untrusted.
+- Added `meter_ledger.reading_before()` and seeded Water Usage chart/audit calculations with the close prior ledger row without plotting an out-of-window point.
+- Added UI warnings so pre-cutoff custom windows are not visually presented as trustworthy precise totals.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/meter_ledger.py`
+- `python server-prod/tools/check_zone_labels.py`
+- Inline JS syntax check passed for `water_usage.html`.
+- Deployed through `deploy.ps1`; smoke `/login` returned `200` with backups `.bak.20260701-065423`.
+- Bad 2026-06-24 windows now return `trust.trusted=false` and audit verdict `review`.
+- Event quick-select default returned no untrusted events; oldest returned event was `2026-06-27T07:57:35`.
+- Boundary cases now match the ledger helper: Grapes `22.31 gal`, Zone 4 `7.65 gal`, Zone 6 `37.83 gal`.
+- Rolling windows 5/15/60/180/720/1440/4320 min reconcile total vs line vs summed bars; first 20 trusted recent event windows all audited `accurate`.
+
+State: Trusted Water Usage windows now reconcile end-to-end. Pre-cutoff custom history remains visible for investigation but is explicitly marked review/untrusted.
+
+---
+
+## 2026-06-30 - Cam stale readings collapsed at API layer
+
+Context: The Cam readings table still showed long runs of repeated stale lower-bound rows such as `>=095029589`. The first UI collapse compared the full note text, but the note includes a changing stale-age counter, so rows like `stale 245256s` and `stale 245250s` did not group reliably. Browser caching could also keep older JS alive.
+
+Changes:
+- Updated the Cam table collapse rule to ignore the changing stale-age note.
+- Added the same stale-run collapse inside `MeterReader.get_readings()`, so `/api/cam/readings` returns one newest representative row with `_collapsed`, `_collapsed_oldest_ts`, and `_collapsed_oldest_captured` metadata for repeated stale lower-bound runs.
+- Kept raw readings in memory unchanged; this is only the display/API view returned by `get_readings()`.
+
+Validation:
+- `python -m py_compile server-prod/cam_ocr.py`
+- Direct harness confirmed three stale rows with the same lower-bound reading but different stale-age notes collapse to one returned row with `_collapsed: 3`.
+- Deployed only `cam_ocr.py` through `deploy.ps1`; smoke `/login` returned `200`.
+
+State: Repeated stale Cam rows should now collapse even if the browser is running older table-rendering JavaScript. Authenticated JSON could not be checked through `Invoke-WebRequest` because the public API path served the login page without a session.
+
+---
+
+## 2026-07-02 - meter archive retention and OCR root-cause fix
+
+Context: User found a recent meter image missing and current meter OCR wrong. Requirement clarified: archive every cam frame possible at ~5s cadence for 12 months, and fix OCR root cause without hardcoded meter values.
+
+Findings:
+- Live archive was configured for idle `METER_ARCHIVE_INTERVAL=60` seconds, flow `5` seconds, and a 30 GiB FIFO cap. It had 23,919 images/1.2 GiB from 2026-06-23 onward, not 5-second all-day retention.
+- Current disk has ~302 GiB free; current average JPEG is ~48 KiB. A 365-day, 5-second archive needs ~284 GiB. With a 50 GiB safety reserve, safe archive capacity is ~253 GiB, so this disk cannot safely guarantee 12 months at 5-second cadence without more storage or a smaller frame size.
+- OCR drift was circular trust: constrained CNN and hinted oracle/archive reads could use a bad lock as context, then mark bad values as trusted/reviewed. The oracle prompt was too strong ("almost certainly within a few counts"), and a no-hint oracle can also garble high digits while seeing the low digits correctly.
+
+Changes:
+- Changed archive defaults to 5-second target, 365-day target retention, 280 GiB cap, and 50 GiB free-space guard. `/api/cam/status` now reports retention feasibility/forecast.
+- Added constrained-CNN raw-tail conflict detection: conflicting constrained values are not admitted to the median window and force oracle review.
+- Softened the oracle prompt so prior readings are advisory and the image wins.
+- Added physical splice/bounds guards to live oracle re-anchor, manual oracle re-anchor, and archive reread so high-digit garbles like `895...` cannot be applied directly.
+- Re-anchored the live meter to `095074.203` using the latest image's oracle-read low digits spliced onto the stable physical prefix; fixed the transient impossible maintenance row and recomputed ledger deltas/daily rollups.
+- Cleared the stale truth guard after correction.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/vision_oracle.py`
+- `git diff --check -- server-prod/dashboard.py server-prod/vision_oracle.py`
+- Backed up live `meter_archive.db`, `meter_ledger.db`, and `/tmp/meter_state.json` under `~/smart-garden-server/backups/*.pre-ocr-retention-20260702-064213`.
+- Deployed `dashboard.py` and `vision_oracle.py`; `smart-garden-server` restarted active.
+- DB check: latest archive/ledger rows show `095074.203`; no `committed > 200000000` or `abs(delta_cf) > 1000` rows remain.
+- Archive forecast: 23,947 files, 1.08 GiB, avg ~48,308 bytes, 365d@5s estimate ~283.76 GiB, safe capacity ~252.75 GiB, feasible=false with current safety reserve.
+
+State: Live meter display is corrected and future OCR paths have non-circular trust guards. Archive now targets 5-second capture, but full 12-month retention is not safely feasible on the current disk with the 50 GiB reserve.
+
+---
+
+## 2026-07-02 - Water Usage zone median GPM split
+
+Context: User wanted the most accurate median GPM, not a bucket-size-dependent chart rate.
+
+Changes:
+- Confirmed the top Water Usage median is bucket-derived and expected to change with chart grain.
+- Changed the bottom sprinkler-zone report so primary median GPM uses only clean single-zone physical meter runs.
+- Stopped mixing configured estimates into the primary median.
+- Added separate estimate/reference GPM columns for uncovered or overlapping runs.
+- Updated UI copy to say physical zone medians do not use chart grain.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py`
+- Extracted `water_usage.html` inline scripts and ran `node --check`.
+- `git diff --check -- server-prod/dashboard.py server-prod/templates/water_usage.html`
+- Deployed `dashboard.py` and `templates/water_usage.html`; `smart-garden-server` restarted active.
+
+State: The most accurate median GPM is now the physical-meter median per completed clean run. Estimate GPM remains visible separately as a fallback/reference.
+
+Follow-up:
+- Added the same clean physical run median to the top Water Usage summary as `Physical Run Median GPM`.
+- It uses selected-window clean physical runs when present, otherwise falls back to the 90-day clean baseline and shows the run count/scope.
+- Validated with `python -m py_compile server-prod/dashboard.py`, extracted inline JS `node --check`, deployed, and restarted service active.
+
+Follow-up audit:
+- Rechecked high GPM examples and found the previous "clean physical" baseline still admitted pre-`2026-06-25T22:00:00` OCR/re-anchor history plus short boundary runs.
+- Tightened clean-run eligibility: run must start after the trusted cutoff, be single-zone/non-overlap, at least 120 seconds, have >=2 ledger samples, positive meter gallons, and not exceed the existing plausible configured-gallons ceiling.
+- UI excluded count now includes pre-cutoff, short, thin, overlapping, and implausible runs.
+- Validated with `python -m py_compile server-prod/dashboard.py`, extracted inline JS `node --check`, `git diff --check`, deployed, and restarted service active.
+
+Second follow-up audit:
+- Audited the 2026-07-02 07:26:59 to 07:36:14 Zone 5 window. The 29.87 gal total and 3.55 GPM run math were internally consistent with high-water ledger usage, but the committed meter went backward twice during the run, with a largest drop of 5.949 ft3 / 44.5 gal.
+- Changed `meter_ledger.usage_for_window()` to return backward-step metadata and changed clean physical zone medians to exclude any run window with backward committed-meter steps.
+- Live API verification for the exact window now reports `health.backward_steps=2`, Zone 5 selected `physical_runs=0`, `backward_runs=1`, and estimate-only selected GPM until the meter reads are reviewed/corrected.
+- Validated with `python -m py_compile server-prod/dashboard.py server-prod/meter_ledger.py`, extracted inline JS `node --check`, `git diff --check`, deployed `dashboard.py`, `meter_ledger.py`, and `templates/water_usage.html`, restarted `smart-garden-server`, and smoke-tested `/login` 200.
+
+Display cleanup:
+- The top `Physical Run Median GPM` card had been falling back to the all-sprinkler 90-day clean baseline when the selected Zone 5 run was excluded, while the bottom table correctly showed Zone 5's own baseline. Updated the top card to scope to the single selected zone when exactly one sprinkler zone has a selected run.
+- For the 2026-07-02 Zone 5 window, the top card should now describe `Zone 5 - Southeast 90d clean baseline` instead of an all-zone baseline.
+- Added a separate `Selected Run Median GPM` card for the exact event chosen from the Watering event dropdown. It computes the median from the plotted bucket GPM values whose bucket centers fall inside the event's real start/end, so it answers "what was the median GPM for this selected run" without mixing in the padded chart window or the historical baseline.
+- Added compact per-zone clean GPM history to the bottom zone report: API returns up to the last 30 clean physical run points per zone; UI shows a tiny sparkline plus median/range/latest stats. This keeps leak/blockage baseline review on the same Water Usage page instead of a separate report.
+- Fixed selected-run median blank state: the page no longer depends on dropdown load state to compute the top card. `/api/water-usage` now returns `selected_run_stats` when the window contains exactly one watering event, and the UI uses that first. Verified live for `2026-06-24T20:41:29` Zone 7: selected-run median `3.39 GPM`, 8 one-minute buckets, with the existing pre-trust/backward-step warning still shown.
+- Replaced selected-run median source with bucket-independent raw ledger segment math. `meter_ledger.run_rate_stats()` computes GPM between consecutive committed meter readings inside the actual event, trims 30s startup/shutdown for longer runs, excludes backward steps and >25 GPM spikes, then reports the median plus quality counts. Verified live Zone 5 runs: `2026-07-02T08:08:07` -> `3.50 GPM` from 38 segments, and `2026-07-02T07:27:29` -> `3.50 GPM` from 50 segments.
+- Aligned bottom zone report with the same official raw-segment GPM method. Backward meter steps are now warning counts, not whole-run exclusions, because the official median already ignores bad negative segments. Verified live Zone 5: selected-window official median `3.50 GPM`; history now includes 4 official measured runs (`3.59`, `3.50`, `3.50`, `3.50`) with overall official median `3.50 GPM`.
+- Expanded the bottom official GPM report from sprinkler-only to all installed water zones, including drip zones. Renamed section to `Zone water usage medians`. Live check includes Zone 8 Garden with 5 official history points and median `0.58 GPM`; Zone 9 Grapes is present with no clean official history yet and estimate `0.5 GPM`.
+- Adjusted report filtering after user clarified Grapes also feeds ~300 ft of tree drippers, so configured `0.5 GPM` was too low for plausibility. High meter total vs configured estimate is now a warning count, not an automatic exclusion, because the official raw-segment median should establish the real baseline. Live Grapes now shows 3 official measured history points (`4.41`, `4.31`, `4.31`) with median `4.31 GPM`; estimate column still shows old `0.5 GPM` for reference.
+
+Retention follow-up:
+- User clarified the priority is preserving raw historical data so future bugs/calculation changes can be reprocessed from raw rows rather than only aggregates.
+- Disabled DB pruning by default: `database.prune_old_data()` returns unless `SMART_GARDEN_ENABLE_DB_PRUNE=1`, `prune_cam_telemetry()` returns unless `SMART_GARDEN_ENABLE_CAM_TELEMETRY_PRUNE=1`, and flow samples are no longer deleted unless `SMART_GARDEN_ENABLE_FLOW_PRUNE=1`.
+- Deployed `database.py`, `flow_monitor.py`, `server.py`, and `dashboard.py`; service restarted active and `/login` returned 200.
+- Live row ranges after deploy: raw sensor/weather/system rows date back to 2026-04-01, watering events to 2026-05-24, flow samples/events to 2026-06-12, meter ledger to 2026-06-12, archive-frame metadata/images to 2026-06-23. Image files remain storage-limited by archive cap/free-space guard, unlike DB rows.
+
+All-valves max-flow test:
+- Added a Zones page control to open every installed valve together for 5, 10, 15, 20, 25, or 30 minutes.
+- The aggregate test is recorded as a virtual `All Valves` watering event (`zone_id=-100`, `trigger_reason=manual_all`) so Water Usage can keep max-flow history like a zone.
+- Individual member valve events use `manual_all_member` and are hidden from Water Usage event pickers and per-zone median history so the max-flow test does not pollute normal zone baselines.
+- The Water Usage zone report now includes an `All Valves` row using the same raw meter-segment official median GPM method as the normal zone history.
+- Bugfix after live click returned `Could not start`: `IrrigationEngine.self.zones` is a dict keyed by zone id, not a list of zone dicts. Changed `start_all_valves_watering()` to iterate `self.zones.items()` when selecting installed zones, deployed `irrigation.py`, compiled on server, restarted service active, and smoke-tested `/login` 200.
+
+Zone head-count update:
+- User clarified current physical sprinkler counts after removing some heads/valves: Zone 1=4, Zone 2=4, Zone 3=3, Zone 4=3, Zone 5=4, Zone 6=3, Zone 7=4.
+- `server-prod/config.yaml` already matched all except Zones 3 and 4; updated their `heads` fields from `4` to `3`.
+- Deployed live `config.yaml`, verified parsed counts `[(1,4),(2,4),(3,3),(4,3),(5,4),(6,3),(7,4)]`, restarted service active, and smoke-tested `/login` 200.
+
+UI consistency audit:
+- Added shared `server-prod/static/site.css` and included it across rendered pages so cards, buttons, forms, table hover states, focus rings, tool nav, mobile spacing, and border radii have a common baseline.
+- Rebuilt `_mobilenav.html` with clean stable text badges, consistent active states, and safer null checks. Added the mobile nav to pages that were missing it, including camera tools and the standalone map.
+- Rebuilt `_meternav.html` with clean text badges instead of fragile emoji glyphs, consistent active state, horizontal scrolling, and guarded `scrollIntoView`.
+- Aligned the standalone `/map` zone controls with the main Zones page by adding the manual duration selector before `Run`; fixed mobile `/map` from a squeezed side-by-side layout to stacked map-over-zones.
+- Validation: Python compile passed, Jinja parse passed on the server with temp templates, inline script `node --check` passed, live templates backed up to `~/smart-garden-server/templates.bak.ui-20260702`, deployed templates/static CSS, restarted service active, `/login` 200, `/static/site.css` 200.
+- Browser verification used authenticated Playwright against live pages at desktop and mobile widths for `/`, `/water-usage`, `/flow`, `/costs`, `/moisture-sim`, `/map`, `/cam`, and `/cam/archive`; all returned 200 with no login redirects. Mobile `/map` was corrected after screenshot review and rechecked.
+- Follow-up after user clarified the issue was the high-level navigation shell: added shared `_appsidebar.html`, replaced duplicated sidebars in Home/Schedule/Forecast/Cost/Sensor History, and put Water Usage + Flow into the same desktop app frame with shared sidebar CSS. Verified live screenshots/metrics for `/`, `/moisture-sim`, `/water-usage`, and `/flow`: all have the same 220px fixed sidebar and correct active nav item.
+
+---
+
+## 2026-07-03 - Cost page monthly cycle split
+
+Context: `/costs` showed June and July usage together. July needed to start its own billing month/cycle instead of continuing from the last paper-bill anchor.
+
+Changes:
+- Fixed `water_cost.py` so the open cost cycle uses `config.billing.cycle_start_day` instead of permanently anchoring to the latest real bill close-read.
+- Current cycle now starts `2026-07-01` and closes `2026-08-01`; June is emitted as a separate estimated completed cycle (`2026-06-01` to `2026-07-01`).
+- Added cycle-start meter lookup from canonical `meter_ledger` with snapshot/interpolation fallback, so future months roll forward without needing a manual bill anchor first.
+- Changed sparse daily meter snapshots to interpolate missing days between real readings instead of assigning a multi-day jump to one fake spike day.
+
+Validation:
+- `python -m py_compile server-prod/water_cost.py server-prod/dashboard.py`
+- Extracted `costs.html` inline script and ran `node --check`.
+- Candidate `water_cost.py` executed against live DB before deploy: cycle window `2026-07-01` -> `2026-08-01`, history tail includes separate `Jun 2026 (est)` and `Jul 2026 (est)`.
+- Deployed only `water_cost.py`, compiled on Acer, restarted `smart-garden-server`, `/login` returned 200, and live module verification matched the candidate output.
+
+State: Cost page should show July as its own current month. During deploy verification a manual Zone 6 run appeared; sent authenticated `/api/closeall`, all valves reported closed, and event 625 finalized at 52 seconds.
+
+---
+
+## 2026-07-04 - Water Usage stale-lock RCA and warning fix
+
+Context: `/water-usage` was not picking up the 2026-07-04 early-morning manual watering correctly. The page initially showed the meter flat at `095119.577 ft3` through Zone 2 and Zone 1 manual runs even though the latest meter image read about `095131.151 ft3`.
+
+Root cause:
+- The CNN was reading the current `095131.xxx` frame as `095031.xxx`, dropping the `1` in the high digits.
+- The physics guard correctly refused the bad raw CNN value, but the oracle path was exhausted/rate-limited, so the live lock stayed stale during watering.
+- `/api/water-usage/audit` only compared chart total to the same stale ledger source, so it could call the window accurate while physically missing active watering.
+
+Changes:
+- Wrote RCA doc `RCA-water-usage-stale-lock-2026-07-04.md`.
+- Manually re-anchored the live meter lock to `095131151`.
+- Added stale-lock detection to `/api/water-usage` and `/api/water-usage/audit`: overlapping watering events with material estimated gallons but little/no measured meter movement now flag `health.stale_lock=true` and force audit verdict `review`.
+- Updated `/water-usage` to show a visible stale/incomplete meter warning instead of a clean health line.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py`
+- Extracted inline JS from `water_usage.html` and ran `node --check`.
+- Deployed `dashboard.py` and `templates/water_usage.html` via `deploy.ps1`; `/login` returned 200.
+- Live `/api/cam/status` shows accepted meter `095131.151 ft3` and truth guard cleared.
+- Live `/api/water-usage?minutes=120&bucket_s=60` reports `total_gal=86.58` with `health.stale_lock=true`.
+- Live `/api/water-usage/audit?minutes=120` returns `verdict:"review"` and fails the new `Active watering is visible in the meter ledger` check.
+
+Backfill follow-up:
+- User correctly pointed out that fixing the live lock was not enough; the old data also had to be repaired.
+- Added `server-prod/tools/repair_20260704_stale_lock.py` and used it on the live host with the service stopped and backups first.
+- Backup stamps: `20260704-stalelock-repair-055757` and cleanup backup `20260704-stalelock-repair-cleanup-060058`.
+- Repaired the contaminated interval from `2026-07-04T04:13:39` through `2026-07-04T05:56:00`.
+- Held idle rows flat at `095119.577 ft3` until watering began, then interpolated the real movement to `095133.040 ft3` across the three known watering events by estimated-gallon weight.
+- Updated `meter_ledger.db`, `meter_archive.db`, and affected `smart-garden.db.flow_sample` rows; raw OCR/oracle readings were preserved, and committed repaired rows were marked `interpolated`, `inferred`, `reviewed=1`, `origin='repair:20260704_stale_lock'`.
+- Recomputed ledger deltas and `usage_daily` for `2026-07-04`.
+- Cleanup fixed the remaining negative deltas caused by the false `04:13:39` archive climb and the stray high `05:28:05` oracle frame.
+
+Backfill validation:
+- `python -m py_compile server-prod/tools/repair_20260704_stale_lock.py`
+- Live service restarted active and `/login` returned `200`.
+- Ledger now has zero negative deltas from `2026-07-04T03:30:00` through `2026-07-04T05:56:00`.
+- `usage_daily` for `2026-07-04` recomputed to `100.71 gal`, `95119.577 -> 95133.040 ft3`, with `849` image-backed readings.
+- Exact event-window audits now return `verdict=accurate`: Zone 2 `50.58 gal`, Zone 1 `33.90 gal`, Zone 3 `16.23 gal`.
+
+State: The site no longer silently reports a stale-lock window as accurate, and the known stale-lock historical rows have been repaired. Remaining durable fix: automate recovery when oracle budget/rate limits block authority reads and CNN drops the `09513x` high digit.
+
+Accuracy spot-check follow-up:
+- User noticed clicked meter photos can appear slightly different from the Water Usage graph reading.
+- Found two separate issues:
+  - UX wording was wrong: a clicked bucket shows an endpoint meter value, while photos inside that bucket may be earlier in the minute as the meter is moving.
+  - `meter_archive.db` had newer propagated rows around `2026-07-04T06:35` than `meter_ledger.db`, so Water Usage still had artificial register-down corrections until archive-to-ledger sync ran.
+- Stopped the live service, backed up DBs under `20260704-ledger-archive-sync-063839`, ran `meter_ledger.sync()`, restarted active, then found the sync re-exposed two stale-lock repair rows.
+- Stopped the service again, backed up under `20260704-post-sync-stalelock-cleanup-063935`, reran `tools/repair_20260704_stale_lock.py --apply`, restarted active.
+- Added canonical archive overlay to `/api/water-usage/frames` so the photo modal prioritizes the committed archive/ledger reading and shows the raw CNN value only as supporting evidence.
+- Changed the modal copy to say photos inside a bucket can be slightly before the endpoint, and to fix a frame only when its own caption disagrees with the visible meter.
+
+Accuracy validation:
+- `python -m py_compile server-prod/dashboard.py server-prod/tools/repair_20260704_stale_lock.py`
+- Water Usage inline JavaScript `node --check`
+- `git diff --check`
+- Deployed `dashboard.py` and `templates/water_usage.html`; `/login` returned `200`.
+- Live ledger now has zero negative deltas from `2026-07-04T03:30:00` through `2026-07-04T06:40:00`.
+- Live 120-minute Water Usage audit returns `verdict=accurate`, `chart_total_gal=154.87`, `reanchor_count=0`, and no stale-lock event.
+- `/api/water-usage/frames` now returns committed `reading` plus raw CNN `guess`; spot check at `06:35` shows raw CNN still misreads high digits (`09503x.xxx`) while committed oracle/propagated values are `095139.xxx`.
+
+State: Water Usage totals are based on the canonical committed meter ledger, not the raw CNN guess. The raw CNN remains visibly unreliable on current `09513x/09514x` frames, so durable follow-up is still to improve guarded recovery/training for that high-digit failure mode.
+
+Live Zone 5 bug log:
+- User started Zone 5 and reported Water Usage still showed wrong numbers; clicking the validated meter lock line showed images with different numbers than the graph.
+- Logged `BUG-water-usage-ledger-archive-sync-2026-07-04.md`.
+- Reproduced live: `meter_archive.db.archive_frame` had smooth propagated/oracle values for the current Zone 5 run, while `meter_ledger.db.meter_reading` stayed flat at `095140.280` until a jump to `095142.724`.
+- Root cause: `meter_ledger.record_reading()` used `INSERT OR IGNORE`, so late archive propagation could not update an existing stale live row with the same timestamp until a separate sync ran.
+- Fixed `meter_ledger.record_reading()` to upsert archive-derived committed values into existing live/stale rows, insert a `meter_correction`, and clear `delta_cf` for recompute.
+- Added `_sync_water_usage_ledger()` and call it before `/api/water-usage`, `/api/water-usage/audit`, `/api/water-usage/ocr-audit`, and `/api/water-usage/frames`.
+- Deployed `dashboard.py` and `meter_ledger.py`; deploy smoke `/login` returned `200`.
+- Validation: Python compile passed, `git diff --check` passed, temp-DB regression proved stale live row update works, live recent archive/ledger mismatch count is `0`, live recent negative deltas are `0`.
+- Verified Zone 5 run `2026-07-04T06:43:42 -> 06:51:09`: audit for `06:43:30 -> 06:51:30` returned `accurate`, `22.91 gal`, `reanchor_count=0`; meter line now climbs smoothly `095142.000 -> 095144.904 ft3`.
+
+Raw CNN follow-up:
+- Investigated whether the meter reader used to be more accurate. Answer: yes, `loc2-v7` was validated on 2026-06-30 at `6094/6194 = 98.386%` authoritative exact, with the accepted `min_conf >= 0.95` band exact. Current 2026-07-04 live oracle-graded samples are `0/18` for `loc2-v7`.
+- Logged `BUG-meter-cnn-high-digit-regression-2026-07-04.md`.
+- Root cause is most likely leading-edge drift: the meter advanced into `09509x/09513x/09515x`, and raw CNN now collapses high/middle digits back toward `09503x` while often preserving some low digits. Example: current frame `20260704-071155.jpg` raw CNN `095030982` vs committed/oracle `095150906`.
+- Checked the physical frame: camera framing is still usable, but LCD contrast/glare is weak around the high/middle digits. This looks like model/data generalization, not a lost camera or reverted crop.
+- Tested constrained CNN on 40 recent oracle rows. It is informative but not safe as truth: about half the values were close, but many were ~1000 counts off, so low-confidence constrained output must not be promoted.
+- Found and fixed a latent live config bug: an older systemd drop-in left archive CNN acceptance at `0.70`, while `loc2-v7` was calibrated only at `0.95`. Updated `dashboard.py` defaults and `deploy.ps1`, deployed `dashboard.py`, and verified live env has `METER_ARCHIVE_STALE_CNN_MIN_CONF`, `METER_ARCHIVE_EXACT_CNN_MIN_CONF`, `METER_ARCHIVE_REPROCESS_CNN_MIN_CONF`, and `METER_CONSTRAINED_MIN_CONF` all set to `0.95`. `/login` returned `200`.
+- User approved visual labeling. Added 14 explicit no-oracle `codex_visual_label` rows from enlarged LCD crops, then exported the broader verified current window from `2026-07-04T05:45:00` (160 more current manual-label rows).
+- Fixed retrainer synthetic rows so they use the newest trusted high-order prefixes instead of stale hardcoded `094...` examples.
+- Forced gated tower retrains. The small visual-only run did not promote. The larger current-label run promoted `loc2-v8`: gate `0.546 > 0.517`, ground-truth replay full-9 `0.822` vs `0.808`, hard-frame eval fixed 6 and broke 0.
+- Post-promotion eval: high/middle digits are fixed on the current oracle window (`positions 0-5 = 199/199`), but final rolling digits remain weak and no sample reaches the direct `0.95` accept band. Fresh live raw reads are now close/in-range (`095162721` vs committed `095162726`) but still `raw_conf=low`, so the canonical ledger remains the right source for Water Usage.
+
+## 2026-07-06 — Meter ledger FROZE 2 days; reconstructed history from camera by eye (no oracle $)
+
+**Context:** User reported the meter camera "not working right" and is out of LLM/oracle budget. Diagnosed: camera hardware fine (355 frames/hr), but `meter_ledger.meter_reading.committed` **froze at `095163972` (95163.972 ft³) from 2026-07-04 17:32** — 100% `propagated`, 0 fresh reads for ~37h. Raw CNN `loc2-v8` = 0/1252 exact on the current `09521x` edge (leading-edge drift again); oracle budget exhausted, so nothing could re-anchor. Split-brain confirmed: OCR lock `/tmp/meter_state.json`=`95138820`, ledger committed=`95163972`, glass≈`95219836` — all disagreed. `flow_sample.reading_cf` also frozen (derived from same lock); `watering_event.est_cf` unreliable (75 cf vs 56 cf glass; July 5 had 0 logged runs).
+
+**Reconstruction (free, human eye instead of oracle):** Built `_sample_meter.py` (kept on acer) — samples archive frames across a window, rotates 180°, crops+enlarges the LCD strip, montages with timestamps. Read a monotonic anchor series directly off the glass: `07-04 17:32=95163972 → 19:09=95167250 → 23:24=95174158 (pre-midnight) → flat all July 5 → 95174453 → 07-06 05:25=95194666 → 06:43=95219836` (stable). Both midnights land on flat segments, so daily splits are exact.
+
+**Repair (`_repair_freeze.py`, dry-run then --apply, DBs backed up to `~/meter-freeze-backup-20260706/`):**
+- `meter_reading`: 4747 rows linearly interpolated between verified anchors (monotonic), `method='interpolated'`, `origin='repair:freeze-2026-07-04'`; 4747 `meter_correction` rows logged.
+- `archive_frame`: 4747 rows corrected.
+- `recompute_daily(start='2026-07-04')` (high-water-mark). **usage_daily fixed: Jul 4 332.1→408.3 gal, Jul 5 0.0→2.2 gal, Jul 6 0.0→339.5 gal.**
+- Reanchored `/tmp/meter_state.json`→`95219836`, restarted `smart-garden-server`. New rows now `method=held @ 95219836` (no re-freeze). `/login` path resumed.
+
+**Durable-fix progress:** Banked 10 verified current-range (`09517x–09521x`) gold labels to `manual_labels.jsonl` (`source=codex_visual_label_freeze_repair`). **Still needed:** the CNN remains 0% on the current edge and the lock WILL re-freeze at the next watering until retrained. Per the July 4 experience (~14 labels insufficient, ~160 worked), generate ~100+ current labels (fast via `_sample_meter.py` montages) then run a gated tower retrain. This repair was bailing water; the retrain is the leak fix.
+
+## 2026-07-08 - Historical meter cleanup + current re-anchor
+
+Context: James wanted missing/stale historical meter data fixed and wanted the gaming tower to carry as much OCR/training work as possible because OpenAI budget is limited.
+
+Changes:
+- Closed stale Zone 6 state with `/api/closeall`; all valves reported closed.
+- Capped paid oracle use to local-first settings: `$10/month`, `40/day`, no daily minimum, sparse intervals; kept all direct-CNN commit gates at `0.95`.
+- Fixed tower retrain operations: `meter-cnn-retrain.timer` now checks every ~2h and `meter-cnn-retrain.service` is guarded with `flock`; no duplicate trainer pile-ups.
+- Full archive-to-ledger sync removed archive/ledger drift (`mismatches=0`).
+- Reapplied the July 4-6 freeze repair and then applied a post-cutoff physics repair: committed readings after `2026-06-25T22:00:00` are monotonic and capped to a conservative `25 GPM`; raw OCR evidence was preserved.
+- Found the live/current lock had frozen at `095219836`; one authority read on latest frame returned `095376901` high confidence. Repaired the July 6-8 flatline by distributing `1174.93 gal` across the logged July 8 watering events, then manually reanchored the live reader to `095376901`.
+
+Validation:
+- `smart-garden-server` active; `/login` 200; active zones `[]`.
+- Archive/ledger mismatches `0`; post-cutoff negative deltas `0`; post-cutoff impossible jumps above the repair cap `0`.
+- `/water-usage` backing API for `2026-07-08T00:00:00` to `10:20:00`: `1174.93 gal`, trusted, monotonic, no stale-lock warning.
+- Backups live under `~/meter-history-backups/` with stamps from the repair run. Details are in `meter-data-layer-journey.md` and `meter-cnn-journey.md`.
+
+State: Post-cutoff committed/chart history is physically plausible and internally consistent. Some rows still carry inferred/propagated provenance because the image was unreadable or below the accepted OCR confidence band; that uncertainty is preserved instead of pretending every frame was directly OCR-read.
+
+Follow-up documentation:
+- The initial July 8 current-anchor repair was improved after James questioned the excluded/repaired data. Blind authority reads from archived JPEGs found the July 7/July 8 boundary was `095266.471`, not stale lock `095219.836`.
+- Repaired July 6-8 history from real archived-photo anchors. New daily totals: Jul 6 `298.78 gal`, Jul 7 `348.85 gal` unattributed, Jul 8 `826.07 gal`.
+- Added conservative GPM provenance filtering so repaired/inferred rows do not pollute clean zone medians.
+- Added Water Usage event overlays so zone executions are visible directly on the charts.
+- Full handoff: `WATER-USAGE-REPAIR-SESSION-2026-07-08.md`. Event visibility RCA: `RCA-water-usage-event-visibility-2026-07-08.md`.
+
+---
+
+## 2026-07-10 - Moisture schedule page review
+
+Context: James asked to continue reviewing `/moisture-sim`; screenshot showed the single-zone banner reporting `Fri Jul 10 at 1:20 AM` as the next expected watering even though it was already after 7 AM.
+
+Changes:
+- Fixed `/api/schedule-7day` so `next_water` only records slots whose scheduled start is still in the future. The all-zones grid still shows today's earlier slots, but marks them as `past` or `started` so they do not look like future runs.
+- Updated `/moisture-sim` all-zones view to render past/started schedule cells muted.
+- Clarified the summary and mode pills: automatic sprinkler dryness and automatic drip dryness are counted separately, and drip rows now show `Manual drip` vs `Auto drip` from live config instead of generic `Drip`.
+
+Validation:
+- `python -m py_compile server-prod/dashboard.py`
+- `git diff --check -- server-prod/dashboard.py server-prod/templates/moisture_sim.html`
+- Deployed only `dashboard.py` and `templates/moisture_sim.html` with timestamped server backups, restarted `smart-garden-server`, and `/login` returned `200`.
+- Live `/api/schedule-7day` at `2026-07-10T07:15` returned past flags for `00:00` through `06:40`; `next_water` moved early zones to `Mon Jul 13` while keeping future `08:00` and `09:20` slots for today.
+- Playwright visual QA at `526x600` and `1280x900` loaded `/moisture-sim` with no console errors; screenshots saved as `_moisture_narrow_after.png` and `_moisture_desktop_after.png`.
+
+State: The page no longer presents already-started watering slots as "next expected" runs. Open product question: repo notes still say Grapes should be manual drip, but live config has Grapes `auto_mode: true`; this pass did not change config or watering behavior.
+
+Follow-up after live-engine reconciliation:
+- Found the grid was still an ideal simulation during a real delayed/restarted run: Zone 5 was physically active at `07:19` while the grid treated its original slot as elapsed.
+- `/api/schedule-7day` now reconciles today's row with real `watering_event` history and `active_zones`: completed runs render as actual/past, the active run renders as running, zones past the engine's 50%-runtime already-watered guard are removed from today's future plan, and remaining starts are deferred behind the active run.
+- Enforced the engine's watering-window semantics in the forecast. A run may finish after the `10:00` window if it started inside it, but no later zone is promised a start after `10:00`; overflow remains dry for reconsideration in the next allowed window.
+- Live verification after restart matched the event log: Zones 1-4 were completed, Zone 5 was the next/restarted run, South was forecast inside today's window, and Southwest/Grapes moved to Saturday instead of the invalid `10:07`/`11:27` starts.
+- Recompiled, ran `git diff --check`, backed up and deployed `dashboard.py`, mirrored it to `C:\MyCode\smart-garden-server-live`, restarted the service, and verified `/api/schedule-7day` and `/login` returned `200`.
+
+Accuracy RCA follow-up:
+- James questioned the underlying promise of the automation: if MAD is the moisture floor, why does the page show nearly every turf zone below MAD even after scheduled watering?
+- Found two independent forecast math errors. The all-zones client predictor divided ET/rain/irrigation depth by physical root depth instead of the engine's plant-available-water bucket (`root_depth * 0.15 AWC`), understating percentage movement by about 6.7x. The authoritative server schedule did the opposite kind of damage: after every predicted run it set balance directly to TAW/100%, regardless of runtime and `precip_rate_iph`.
+- Corrected both predictors to use the engine's actual checkbook units. Server schedule refills now use `runtime / 60 * precip_rate_iph * 25.4`; client ET/rain/refill percentages now divide by the TAW-equivalent bucket. Client rain skip now matches the engine's `5.0 mm` threshold instead of `0.25 mm`.
+- Removed the reconciler's false `balance = TAW` assignment for zones that passed the same-day runtime guard; the live balance row already contains completed irrigation credit.
+- Added projected post-run percentage to schedule cells and a visible capacity warning/status explanation (`full run +N%` versus `today ET -N%`). This exposes the current physical/control shortfall instead of implying that an 80-minute slot guarantees recovery.
+- Current live math at ET0 `5.32 mm`, turf Kc `0.95`, 6-inch roots, AWC `0.15`, and precipitation rate `0.11 in/hr`: daily ET consumes about `22%` of the bucket while an 80-minute run restores about `16%` (roughly `-6%/day`). Seven zones would need about `108 min/day` each merely to match today's ET, exceeding the current 10-hour serial window.
+- Files were backed up, copied to the Acer and live mirror, and syntax/diff checks passed. Because Zone 5 was actively watering, deployment restart was deliberately scheduled for `2026-07-10 10:25` via `smart-garden-moisture-accuracy-restart.timer` rather than fragmenting another live watering event.
+
+Live follow-through (same session):
+- James explicitly said future deployments do not need to avoid interrupting active watering. Cancelled the delayed restart timer and restarted immediately; retain this preference for future work.
+- Fixed automatic same-day runtime accounting. The old engine stopped further attempts after an arbitrary 50% of `max_runtime_min`, yet a restart below that threshold launched a fresh full cycle. It now computes the weather-adjusted daily target, skips only when the full target is complete, and resumes only the remaining minutes after interruptions. Live proof: Southeast had about 40 minutes accumulated and resumed for `40 min`, matching both the engine log and `/api/schedule-7day`.
+- Corrected forecast event order: morning watering is credited before that day's daylight ET. Today's balance subtracts only ET remaining after `now`; it no longer double-counts a full day already partly present in the live balance. Projected post-run cells changed from the impossible `8%` result to coherent values such as Southeast `24%`, South `38%`, and Southwest `45%`.
+- Renamed the page to `Modeled Soil Water Balance`, explicitly states it is not a direct sensor reading, renamed columns to `Model balance` and `Trigger floor`, and converted the zone table into readable mobile cards.
+- Capacity messages now show each full-run gain, today's forecast ET loss, and the approximate runtime needed merely to replace today's ET. Live summary: `7` turf zones under-capacity, up to `5%` modeled net loss/day, about `102 min/zone` needed today versus `80` configured.
+- Removed unnecessary direct Open-Meteo archive/forecast calls from the all-zones operational view; it now uses the server-cached forecast already returned with moisture data. Added response-status checking plus one retry for server JSON requests. Three consecutive browser loads then returned 9 zone rows, the capacity warning, and no HTTP/console failures.
+- Final checks: Python compile, inline-JS parse, `git diff --check`, `/login` `200`, service active, authenticated schedule API `200`, narrow `526x600` and desktop `1280x900` Playwright renders with no layout overflow.
+
+State: The page is now honest about the model and its capacity shortfall. The remaining product/control decision is physical: raising the configured daily runtime/window enough to maintain MAD would materially increase water use; do not silently make that consumption change without James choosing the intended recovery/maintenance policy.
+
+Single-zone accuracy audit:
+- Removed the live chart's remaining independent watering assumptions: hardcoded `04:00-07:00`, seasonal root depth, and the false claim that a run refills to 100%. Forecast bars and moisture credit now come from the exact `/api/schedule-7day` cell start/runtime and use the latest engine TAW.
+- Forced the single-zone banner's final writer to be the authoritative server schedule and the header badge's final writer to be the latest `soil_balance` row. This fixed the observed Zone 1 disagreement (`~4 AM` vs server midnight; chart-derived `36.1%` vs DB `26.4%`).
+- Forecast days now carry the latest authoritative MAD/TAW forward instead of reverting from turf MAD `60%` to a hardcoded `50%`.
+- Historical event timing is preserved, but daily chart irrigation credits are normalized to that day's authoritative `soil_balance.irrigation_mm`. This accounts for historical precipitation-rate config changes that are not stored per watering event and eliminated 25 chart-engine drift warnings on Zone 1.
+- Cross-zone browser audit passed with zero warnings/errors: Front Yard A `26.4%` / MAD `60%` / next midnight; Southeast `15.9%` / MAD `60%` / next `05:20`; Garden `85.9%` with Manual-mode banner; Grapes `35.0%` / MAD `50%` / next `09:20`. Every badge exactly matched the latest API balance.
+
+## 2026-07-10 - Demand-based recovery policy (MAD 50%)
+
+Context: James confirmed turf MAD can be 50% but the automation must water enough to meet it. The corrected page proved the old fixed 80-minute policy lost about 5% modeled balance per day under current ET.
+
+Changes:
+- Turf zones 0-6 now use `mad_pct: 50`, a `120 min` daily recovery safety cap, and a `00:00-14:00` morning/start window. Config was edited textually with timestamped backups so YAML comments were preserved.
+- Engine trigger is preemptive: it waters when the current balance minus remaining forecast ET would reach/breach MAD, instead of waiting for the next midnight after the floor is already crossed.
+- Runtime is demand-based. It computes water needed to reach the larger of the configured wet target (75% for most turf, 72% for enclosed backyard) or `MAD + remaining ET`, converts the deficit through the real precipitation rate, and caps only severe recovery runs at 120 minutes.
+- Interrupted/completed runtime reduces only the daily safety cap. Completed irrigation is already in the balance and is not subtracted twice from the newly calculated deficit.
+- Sync-group triggering now uses the same projected-after-remaining-ET condition.
+- `/api/schedule-7day` mirrors this exact policy, includes the engine's five-minute decision cadence between serial zones, and shifts Grapes to its restored `20:00-22:00` evening eligibility (`evening_zones: [8]`) when turf fills the daytime window.
+- Recalculated current balances through `POST /api/balance/update`, immediately updating stored/displayed turf MAD from 60% to 50%.
+- UI now states recovery behavior explicitly and uses authoritative `days_away` for status labels (`Scheduled today` vs stale client-derived `Soon`).
+
+Verification:
+- Live engine first decision matched the schedule: Front Yard A resumed for `19 min` toward its new demand target, not a fixed 120-minute run.
+- Seven-day post-run projections rise rather than decline: Front Yard A reaches `68%`; Southeast `39 -> 44 -> 52 -> 58 -> 62%`; South `45 -> 50 -> 58 -> 68%`; Southwest `52 -> 57 -> 64 -> 75%`. Enclosed zones settle around their configured 72% target.
+- Schedule includes five-minute serial gaps and Grapes at `20:00`; all turf starts remain inside the 14:00 start window.
+- Live all-zones summary shows 50% MAD and recovery mode (`up to 120 min/day toward 75%`). Desktop browser QA returned no warnings/errors; service active, `/login` 200, and no server errors/tracebacks after deployment.
+
+State: Demand-based recovery is live. The 120-minute cap limits severely dry-zone recovery over several days; after recovery, calculated runtimes shrink to the amount needed to preserve the 50% floor rather than blindly running the cap.
+
+Target refinement after Zone 2 review:
+- James clarified the desired behavior is to stay only slightly above MAD, not refill healthy zones to 72-75% retained balance.
+- Replaced the legacy wet-target control objective with `MAD + remaining forecast ET + 2% of TAW`. The morning post-run percentage may still be around 69-75% on high-ET days because that water is budgeted for same-day evapotranspiration; the end-of-day target is approximately 52%.
+- Schedule cells now display both values explicitly: `post-run` and `EOD`, preventing a necessary morning ET reserve from looking like retained overwatering.
+- Live Zone 2 steady-state audit: EOD projections `52.0%, 53.7%, 52.0%, 51.9%, 52.1%, 52.1%`. Enclosed zones similarly settle around 52% EOD. Dry recovery zones remain capped at 120 minutes and climb gradually until they can meet the 52% EOD target.
+- Browser QA showed the recovery explanation and post-run/EOD values with no warnings or errors; service active and `/login` 200.
+
+Chart-floor correction after cross-zone review:
+- James correctly identified that the single-zone chart still appeared to bottom near 70% even though the control schedule targeted about 52% EOD. The scheduler was correct; the display was not.
+- Fixed DST-unsafe day arithmetic, today-to-tomorrow carry-forward, and live-day projection anchoring. Future points now start from the latest authoritative DB balance and include only remaining ET plus active/pending scheduled water.
+- Reconciled each projected day's final chart value to `/api/schedule-7day.end_of_day_pct`; the 15-minute curve remains illustrative, while its daily endpoint can no longer drift from the control engine.
+- Live browser spot-check across zones 1, 2, 4, 5, and 6 found no console errors. Healthy zones settle at roughly 52% EOD; recovering zones follow the schedule exactly and climb gradually (for example zone 6: 33.0, 40.4, 46.3, 47.5, 48.4, 51.0, 52.0%).
+
+State: The apparent Zone 2 70% floor was a chart bug, not the watering target. Live chart and schedule endpoints now agree; 50% is the trigger floor and approximately 52% is the intentional safety-margin target.
+
+## 2026-07-10 - Observe-only zone field notes
+
+Context: After several weeks of operation, James wants timestamped visual assessments that can later support MAD/model calibration, but must not affect watering yet. The older Forecast-page `Looks dry` action is unsuitable because it immediately applies a decaying control bias and retains no immutable observation history.
+
+Changes:
+- Added append-only `zone_observation` records with observed and recorded timestamps, zone, objective condition, independent watering judgment, optional visible indicators, and notes.
+- Added validated read/write `/api/zone-observations`; no irrigation/model code reads this table.
+- Added a responsive Field observation form and recent-observation log to Schedule. Objective condition and personal management judgment are deliberately separate.
+
+Verification: Temporary-DB round trip passed without touching `zone_feedback`; live DB backed up before migration; Python/JS/diff checks passed; desktop and mobile browser QA found all 9 zones, 6 condition choices, 6 judgment choices, 11 optional indicators, correct local timestamp, no overflow, and zero stored test records.
+
+State: Live and data-collection-only. Future calibration should analyze repeated observations against modeled balance, recent ET/rain/irrigation, and season before changing MAD or runtimes.
+
+Shadow calibration prototype:
+- Added read-only `tools/prototype_zone_calibration.py`; it joins field observations to water balance, prior 72h watering, and physical meter-camera volume. It never writes config/DB or controls valves.
+- Guardrails require at least 3 stable-policy days, observations on 3 distinct days, and 2 observations in a 24-72h response window before a zone can become a review candidate. Same-time notes across zones count as one survey context, not repeated evidence.
+- Diagnosis order is delivery/flow and distribution, then ET/Kc and root-zone bucket, with MAD last. Meter gallons alone do not establish application depth without independent area or catch-can data.
+- First live run correctly held every zone: James's Jul 10 survey occurred during/immediately after newly increased recovery watering. The model records it as baseline and recommends repeat observations over the next 1-3 days, with no control changes.
+
+Independent verification (2026-07-10, Copilot quadruple-check):
+- Safety confirmed: grep of the tool found zero write/control ops (no INSERT/UPDATE/DELETE/commit/write/valve/systemctl/HTTP). The only DB helper it calls, `meter_ledger.usage_for_window()`, is SELECT-only and closes its connection in a finally. No file in `server-prod/**/*.py` imports the tool — it is standalone and cannot affect the control loop even accidentally.
+- Deploy parity confirmed: SHA256 of the server copy == local copy (`2e1a9bc2…4905f0`). Reviewed code == running code.
+- Correction to the summary above: there are FOUR blockers, not three. The fourth — `area_sqft` required — is a permanent structural gate. Live `config.yaml` has ZERO `area_sqft` entries, so NO zone can ever reach `review_candidate` until zone areas are added, regardless of how many observations are logged.
+
+Known limitations / future risks (why this could stall or frustrate):
+1. Stability clock vs. active tuning — `days_since_control_change` is derived from `config.yaml` file mtime. Any config edit resets the 72h clock. While actively remediating brown grass (frequent precip/runtime/MAD edits), the "3 stable-policy days" gate may never be satisfied. Fixing grass and collecting calibration data are in direct tension.
+2. Permanent area gate — no `area_sqft` in config → every zone HOLDs forever. Feeding observations produces nothing actionable until areas are measured. High risk the tool gets abandoned as "homework nobody grades."
+3. Observation-window friction — needs obs in a 24-72h post-watering window on 3 distinct days; same-time surveys count once. Real-life ad-hoc yard walks cluster and miss the window, so valid observations get rejected on a technicality.
+4. Whole-house meter contamination — per-zone gallons come from watering_event windows, but household water during a window inflates the meter/configured ratio → spurious `configured_flow` hypotheses, especially on early-morning zones.
+5. Subjective input — "somewhat dry" conflates dormancy, fungus, dog urine, shade, heat stress with actual dryness. Tool may nudge toward watering fixes for non-water causes; only a catch-can audit disambiguates.
+6. No back half — there is no defined path from `review_candidate` → decision → config change → verification. Without it, accumulated shadow data has nowhere to go.
+7. Bit-rot — standalone script nothing calls on a schedule; depends on DB + config schema. Already failed on the local DB (missing `zone_observation` table). Silent breakage risk when schemas change.
+
+De-risk plan (do #1 and #2 before logging much more data; rest can wait until candidates appear):
+- [ ] #1 Decouple the stability clock from `config.yaml` mtime — track an explicit "policy version"/timestamp that bumps ONLY on watering-relevant param changes, so unrelated edits don't reset the window.
+- [ ] #2 Measure the 9 zone areas once (rough Google-Earth polygons are fine) and add `area_sqft` to config so it stops being a permanent gate.
+- [ ] #3 Define the back half — one sentence on what a `review_candidate` triggers (alert to James? proposed config diff he approves?) so shadow data has a destination.
+- [ ] #4 Put the tool on a weekly cron that logs/emails the report, so bit-rot surfaces immediately instead of in month three.
+- [ ] #5 (later) Flag meter/configured ratios as low-confidence when non-zero household baseline flow overlaps the watering window.
+- Near-term action unchanged: log another survey tomorrow and again 48-72h after watering; do NOT tune watering from today's appearance.

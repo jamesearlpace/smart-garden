@@ -38,24 +38,31 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .card.susp{border-color:#fca5a5;box-shadow:0 0 0 2px #fee2e2}
 .controls{display:none;gap:14px;align-items:center;margin-bottom:14px;font-size:.85rem}
 .controls label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:8px;background:#fff;padding:8px;z-index:10}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
+<a class="skip" href="#main-content">Skip to benchmark audit</a>
 {% include '_meternav.html' %}
+<main id="main-content">
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
 <h1>🔬 Benchmark audit</h1>
-<div class="sub" id="sub">Loading the held-out test frames…</div>
+<div class="sub" id="sub" role="status" aria-live="polite">Loading the held-out test frames…</div>
 <div class="bar">These are the <b>exact frames the model is graded on</b> (the permanent held-out set). If a <b>label here is wrong</b>, it caps the measured accuracy no matter how good the model is — so a wrong label looks like a model error. The page runs the model on each frame and <b>shows you only the ones where it disagrees with the stored label</b> — those are the suspicious labels. If the meter image matches the label, hit ✓; if the label is wrong, Fix it.</div>
 <div class="controls" id="controls">
   <label><input type="checkbox" id="suspToggle" checked> Suspicious only (model disagrees)</label>
   <span id="cnt" style="color:var(--text2)"></span>
 </div>
 <div class="grid" id="grid"></div>
+</main>
 
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmt9(s){ var d=(String(s||'').match(/\d/g)||[]).join(''); return d.length===9?d.slice(0,6)+'.'+d.slice(6):(d||''); }
+function safeImg(v){try{var u=new URL(String(v||''),location.origin);return u.origin===location.origin&&/^\/api\/cam\/training\/img\/[A-Za-z0-9._-]+$/.test(u.pathname)?u.pathname+u.search:'';}catch(e){return '';}}
+function validFrame(it){return it&&typeof it.file==='string'&&/^\d{9}$/.test(String(it.label||''))&&safeImg(it.img);}
 
 function card(it){
   var cnnLine = '';
@@ -66,15 +73,15 @@ function card(it){
       : '<div class="ai" style="color:var(--green)">\ud83e\udd16 model agrees</div>';
   }
   return '<div class="card'+(it.disagree?' susp':'')+'" data-file="'+esc(it.file)+'" data-label="'+esc(it.label)+'">'
-    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="imgwrap"><img loading="lazy" src="'+esc(safeImg(it.img))+'" alt="Meter frame '+esc(it.file)+'; stored label '+fmt9(it.label)+(it.cnn?'; model prediction '+fmt9(it.cnn):'; no model prediction')+'"></div>'
     + '<div class="body">'
     + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span>'
     + (it.corrected?' <span class="tag">\u2713 yours</span>':'')+'</div>'
     + cnnLine
     + '<div class="row" data-row>'
-    + '<button class="ok">\u2713 Label is right</button><button class="fix">Fix</button>'
-    + '<button class="rm" title="Discard this frame \u2014 cut-off / garbage capture">\ud83d\uddd1 Remove</button>'
-    + '<button class="reg" title="Bank as a permanent regression test \u2014 a hard frame the model must always get right">\u2693 Regression</button>'
+    + '<button class="ok" aria-label="Label is right for frame '+esc(it.file)+'">\u2713 Label is right</button><button class="fix" aria-label="Fix label for frame '+esc(it.file)+'">Fix</button>'
+    + '<button class="rm" aria-label="Remove frame '+esc(it.file)+'" title="Discard this frame \u2014 cut-off / garbage capture">\ud83d\uddd1 Remove</button>'
+    + '<button class="reg" aria-label="Add frame '+esc(it.file)+' to regression set" title="Bank as a permanent regression test \u2014 a hard frame the model must always get right">\u2693 Regression</button>'
     + '<span class="msg"></span></div>'
     + '</div></div>';
 }
@@ -139,16 +146,24 @@ function render(){
   document.getElementById('grid').innerHTML = f.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wire);
 }
-document.getElementById('sub').textContent = 'Running the model on each held-out frame\u2026 (a few seconds)';
-fetch('/api/cam/test-set?n=300&flag=1').then(function(r){return r.json();}).then(function(d){
-  ALL = d.frames||[];
+function testAuditError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="testRetry">Retry</button>';document.getElementById('testRetry').addEventListener('click',loadTestAudit);}
+function loadTestAudit(){
+ var s=document.getElementById('sub');s.setAttribute('role','status');s.textContent='Running the model on each held-out frame… (up to 30 seconds)';
+ var controller=new AbortController(), timer=setTimeout(function(){controller.abort();},30000);
+ fetch('/api/cam/test-set?n=300&flag=1',{signal:controller.signal}).then(function(r){if(!r.ok)throw new Error('Could not load benchmark frames (HTTP '+r.status+').');return r.json();}).then(function(d){
+  if(!d||!Array.isArray(d.frames))throw new Error('Benchmark data has an invalid format.');
+  var rejected=d.frames.length-d.frames.filter(validFrame).length; ALL=d.frames.filter(validFrame);
   var nd = ALL.filter(function(x){return x.disagree && !x.corrected;}).length;
   document.getElementById('sub').innerHTML = '<b>'+nd+'</b> of '+ALL.length
     + ' benchmark frames still need review — the model disagrees with the stored label. ✓ if the label matches the meter, Fix if the label is wrong (reviewed ones drop off this list).';
   document.getElementById('controls').style.display = 'flex';
   document.getElementById('suspToggle').onchange = render;
   render();
-}).catch(function(){ document.getElementById('sub').textContent='Could not load the test set.'; });
+  if(rejected) document.getElementById('sub').textContent += ' '+rejected+' invalid frame'+(rejected===1?' was':'s were')+' skipped.';
+ }).catch(function(e){testAuditError(e.name==='AbortError'?'Benchmark run timed out.':(e.message||'Could not load the test set.'));}).finally(function(){clearTimeout(timer);});
+}
+loadTestAudit();
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

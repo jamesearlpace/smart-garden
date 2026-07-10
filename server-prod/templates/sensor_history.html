@@ -19,6 +19,8 @@
   --sidebar-w: 220px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
+.skip-link { position: fixed; left: 8px; top: 8px; z-index: 1000; transform: translateY(-150%); background: #fff; color: #14532d; padding: 8px 12px; }
+.skip-link:focus { transform: none; }
 body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
        background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; }
 
@@ -69,7 +71,10 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 .chip-link { background: none; border: none; color: var(--blue); font-size: .78rem; cursor: pointer;
   font-family: inherit; padding: 5px 4px; }
 
-.chart-wrap { position: relative; height: 320px; }
+.chart-wrap { position: relative; width: 100%; max-width: 100%; height: 320px; overflow: hidden; }
+.chart-summary, .cal-advice { margin-top: 8px; font-size: .78rem; color: var(--text2); }
+.cal-advice { color: #92400e; }
+.sr-status { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); }
 
 /* sensor summary cards */
 .sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
@@ -88,31 +93,34 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .main { margin-left: 0; padding: 16px 16px 80px; }
+  .seg { flex-wrap: wrap; overflow: visible; }
 }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
-<body>{% include '_appsidebar.html' %}
-<div class="main">
+<body><a class="skip-link" href="#main-content">Skip to main content</a>{% include '_appsidebar.html' %}
+<main class="main" id="main-content" tabindex="-1">
 <h1>🌡️ Sensor History</h1>
 <div class="sub">Raw &amp; calibrated soil-moisture readings over time, per sensor</div>
 
 <div class="card">
   <div class="controls">
-    <div class="seg" id="rangeSeg">
-      <button data-hours="24" class="active">24h</button>
-      <button data-hours="168">7d</button>
-      <button data-hours="720">30d</button>
-      <button data-hours="2160">90d</button>
+    <div class="seg" id="rangeSeg" role="radiogroup" aria-label="Time range">
+      <button data-hours="24" class="active" role="radio" aria-checked="true">24h</button>
+      <button data-hours="168" role="radio" aria-checked="false">7d</button>
+      <button data-hours="720" role="radio" aria-checked="false">30d</button>
+      <button data-hours="2160" role="radio" aria-checked="false">90d</button>
     </div>
-    <div class="seg" id="modeSeg">
-      <button data-mode="raw" class="active">Raw</button>
-      <button data-mode="pct">Moisture %</button>
+    <div class="seg" id="modeSeg" role="radiogroup" aria-label="Measurement mode">
+      <button data-mode="raw" class="active" role="radio" aria-checked="true">Raw</button>
+      <button data-mode="pct" role="radio" aria-checked="false">Moisture %</button>
     </div>
     <span class="muted" id="metaNote"></span>
   </div>
   <div class="chips" id="sensorChips"></div>
-  <div class="chart-wrap"><canvas id="histChart"></canvas></div>
+  <div class="chart-wrap"><canvas id="histChart" role="img" aria-label="Soil sensor history chart" aria-describedby="chartSummary">Soil sensor history is summarized below.</canvas></div>
+  <div class="chart-summary" id="chartSummary"></div>
 </div>
 
 <div class="card">
@@ -121,7 +129,8 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
     <div class="loading">Loading sensors…</div>
   </div>
 </div>
-</div><!-- /.main -->
+</main>
+<div id="refreshStatus" class="sr-status" role="status" aria-live="polite"></div>
 
 {% include '_mobilenav.html' %}
 
@@ -186,6 +195,7 @@ function renderCards(cals, allSeries) {
       '<div class="row"><span>Samples</span><span>' + raws.length + '</span></div>' +
       '<div class="row"><span>Cal dry / wet</span><span>' +
         (cal.dry != null ? cal.dry : '—') + ' / ' + (cal.wet != null ? cal.wet : '—') + '</span></div>';
+    if (cal.advice && cal.advice.reason) card.innerHTML += '<div class="cal-advice">' + cal.advice.reason + '</div>';
     grid.appendChild(card);
   }
 }
@@ -211,6 +221,13 @@ function renderChart(cals, allSeries) {
   var ctx = document.getElementById('histChart').getContext('2d');
   if (chart) chart.destroy();
   var note = document.getElementById('metaNote');
+  var summaries = [];
+  for (var si = 0; si < NUM_SENSORS; si++) {
+    var ss = allSeries[si] || [];
+    var vals = ss.map(function(p){ return state.mode === 'pct' ? p.pct : p.raw; }).filter(function(v){ return v != null; });
+    if (vals.length) summaries.push((cals[si] && cals[si].name || ('Sensor ' + si)) + ': latest ' + vals[vals.length-1] + ', minimum ' + Math.min.apply(null, vals) + ', maximum ' + Math.max.apply(null, vals) + ', ' + vals.length + ' samples');
+  }
+  document.getElementById('chartSummary').textContent = summaries.length ? summaries.join('. ') + '.' : 'No sensor data in this window.';
   if (!datasets.length) {
     var anyVisible = false;
     for (var k = 0; k < NUM_SENSORS; k++) { if (isVisible(k)) anyVisible = true; }
@@ -256,6 +273,7 @@ function renderChips(cals) {
     chip.className = 'chip ' + (on ? 'on' : 'off');
     chip.style.color = on ? SENSOR_COLORS[i] : '';
     chip.dataset.idx = i;
+    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
     chip.innerHTML = '<span class="dot" style="background:' + SENSOR_COLORS[i] + '"></span>' + name;
     chip.addEventListener('click', function() {
       var idx = parseInt(this.dataset.idx);
@@ -282,6 +300,7 @@ function renderChips(cals) {
 }
 
 function load() {
+  document.getElementById('refreshStatus').textContent = 'Loading sensor history';
   var calReq = fetch('/api/calibration').then(function(r){ return r.json(); }).catch(function(){ return {sensors: []}; });
   var seriesReqs = [];
   for (var i = 0; i < NUM_SENSORS; i++) {
@@ -305,20 +324,23 @@ function load() {
     var sidebarDot = document.getElementById('sb-dot');
     if (sidebarStatus) sidebarStatus.textContent = 'Updated just now';
     if (sidebarDot) sidebarDot.classList.add('connected');
+    document.getElementById('refreshStatus').textContent = 'Sensor history updated';
   });
 }
 
 document.getElementById('rangeSeg').addEventListener('click', function(e) {
   if (e.target.tagName !== 'BUTTON') return;
-  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
   e.target.classList.add('active');
+  e.target.setAttribute('aria-checked', 'true');
   state.hours = parseInt(e.target.dataset.hours);
   load();
 });
 document.getElementById('modeSeg').addEventListener('click', function(e) {
   if (e.target.tagName !== 'BUTTON') return;
-  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
+  this.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
   e.target.classList.add('active');
+  e.target.setAttribute('aria-checked', 'true');
   state.mode = e.target.dataset.mode;
   load();
 });

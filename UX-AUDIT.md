@@ -27,6 +27,15 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 | forecast-vs-actual | high | fixed | data-accuracy | Accuracy Summary reported 98.1% (265/270 correct), counting manual-mode and non-comparable `no_event` rows as correct. | Only completed automatic decisions are scored; current manual zones and unscored rows are omitted from the comparison UI. Live API/UI, compile, smoke, and parity checks passed (commits `cf9dd8f`, `4962309`). |
 | sensor-history | med | fixed | status-feedback | Desktop sidebar stayed at `Connecting...` indefinitely although the page loaded all four sensor APIs successfully and refreshes every 60 seconds. | Successful refresh now reports `Updated just now` (commit `cde26c9`). |
 | sensor-history | low | open | console/resource | Browser console reports a 404 for `/favicon.ico` on page load. | Covered by the existing site-wide favicon finding; add a site favicon or explicit favicon link. |
+| map | med | open | responsive-navigation | At 320px, the desktop Map navigation clipped beyond the viewport. | Use the shared mobile navigation below 768px and suppress the desktop link row. |
+| map | med | open | tap-targets | Mobile navigation and zone Run controls were below the approximately 44px touch target minimum. | Give map controls a 44px minimum target and rely on the shared 64px mobile bar. |
+| map | med | open | map-identification | Mobile map markers depended on color and hover-only names, so zones were difficult to identify. | Show persistent numbered markers on mobile and add keyboard-accessible zone names. |
+| sensor-history | high | open | chart-alternative | Canvas chart had no accessible name or equivalent textual values. | Add an accessible chart description and synchronized latest/min/max/sample summaries. |
+| sensor-history | high | open | zoom-reflow | Auditor observed 1822px document width at 200% zoom on a 390px viewport. | Constrain the chart wrapper and allow controls to wrap; verify at narrow equivalent width. |
+| sensor-history | med | open | selection-semantics | Range, mode, and sensor selection state was visual/color-only. | Add radio semantics to exclusive choices and aria-pressed to sensor toggles. |
+| sensor-history | med | open | landmarks | No skip link or main-content landmark existed. | Add a first-focusable skip link and main landmark. |
+| sensor-history | med | open | dynamic-status | Loading and refresh completion had no live-region announcement. | Add a restrained polite status region for load/update state. |
+| sensor-history | med | open | calibration-status | Cards said Working while calibration API advice said Garden/Fruit Trees needed recalibration. | Display the API's explanatory calibration advice directly on each card. |
 
 ## Watering-behavior (DO NOT FIX — log for James)
 

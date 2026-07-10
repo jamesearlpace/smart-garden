@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "merged_new_findings": { "type": "integer" },
+    "fixed": { "type": "integer" },
+    "still_open_high_med": { "type": "integer" },
+    "deployed": { "type": "boolean" },
+    "watering_flags": { "type": "integer" },
+    "summary": { "type": "string" }
+  },
+  "required": ["merged_new_findings", "fixed", "still_open_high_med", "deployed", "watering_flags", "summary"],
+  "additionalProperties": false
+}

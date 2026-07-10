@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "done": { "type": "boolean" },
+    "campaigns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "angle": { "type": "string" },
+          "target": { "type": "string" },
+          "campaign_prompt": { "type": "string" }
+        },
+        "required": ["angle", "target", "campaign_prompt"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["done", "campaigns"],
+  "additionalProperties": false
+}

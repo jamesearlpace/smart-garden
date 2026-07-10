@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "angle": { "type": "string" },
+    "target": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "page": { "type": "string" },
+          "severity": { "type": "string" },
+          "category": { "type": "string" },
+          "expected_vs_actual": { "type": "string" },
+          "proposed_fix": { "type": "string" },
+          "is_watering_behavior": { "type": "boolean" }
+        },
+        "required": ["page", "severity", "category", "expected_vs_actual", "proposed_fix", "is_watering_behavior"],
+        "additionalProperties": false
+      }
+    },
+    "notes": { "type": "string" }
+  },
+  "required": ["angle", "target", "findings", "notes"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "campaign_angle": { "type": "string" },
+    "pages_touched": { "type": "string" },
+    "new_findings": { "type": "integer" },
+    "fixed": { "type": "integer" },
+    "failures_found": { "type": "integer" },
+    "deployed": { "type": "boolean" },
+    "needs_rca": { "type": "boolean" },
+    "summary": { "type": "string" }
+  },
+  "required": ["campaign_angle", "pages_touched", "new_findings", "fixed", "failures_found", "deployed", "needs_rca", "summary"],
+  "additionalProperties": false
+}

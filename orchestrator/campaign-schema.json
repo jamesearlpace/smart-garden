@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "done": { "type": "boolean" },
+    "angle": { "type": "string" },
+    "target": { "type": "string" },
+    "campaign_prompt": { "type": "string" },
+    "rationale": { "type": "string" }
+  },
+  "required": ["done", "angle", "target", "campaign_prompt", "rationale"],
+  "additionalProperties": false
+}

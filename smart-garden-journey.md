@@ -2205,6 +2205,16 @@ Adversarial hardening supersedes the initial #1/#3/#4 implementation (2026-07-10
 
 State: Live shadow report is `collecting / HOLD` for every observed turf zone; existing observations predate immutable context capture. `config.yaml` and irrigation behavior were unchanged. Future observations begin the valid evidence series.
 
+## 2026-07-10 - Forecast accuracy display denominator corrected
+
+Context: The Forecast vs Actual page reported 265/270 correct because its display summary treated manual-mode snapshots and days without a completed engine decision as correct predictions.
+
+Changes: Forecast comparison rows now expose `scored`; the display summary, zone filter, and timeline include only completed automatic-engine decisions. Manual-mode and `no_event` rows remain in API history as `scored:false` for auditability.
+
+Verification: Commit `cf9dd8f` compiled and deployed with a server backup. The authenticated live 30-day API reports 241 scored decisions, 236 correct, and 97.9% accuracy; manual-mode and `no_event` rows are unscored. Server/local hashes match for `database.py` and `templates/forecast_merged.html`, and `/login` returns 200.
+
+State: All actionable HIGH and MEDIUM UX audit findings are fixed. The intermittent moisture-sim 502 remains open because logs and first-party endpoints are clean and the failing browser resource cannot be identified without Network/console evidence. No watering-behavior code or configuration was changed for this fix.
+
 ## 2026-07-10 - Triaged website high/medium fixes
 
 Context: Worked the existing `UX-AUDIT.md` queue without browser access, using live authenticated APIs, service logs, source inspection, and server/local diffs. Scope was display/usability only.
@@ -2245,3 +2255,15 @@ Decisions: Historical rows remain in the database; this changes reporting only. 
 State: Deployed and live-verified. The API reports 236 scored automatic decisions, no no-event row is scored, the manual Garden zone is absent, compilation and `/login` smoke pass, and server/local hashes match. The intermittent moisture-page 502 remains open as a broader dependency RCA: 12 instrumented reloads captured no failures and every first-party/API/jsDelivr request returned 200.
 
 Next: Capture the exact failing URL if the intermittent 502 recurs; do not change first-party display code without that evidence.
+
+## 2026-07-10 - Serial UX round: map and sensor-history accessibility
+
+Context: Parallel auditors submitted nine unique high/medium display findings: three for the mobile zone map and six for Sensor History. No watering-behavior finding was submitted.
+
+Changes: Sensor History now has a named chart with synchronized textual statistics, responsive chart containment, programmatic selection state, a skip link/main landmark, polite refresh status, and visible calibration advice (`d4aba93`). The Map now switches to shared mobile navigation, provides 44px run controls, and exposes persistent numbered, keyboard-navigable markers (`3d3b7ec`).
+
+Decisions: Templates only; no Python backend, irrigation balance, schedule, valve, runtime, MAD, precipitation, or watering configuration code changed.
+
+State: Both templates were backed up before deployment, deployed, and verified live against their read-only APIs. At 390px Sensor History has no horizontal overflow and matches calibration advice; at 320px Map has no horizontal overflow, uses mobile navigation, and its Run targets are 44px. The intermittent Moisture Simulation 502 remains the sole open high/medium item because repeated instrumentation still has not captured a failing resource URL.
+
+Next: Capture the exact resource URL and response evidence if the intermittent Moisture Simulation failure recurs.

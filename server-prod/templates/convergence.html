@@ -60,6 +60,7 @@
                  border:1px solid var(--line); border-radius:6px; }
   a.back { color:#fff; text-decoration:none; font-size:13px; opacity:.9; }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -120,16 +121,22 @@ function ageText(sec){
   if(s < 3600) return Math.round(s/60) + 'm';
   return (s/3600).toFixed(1) + 'h';
 }
+function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
+function safeImg(value){
+  try{ const u=new URL(value, location.origin); return u.origin===location.origin && u.pathname==='/api/cam/archive/img' && u.searchParams.has('file') ? u.href : ''; }
+  catch(e){ return ''; }
+}
 
 function ctxCard(label, ctx){
   if(!ctx){
     return `<div class="ctx"><div class="miss">no nearby frame</div>
       <div class="meta"><div class="lbl">${label}</div><div class="val">—</div></div></div>`;
   }
-  const img = ctx.img_available
-    ? `<img src="${ctx.img_url}" loading="lazy" onclick="window.open(this.src)">`
+  const url = safeImg(ctx.img_url);
+  const img = ctx.img_available && url
+    ? `<img src="${esc(url)}" loading="lazy">`
     : `<div class="miss">image evicted</div>`;
-  const hhmm = (ctx.ts||'').slice(11,16);
+  const hhmm = esc((ctx.ts||'').slice(11,16));
   const d = (ctx.delta_counts===null||ctx.delta_counts===undefined)
     ? 'Δ —'
     : `Δ ${signed(ctx.delta_counts)} ct`;
@@ -167,8 +174,8 @@ function renderKpis(d){
     ['Auditor', (dr.enabled?'on':'off'), false],
   ];
   document.getElementById('kpis').innerHTML = cards.map(c=>
-    `<div class="kpi"><div class="label">${c[0]}</div>
-     <div class="val ${c[2]?'':'small'}" style="${c[2]?'color:var(--bad)':''}">${c[1]}</div></div>`
+    `<div class="kpi"><div class="label">${esc(c[0])}</div>
+     <div class="val ${c[2]?'':'small'}" style="${c[2]?'color:var(--bad)':''}">${esc(c[1])}</div></div>`
   ).join('');
 }
 
@@ -209,11 +216,11 @@ async function runAudit(){
     const tbl=document.getElementById('auditTable');
     tbl.style.display='';
     tbl.querySelector('tbody').innerHTML = d.results.map(x=>
-      `<tr><td>${x.ts.slice(5,16)}</td>
+      `<tr><td>${esc((x.ts||'').slice(5,16))}</td>
         <td style="font-family:monospace">${cf(x.stored)}</td>
         <td style="font-family:monospace">${cf(x.reread)}</td>
         <td><span class="pill ${x.agree?'ok':'bad'}">${x.agree?'match':'MISMATCH'}</span></td>
-        <td class="note">${x.confidence||''}</td></tr>`
+        <td class="note">${esc(x.confidence||'')}</td></tr>`
     ).join('');
     loadAll();
   }catch(e){ st.textContent='Error: '+e; }
@@ -223,27 +230,34 @@ async function runAudit(){
 async function loadVerify(){
   const grid=document.getElementById('verifyGrid');
   grid.innerHTML='<div class="note">Loading…</div>';
-  const r=await fetch('/api/cam/convergence/verify-batch?n=10');
-  const d=await r.json();
-  if(!d.ok){ grid.innerHTML='<div class="note">Error loading.</div>'; return; }
+  let d;
+  try{ const r=await fetch('/api/cam/convergence/verify-batch?n=10'); if(!r.ok)throw new Error(); d=await r.json(); }
+  catch(e){grid.innerHTML='<div class="note" role="alert">Verification rows could not be loaded. <button type="button" onclick="loadVerify()">Retry</button></div>';return;}
+  if(!d.ok){ grid.innerHTML='<div class="note" role="alert">Error loading.</div>'; return; }
+  if(!Array.isArray(d.items)||!d.items.length){grid.innerHTML='<div class="note">No verification rows available.</div>';return;}
   grid.innerHTML = d.items.map((it,i)=>`
     <div class="vcard" id="vc${i}">
-      ${it.img_available? `<img class="mainimg" src="${it.img_url}" loading="lazy">`
+      ${it.img_available&&safeImg(it.img_url)? `<img class="mainimg" src="${esc(safeImg(it.img_url))}" loading="lazy">`
         : `<div style="height:150px;display:flex;align-items:center;justify-content:center;background:#222;color:#bbb">image evicted</div>`}
       <div class="body">
-        <div class="note">${it.ts? it.ts.slice(5,16):''} · ${it.source||''}</div>
+        <div class="note">${esc(it.ts? it.ts.slice(5,16):'')} · ${esc(it.source||'')}</div>
         <div class="stored">${cf(it.stored)} <span class="note">ft³</span></div>
         <div class="ctxrow">${ctxCard('Before', it.before)}${ctxCard('After', it.after)}</div>
         <div class="acts">
-          <button onclick="verdict(${i},'${it.ts}',true)">✓ Correct</button>
+          <button class="correct-btn" type="button">✓ Correct</button>
           <button class="secondary" onclick="showFix(${i})">✗ Wrong</button>
         </div>
         <div id="fix${i}" style="display:none;margin-top:8px;">
           <input id="fixv${i}" placeholder="correct 9 digits" maxlength="9">
-          <button onclick="verdict(${i},'${it.ts}',false)">Save</button>
+          <button class="save-btn" type="button">Save</button>
         </div>
       </div>
     </div>`).join('');
+  d.items.forEach(function(it,i){
+    const card=document.getElementById('vc'+i);
+    card.querySelector('.correct-btn').addEventListener('click',function(){verdict(i,String(it.ts||''),true);});
+    card.querySelector('.save-btn').addEventListener('click',function(){verdict(i,String(it.ts||''),false);});
+  });
 }
 
 function showFix(i){ document.getElementById('fix'+i).style.display=''; }
@@ -270,5 +284,6 @@ async function verdict(i, ts, agree){
 loadAll();
 setInterval(loadAll, 60000);
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

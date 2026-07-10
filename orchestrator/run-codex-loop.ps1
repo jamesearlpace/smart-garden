@@ -54,8 +54,13 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
 
   # Fresh codex exec each iteration: small context, re-reads UX-AUDIT.md.
   # Prompt via file-redirect through cmd /c (gives codex a proper stdin EOF;
-  # piping via PowerShell hangs under -File).
-  cmd /c "codex exec --skip-git-repo-check --sandbox workspace-write --output-schema `"$schema`" -o `"$outJson`" - < `"$promptTxt`"" 2>&1 | Out-Null
+  # piping via PowerShell hangs under -File). Keep 2>&1 INSIDE cmd so codex's
+  # stderr banner is not surfaced as a PowerShell error (which would trip
+  # ErrorActionPreference=Stop and abort the loop).
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  cmd /c "codex exec --skip-git-repo-check --sandbox workspace-write --output-schema `"$schema`" -o `"$outJson`" - < `"$promptTxt`" 2>&1" | Out-Null
+  $ErrorActionPreference = $prevEAP
 
   if (-not (Test-Path $outJson)) {
     Add-Content $logFile "- iter $i : NO verdict file produced - stopping (check codex auth/errors)."

@@ -2267,3 +2267,13 @@ Decisions: Templates only; no Python backend, irrigation balance, schedule, valv
 State: Both templates were backed up before deployment, deployed, and verified live against their read-only APIs. At 390px Sensor History has no horizontal overflow and matches calibration advice; at 320px Map has no horizontal overflow, uses mobile navigation, and its Run targets are 44px. The intermittent Moisture Simulation 502 remains the sole open high/medium item because repeated instrumentation still has not captured a failing resource URL.
 
 Next: Capture the exact resource URL and response evidence if the intermittent Moisture Simulation failure recurs.
+
+## 2026-07-10 - Chart dependency outage captured and removed
+
+Context: A parallel auditor finally captured the intermittent Moisture Simulation failure: all four jsDelivr chart dependencies reset together while the first-party page and moisture API remained healthy.
+
+Changes: Pinned and self-hosted Chart.js 4.4.1, the date-fns adapter, Hammer, zoom, and datalabels for every affected chart page. Moisture Simulation now exposes an accessible chart-unavailable recovery message if its chart runtime cannot initialize. Commits: `44bfd33`, `a889fe3`.
+
+Verification: Each deployment used timestamped server backups and pre/post SHA256 parity. Live Playwright loaded all four Moisture Simulation assets from `/static/vendor` with 200 responses, made no jsDelivr request, initialized Chart, kept the fallback hidden, and reported no console error. `/login` remained 200 and the service active.
+
+State: The prior intermittent 502/connection-reset RCA is closed as a shared external-dependency failure. Sixteen newly merged high/medium display findings remain queued; no watering/control code or Python backend file changed.

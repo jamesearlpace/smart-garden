@@ -60,9 +60,9 @@ The earlier open `moisture-sim` console/resource row is superseded by the captur
 
 | Page | Severity | Status | Category | Expected vs Actual | Proposed fix |
 |------|----------|--------|----------|--------------------|--------------|
-| moisture-sim | high | open | external CDN dependency failure | An instrumented cold load captured `net::ERR_CONNECTION_RESET` for all four required jsDelivr chart libraries while first-party requests stayed 200. | Self-host pinned chart dependencies and add an explicit dependency-failure state. |
-| moisture-sim | med | open | missing dependency error state | Required chart-library failure has no visible error or recovery guidance. | Show a retryable visualization-unavailable state. |
-| dashboard / sensor-history / water-usage / costs / camera charts | med | open | shared dependency blast radius | Checked chart pages import Chart.js from jsDelivr, so the captured outage can blank several visualizations. | Self-host pinned audited chart assets. |
+| moisture-sim | high | fixed (`44bfd33`) | external CDN dependency failure | An instrumented cold load captured `net::ERR_CONNECTION_RESET` for all four required jsDelivr chart libraries while first-party requests stayed 200. | All dependencies are pinned and served same-origin; live requests return 200 with no CDN dependency. |
+| moisture-sim | med | fixed (`a889fe3`) | missing dependency error state | Required chart-library failure had no visible error or recovery guidance. | A role=alert fallback now explains that the chart is unavailable and offers reload recovery while preserving schedule details. |
+| dashboard / sensor-history / water-usage / costs / camera charts | med | fixed (`44bfd33`) | shared dependency blast radius | Checked chart pages imported Chart.js from jsDelivr, so one outage could blank several visualizations. | All affected pages now use pinned same-origin audited chart assets. |
 | costs | med | open | error state | A simulated water-cost API 500 renders as valid-empty `No data yet`. | Check HTTP status and show a retryable error. |
 | costs | med | open | mobile layout | At 390px Bill history makes the document 448px wide. | Contain or reflow the table. |
 | costs | med | open | chart accessibility | Three charts lack accessible names and equivalent keyboard-readable values. | Name charts and provide synchronized text alternatives. |

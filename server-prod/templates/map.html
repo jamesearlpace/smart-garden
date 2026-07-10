@@ -119,12 +119,18 @@
 
     .zone-btn {
       font-size: .7rem; font-weight: 600; padding: 4px 10px; border-radius: 4px;
-      border: none; cursor: pointer; margin-top: 6px; display: inline-block;
+      border: none; cursor: pointer; margin-top: 6px; display: inline-block; min-width: 44px; min-height: 44px;
     }
     .btn-run { background: rgba(34,197,94,.15); color: var(--green); }
     .btn-run:hover { background: rgba(34,197,94,.3); }
     .btn-stop { background: rgba(239,68,68,.15); color: #ef4444; }
     .btn-stop:hover { background: rgba(239,68,68,.3); }
+    .run-controls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .run-duration {
+      height: 28px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px;
+      background: rgba(15,23,42,.65); color: var(--text1);
+      font: inherit; font-size: .72rem; padding: 0 6px;
+    }
 
     .vb-label {
       font-size: .7rem; color: var(--text2); margin: 14px 0 6px;
@@ -145,7 +151,31 @@
       padding: 12px; text-align: center; font-size: .72rem; color: var(--text2);
       border-top: 1px solid rgba(255,255,255,.06);
     }
+    @media (max-width: 768px) {
+      header {
+        align-items: flex-start; flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px;
+      }
+      header h1 { width: 100%; font-size: 1rem; }
+      header nav { display: none; }
+      .head-dot { width: 22px; height: 22px; }
+      .head-dot .dot-label { opacity: 1; top: 50%; font-size: 10px; transform: translate(-50%, -50%); text-shadow: 0 1px 2px #000; }
+      .run-duration { min-height: 44px; }
+      .map-container {
+        flex-direction: column; height: auto; min-height: calc(100vh - 120px);
+      }
+      .map-panel {
+        min-height: 340px; height: 46vh; width: 100%;
+      }
+      .map-wrap img {
+        max-height: 46vh;
+      }
+      .side-panel {
+        width: 100%; border-left: none; border-top: 1px solid rgba(255,255,255,.06);
+        padding-bottom: 84px;
+      }
+    }
   </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
   <header>
@@ -185,6 +215,7 @@ var ZONE_COLORS = [
   '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899',
   '#94a3b8'
 ];
+var MANUAL_RUN_MINUTES = [1, 5, 10, 15, 20, 25, 30];
 
 // ── Sprinkler head positions (x%, y% relative to image) ──
 // Detected from aerial photo red dots. Adjust coordinates as needed.
@@ -244,6 +275,19 @@ var highlightedZone = null;
 
 function el(id) { return document.getElementById(id); }
 
+function manualRunOptions(defaultMinutes) {
+  var selected = MANUAL_RUN_MINUTES.indexOf(defaultMinutes) !== -1 ? defaultMinutes : 5;
+  return MANUAL_RUN_MINUTES.map(function(min) {
+    return '<option value="' + min + '"' + (min === selected ? ' selected' : '') + '>' + min + ' min</option>';
+  }).join('');
+}
+
+function mapRunMinutes(id) {
+  var sel = document.getElementById('map-run-min-' + id);
+  var minutes = sel ? parseInt(sel.value, 10) : 5;
+  return MANUAL_RUN_MINUTES.indexOf(minutes) !== -1 ? minutes : 5;
+}
+
 // ── Render head dots on the map ──
 function renderHeadDots() {
   // Remove existing dots
@@ -262,9 +306,13 @@ function renderHeadDots() {
     var zone = ZONES.find(function(z) { return z.id === h.zone; }) ||
                PLANNED.find(function(z) { return z.id === h.zone; });
     var label = zone ? zone.name : 'Zone ' + (h.zone + 1);
-    dot.innerHTML = '<span class="dot-label">' + label + '</span>';
+    dot.setAttribute('aria-label', 'Zone ' + (h.zone + 1) + ': ' + label);
+    dot.setAttribute('role', 'button');
+    dot.setAttribute('tabindex', '0');
+    dot.innerHTML = '<span class="dot-label"><span aria-hidden="true">' + (h.zone + 1) + '</span></span>';
 
     dot.addEventListener('click', function() { toggleHighlight(h.zone); });
+    dot.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleHighlight(h.zone); } });
     wrap.appendChild(dot);
   });
 }
@@ -308,7 +356,7 @@ function updateZoneList() {
   // Bind click handlers
   document.querySelectorAll('.zone-item').forEach(function(item) {
     item.addEventListener('click', function(e) {
-      if (e.target.closest('.zone-btn')) return; // don't toggle on button click
+      if (e.target.closest('.zone-btn') || e.target.closest('.run-controls')) return;
       toggleHighlight(parseInt(item.dataset.zone));
     });
   });
@@ -329,16 +377,18 @@ function zoneItemHtml(z) {
   var btnHtml = '';
   if (!isPlanned) {
     if (isWatering) {
-      btnHtml = '<button class="zone-btn btn-stop" onclick="ctrlValve(' + z.id + ',\'close\')">■ Stop</button>';
+      btnHtml = '<button class="zone-btn btn-stop" onclick="ctrlValve(' + z.id + ',\'close\')">Stop</button>';
     } else {
-      btnHtml = '<button class="zone-btn btn-run" onclick="ctrlRun(' + z.id + ', 5)">▶ Run 5m</button>';
+      btnHtml = '<span class="run-controls"><select class="run-duration" id="map-run-min-' + z.id + '" title="Manual run duration">' +
+        manualRunOptions(5) +
+        '</select><button class="zone-btn btn-run" onclick="ctrlRun(' + z.id + ', mapRunMinutes(' + z.id + '))">Run</button></span>';
     }
   }
 
   return '<div class="zone-item ' + cls + '" data-zone="' + z.id + '">' +
     '<div class="zone-dot" style="background:' + color + '"></div>' +
     '<div class="zone-label">' +
-      '<div class="zone-name">Zone ' + (z.id + 1) + ' — ' + z.name + '</div>' +
+      '<div class="zone-name">Zone ' + (z.id + 1) + ' - ' + z.name + '</div>' +
       '<div class="zone-sub">' + typeLabel + '</div>' +
       btnHtml +
     '</div>' +
@@ -389,5 +439,6 @@ function poll() {
 poll();
 setInterval(poll, 5000);
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

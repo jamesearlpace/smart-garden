@@ -21,8 +21,8 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 | water-usage | high | fixed | data-accuracy | Event list showed "0 min" for completed orphan-cleanup spans with zeroed stored metadata. | Display API now derives elapsed seconds from start/end and configured estimated gallons without changing DB/control data; live events 691/692/702 verified. |
 | water-usage | med | fixed | loading-state | On main API failure the subtitle changed, but the leak banner stayed indefinitely at "Checking…". | Main load catch now replaces both with an explicit retry/range error state (commit `5a25996`); normal live API returns populated data. |
 | water-usage | low | open | usability | Event picker is a single flat dropdown with 100+ options across many days — hard to scan. | Group by day (optgroup) or add a date filter. |
-| forecast | med | open | data-display | Same-day fractional predictions (`0.5d`, `0.8d`) displayed as `1d` beside today's date. | Treat values under one day as `Today`; retain whole-day labels for later dates. |
-| forecast | med | open | clarity | The 24-hour window `00:00 – 14:00` was labeled `AM`, producing the invalid `14:00 AM`. | Label it `Watering window` and display the API's 24-hour values without an AM suffix. |
+| forecast | med | fixed | data-display | Same-day fractional predictions (`0.5d`, `0.8d`) displayed as `1d` beside today's date. | Values under one day now display as `Today`; API values `0.5` and `0.8` verified live (commit `30e42eb`). |
+| forecast | med | fixed | clarity | The 24-hour window `00:00 – 14:00` was labeled `AM`, producing the invalid `14:00 AM`. | Now labeled `Watering window: 00:00 – 14:00` with no invalid suffix; verified live (commit `30e42eb`). |
 | forecast | low | open | console/resource | Browser console reports a 404 for `/favicon.ico` on page load. | Add a site favicon or explicit favicon link. |
 
 ## Watering-behavior (DO NOT FIX — log for James)

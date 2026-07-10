@@ -145,42 +145,11 @@ a { color: var(--blue); text-decoration: none; }
   .accuracy-banner { flex-direction: column; }
 }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 
-<!-- ═══ Sidebar ═══ -->
-<nav class="sidebar">
-  <div class="sidebar-brand">
-    <span class="logo">🌱</span>
-    <div>
-      <div class="name">Smart Garden</div>
-      <div class="loc">Duvall, WA</div>
-    </div>
-  </div>
-  <div class="sidebar-nav">
-    <div class="nav-section">Core</div>
-    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
-    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
-    <a href="/moisture-sim" class="nav-item"><span class="icon">📅</span> Schedule</a>
-    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
-    <div class="nav-section">Water</div>
-    <a href="/water-usage" class="nav-item"><span class="icon">📈</span> Water Usage</a>
-    <a href="/costs" class="nav-item"><span class="icon">💵</span> Water Cost</a>
-    <a href="/flow" class="nav-item"><span class="icon">🩺</span> Flow &amp; Leaks</a>
-    <a href="/forecast" class="nav-item active"><span class="icon">🌧️</span> Forecast</a>
-    <div class="nav-section">Tools</div>
-    <a href="/sensor-history" class="nav-item"><span class="icon">🌡️</span> Sensor History</a>
-    <a href="/map" class="nav-item"><span class="icon">🗺️</span> Zone Map</a>
-    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
-    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
-  </div>
-  <div class="sidebar-footer">
-    <span class="status-dot" id="sb-dot"></span>
-    <span id="sb-status">Connecting…</span>
-    <div style="margin-top:6px">Auto-refresh 30s</div>
-  </div>
-</nav>
-
+{% include '_appsidebar.html' %}
 <div class="main">
 
 <h1>🌧️ Forecast</h1>
@@ -293,7 +262,7 @@ function renderForecast(d) {
       const isManual = z.auto_mode === false;
       if (isManual) { daysText = 'Manual'; daysClass = 'ok'; }
       else if (days === null || days === undefined) { daysText = '?'; daysClass = 'ok'; }
-      else if (days <= 0) { daysText = 'Today'; daysClass = 'now'; }
+      else if (days < 1) { daysText = 'Today'; daysClass = 'now'; }
       else if (days <= 2) { daysText = days.toFixed(0) + 'd'; daysClass = 'soon'; }
       else { daysText = days.toFixed(0) + 'd'; daysClass = 'ok'; }
       const pct = z.balance_pct !== null ? z.balance_pct : 0;
@@ -317,8 +286,8 @@ function renderForecast(d) {
     });
   }
   html += '</div>';
-  html += '<div class="card" style="font-size:.85rem;color:var(--text2)">⏰ Morning window: ' +
-          (d.window_start || '4:00') + ' – ' + (d.window_end || '7:00') + ' AM</div>';
+  html += '<div class="card" style="font-size:.85rem;color:var(--text2)">⏰ Watering window: ' +
+          (d.window_start || '04:00') + ' – ' + (d.window_end || '07:00') + '</div>';
   document.getElementById('forecast-content').innerHTML = html;
 }
 

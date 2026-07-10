@@ -2313,3 +2313,11 @@ Decisions: `dashboard.py` was edited only because Calibration is an embedded HTM
 State: Deployed after a timestamped remote backup. Python compilation and authenticated curl checks for all three Calibration APIs passed; `/login` returned 200; server/local SHA-256 matched. Live browser verification found zero unlabeled inputs or repeated accessible button names, four sensor headings, two live regions, a named canvas, visible focus CSS, and no 390px overflow.
 
 Next: The remaining high/medium backlog is the broader strict-CSP migration, Camera Archive performance work, authentication-boundary semantics, and the intermittent tunnel/service 502 RCA.
+
+## 2026-07-10 - Cam Device telemetry display repaired
+
+Context: `/cam-device` failed with `rows.slice is not a function` because `/api/cam-telemetry` returns `series` as an object containing `frames` and `pings`, while the page treated it as an array.
+
+Changes: Commit `34e6af3` explicitly renders `series.frames`, checks both HTTP responses, replaces stale table content with a retryable error, and binds Refresh without an inline handler.
+
+State: Deployed after a timestamped server backup. `/login` returned 200, server/local SHA-256 matched, and authenticated live browser verification rendered 13 telemetry rows without a load-failed state. Template-only display change; no Python backend or watering/control code changed.

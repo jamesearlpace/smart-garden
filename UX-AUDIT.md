@@ -159,5 +159,6 @@ Reviewed all 35 raw findings in `orchestrator/findings-0.json` through `findings
 | cam/archive | med | open | request efficiency | Initial view additionally decoded about 693KB from full dashboard and usage APIs. | Replace dashboard dependency with minimal nav status and trim/defer usage data. |
 | protected GET APIs | med | open | authentication response semantics | Unauthenticated JSON clients receive a 302 HTML-login redirect rather than JSON 401. | Central auth guard should distinguish API requests. |
 | protected pages | med | open | return-to-page navigation | Login redirects discard the original safe same-origin deep link. | Preserve and strictly validate a relative return target. |
+| cam-device | med | fixed (`34e6af3`) | telemetry schema mismatch | The page called `slice()` on the API's `{frames,pings}` series object and rendered `LOAD FAILED`. | The controller now explicitly selects `series.frames`, validates HTTP status, and leaves a recoverable table error on failure. Live browser verification rendered 13 telemetry rows with no load-failed card. |
 
 Low findings retained for later polish: camera capture latency variability; archive cache/performance baseline; route-specific authenticated CSP minimization; dashboard data-image removal; Calibration landmarks/table refinements; and Login loading/keyboard recovery.

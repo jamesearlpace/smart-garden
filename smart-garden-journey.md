@@ -2277,3 +2277,15 @@ Changes: Pinned and self-hosted Chart.js 4.4.1, the date-fns adapter, Hammer, zo
 Verification: Each deployment used timestamped server backups and pre/post SHA256 parity. Live Playwright loaded all four Moisture Simulation assets from `/static/vendor` with 200 responses, made no jsDelivr request, initialized Chart, kept the fallback hidden, and reported no console error. `/login` remained 200 and the service active.
 
 State: The prior intermittent 502/connection-reset RCA is closed as a shared external-dependency failure. Sixteen newly merged high/medium display findings remain queued; no watering/control code or Python backend file changed.
+
+## 2026-07-10 - Serial UX fixer: costs, forecast comparison, flow, convergence
+
+Context: Merged 20 parallel-auditor findings and fixed the actionable high/medium display defects without touching watering behavior, schedule generation, balances, configuration, or Python backend code.
+
+Changes: Costs now contains its bill table at 390px, names its charts, exposes daily values, announces loading/errors, and has an accessible More sheet. Forecast vs Actual now validates payloads, recomputes summary values from displayed scored rows, bounds requests, distinguishes empty states, and keeps 401/errors recoverable in the current tab. Flow suppresses stale orphan alerts when fresh idle samples supersede them, neutralizes retained alerts on refresh failure, and Water Usage labels configured-rate estimates explicitly. Convergence escapes API text, restricts archive image URLs, and removes timestamp interpolation from inline handlers.
+
+Decisions: The focused Forecast performance audit superseded the earlier latency report because 10 desktop reloads and the throttled-mobile run were fast. Two broader medium campaigns remain: page-by-page camera renderer hardening and staged site-wide CSP/security headers.
+
+State: Commits `4d1b9b9`, `a6ed348`, `05c4ce4`, and `10ca8de` deployed with timestamped remote backups. `/login` returned 200; local/server SHA-256 parity passed for all six deployed templates. Live Costs at 390px had no document overflow and all three canvases had accessible names; Forecast comparison rendered 236 validated predictions at 97.9%; Flow showed no active anomaly instead of the stale orphan alert. No backend `.py` file was edited.
+
+Next: Run dedicated camera-page injection regression and CSP/header rollout campaigns; low-only polish remains in `UX-AUDIT.md`.

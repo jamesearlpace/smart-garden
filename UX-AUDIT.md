@@ -10,7 +10,7 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 
 | Page | Severity | Status | Category | Expected vs Actual | Proposed fix |
 |------|----------|--------|----------|--------------------|--------------|
-| moisture-sim | high | open | console/resource | Recurring `502` console errors were previously observed on load (2026-07-10 14:26/14:50/18:46), but the failure is not currently reproducible. | RCA/broader intermittent dependency issue: 12 instrumented live reloads produced zero failed responses and zero console errors; every first-party endpoint and all four jsDelivr chart dependencies returned 200. No display change is justified without a captured failing URL. |
+| moisture-sim | high | fixed (superseded by `44bfd33`) | console/resource | Recurring `502` console errors were traced by the later instrumented capture to reset jsDelivr dependencies. | Dependencies are now pinned and same-origin; the captured root cause is closed. |
 | moisture-sim | high | fixed | data-accuracy | Chart credited all-zone watering events to the selected zone because `/api/moisture-data` intentionally returns all events. | Filter display credits by `watering_event.zone_id` before authoritative daily normalization; live API facts and deployed source verified (commit `da63bc4`). |
 | moisture-sim | med | fixed | correctness | A completed watering could be shown as the next expected run. | Final banner writer now uses `/api/schedule-7day`; live check found every same-day entry later than current time and completed Zone 1 moved to tomorrow. |
 | moisture-sim | low | open | clarity | Zone dropdown shows "Zone 2 — Front Yard B [selected]" while URL is `#zone=1` (0-indexed URL vs 1-indexed label). Potentially confusing when sharing links. | Confirm intended; consider aligning URL param to the 1-indexed UI number or documenting the offset. |
@@ -63,28 +63,34 @@ The earlier open `moisture-sim` console/resource row is superseded by the captur
 | moisture-sim | high | fixed (`44bfd33`) | external CDN dependency failure | An instrumented cold load captured `net::ERR_CONNECTION_RESET` for all four required jsDelivr chart libraries while first-party requests stayed 200. | All dependencies are pinned and served same-origin; live requests return 200 with no CDN dependency. |
 | moisture-sim | med | fixed (`a889fe3`) | missing dependency error state | Required chart-library failure had no visible error or recovery guidance. | A role=alert fallback now explains that the chart is unavailable and offers reload recovery while preserving schedule details. |
 | dashboard / sensor-history / water-usage / costs / camera charts | med | fixed (`44bfd33`) | shared dependency blast radius | Checked chart pages imported Chart.js from jsDelivr, so one outage could blank several visualizations. | All affected pages now use pinned same-origin audited chart assets. |
-| costs | med | open | error state | A simulated water-cost API 500 renders as valid-empty `No data yet`. | Check HTTP status and show a retryable error. |
-| costs | med | open | mobile layout | At 390px Bill history makes the document 448px wide. | Contain or reflow the table. |
-| costs | med | open | chart accessibility | Three charts lack accessible names and equivalent keyboard-readable values. | Name charts and provide synchronized text alternatives. |
-| costs | low | open | mobile navigation accessibility | More lacks state semantics, exposes closed content, and ignores Escape. | Add semantics, inert hiding, and Escape support. |
-| costs | low | open | navigation accessibility | Selected Water Cost links lack `aria-current`. | Mark active links programmatically. |
+| costs | med | fixed (`4d1b9b9`) | error state | A simulated water-cost API 500 rendered as valid-empty `No data yet`. | HTTP failures now show an announced retryable error. |
+| costs | high | fixed (`4d1b9b9`) | mobile layout | At 390px Bill history made the document 448px wide. | The bill table is contained in a labeled keyboard-scrollable region; live document width is 390px. |
+| costs | high | fixed (`4d1b9b9`) | chart accessibility | Three charts lacked accessible names and equivalent keyboard-readable values. | Charts are named and daily usage has a synchronized text series; bill values remain in the bill table. |
+| costs | high | fixed (`4d1b9b9`) | mobile navigation accessibility | More lacked state semantics, exposed closed content, and ignored Escape. | Added expanded/controls state, inert hiding, Escape/toggle closure, and focus restoration. |
+| costs | med | fixed (`4d1b9b9`) | navigation accessibility | Selected Water Cost links lacked `aria-current`. | Active navigation is now marked programmatically. |
 | site-wide | low | open | console/resource | Favicon requests return 404 on multiple pages. | Serve a favicon or correct the reference. |
-| flow | med | open | stale current alert | Idle samples followed orphan event 1077, but UI still called its 3.26 gpm alert ongoing. | Suppress or label display alerts stale by sample freshness. |
-| flow / water-usage | med | open | connectivity inconsistency | Pages stay at `Connecting...` while APIs/dashboard show online. | Use shared online/offline/stale status. |
-| water-usage / flow | med | open | estimate clarity | Usage uses configured rates while Flow shows learned rates; `est` hides the basis. | Label configured-rate estimates and rate used; do not alter control/accounting. |
-| flow | med | open | error/stale state | A simulated flow API 500 leaves urgent prior data looking current. | Mark retained data stale and neutralize alerts. |
-| forecast | high | open | time to usable / API latency | Under throttling, tiny API responses took about 7.7s; usable at 8.75s. | Profile timing, decouple health, and bound loading. |
-| forecast | med | open | intermittent latency | Cold request took 1.594s versus 247-267ms later. | Instrument cold-path queuing/computation. |
+| flow | high | fixed (`10ca8de`) | stale current alert | Idle samples followed orphan event 1077, but UI still called its 3.26 gpm alert ongoing. | Fresh authoritative idle samples suppress stale open alerts; old rows are labeled stale unresolved records. |
+| flow / water-usage | med | fixed (`10ca8de`) | connectivity inconsistency | Pages stayed at `Connecting...` while APIs/dashboard had a terminal state. | Shared navigation now resolves to online/offline/unavailable from `/api/dashboard`. |
+| water-usage / flow | med | fixed (`10ca8de`) | estimate clarity | Usage used configured rates while Flow showed learned rates; `est` hid the basis. | Event labels now say configured estimate and show the derived configured GPM. |
+| flow | med | fixed (`10ca8de`) | error/stale state | A simulated flow API 500 left urgent prior data looking current. | Refresh failure neutralizes alerts and explicitly hides prior alert content. |
+| forecast | high | fixed (not reproduced) | time to usable / API latency | An earlier throttled run saw 7.7s API responses. | Superseded by the focused auditor: mobile forecast completed in 233ms, desktop TTFB 33-49ms, and health/forecast already run concurrently. Broader intermittent warm-up RCA only if recaptured. |
+| forecast | med | fixed (not reproduced) | intermittent latency | An earlier cold request took 1.594s. | Ten focused reloads found only 83ms first versus 34-50ms warm; no actionable display defect remains. |
 | forecast | low | open | responsiveness | Render produced 52ms and 135ms long tasks. | Batch DOM construction. |
 | forecast | low | open | cache efficiency | Static CSS retransfers with cache BYPASS. | Add versioned static caching. |
-| forecast-vs-actual | high | open | stale/loading state | Refresh leaves old results looking current with no timeout. | Mark updating/stale and bound requests. |
-| forecast-vs-actual | med | open | HTTP errors | Non-401 failures become secondary JSON/property errors. | Check response status and show specific recovery. |
-| forecast-vs-actual | high | open | malformed response | Partial/null/invalid records can break the whole view. | Validate/normalize and skip invalid rows visibly. |
-| forecast-vs-actual | high | open | accuracy truthfulness | Trusted totals and percentages can be impossible or inconsistent. | Recompute/cross-check from validated displayed rows. |
-| forecast-vs-actual | med | open | empty semantics | All zero-row states claim no forecast data and offer snapshot creation. | Distinguish no snapshots, no scored rows, and filter no-match. |
-| forecast-vs-actual | med | open | retry/recovery | Failures lack Retry and loaded state blocks recovery. | Add accessible retry/reload and reset failure state. |
+| forecast-vs-actual | high | fixed (`a6ed348`) | stale/loading state | Refresh left old results looking current with no timeout. | Updating state is explicit and requests abort after 15 seconds. |
+| forecast-vs-actual | med | fixed (`a6ed348`) | HTTP errors / 401 | Errors produced secondary failures or discarded the tab on 401. | Status is checked; 401 and other failures stay in-tab with an announced Retry path. |
+| forecast-vs-actual | high | fixed (`a6ed348`) | malformed response | Partial/null/invalid records could break the whole view. | Payload and rows are normalized; invalid records are excluded. |
+| forecast-vs-actual | high | fixed (`a6ed348`) | accuracy truthfulness | Trusted totals and percentages could be impossible or inconsistent. | Summary is recomputed from validated, displayed scored rows. |
+| forecast-vs-actual | med | fixed (`a6ed348`) | empty semantics | All zero-row states claimed no forecast data and offered snapshot creation. | Filter no-match is distinguished and does not offer snapshot mutation. |
+| forecast-vs-actual | med | fixed (`a6ed348`) | retry/recovery | Failures lacked Retry and loaded state blocked recovery. | Accessible Retry resets the failed state. |
 | forecast-vs-actual | low | open | accessibility | Dynamic states and div tabs lack live/tab semantics. | Add live regions and proper tab behavior. |
-| cam/convergence | med | open | DOM injection | API fields are interpolated into `innerHTML`. | Use textContent and validate same-origin image URLs. |
+| cam/convergence | high | fixed (`05c4ce4`) | DOM injection / unsafe URLs / inline handler injection | API text, image URLs, and timestamps crossed HTML/attribute/handler contexts unsafely. | Text is escaped, image URLs are restricted to the same-origin archive endpoint, and API timestamps are captured by listeners rather than inline handler source. |
 | authenticated site | med | open | security headers | Pages/APIs lack standard defense-in-depth headers. | Add compatible headers; stage CSP around inline content. |
 | camera charts / water-usage | low | open | script supply chain | CDN scripts lack SRI and CSP restriction. | Self-host or pin with SRI. |
 | cam/archive | low | open | inline active content | Repeated inline onclick handlers expand CSP surface. | Replace with delegated listeners. |
+
+## 2026-07-10 serial-fixer raw merge
+
+Merged all 20 findings from `orchestrator/findings-1.json` through `findings-5.json`; existing page/category rows above were refined in place instead of duplicated. No new watering-behavior finding was reported. Additional low findings retained for a later polish pass: Forecast friendly Retry/stale-data recovery; Flow full date/age/timezone freshness labels; Costs empty Bill History message; Convergence explicit main-API error/Retry and empty verification state; and a restrictive CSP after remaining inline code is removed. The focused Forecast latency auditor superseded the earlier high/medium latency observations with 10 fast desktop reloads and a 233ms throttled-mobile API completion.
+
+Two broader medium items remain open: the cross-camera-page unsafe-rendering pattern needs a dedicated page-by-page regression campaign, and compatible site-wide security headers/CSP need staged rollout after inline scripts are removed. The proven Convergence exploit paths are fixed.

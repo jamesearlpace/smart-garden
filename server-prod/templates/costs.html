@@ -73,6 +73,7 @@ a { color: var(--blue); text-decoration: none; }
 .pill.live { background: var(--green-bg); color: var(--green-dark); }
 
 table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.table-scroll { max-width:100%; overflow-x:auto; }
 th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--border-light); }
 th:first-child, td:first-child { text-align: left; }
 th { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); font-weight: 600; }
@@ -117,52 +118,21 @@ canvas { max-width: 100%; }
   body { padding-bottom: 80px; }
 }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 
-<!-- Sidebar -->
-<nav class="sidebar">
-  <div class="sidebar-brand">
-    <span class="logo">🌱</span>
-    <div>
-      <div class="name">Smart Garden</div>
-      <div class="loc">Duvall, WA</div>
-    </div>
-  </div>
-  <div class="sidebar-nav">
-    <div class="nav-section">Core</div>
-    <a href="/" class="nav-item"><span class="icon">🏠</span> Home</a>
-    <a href="/#zones" class="nav-item"><span class="icon">🌿</span> Zones</a>
-    <a href="/moisture-sim" class="nav-item"><span class="icon">📅</span> Schedule</a>
-    <a href="/#history" class="nav-item"><span class="icon">📊</span> History</a>
-    <div class="nav-section">Water</div>
-    <a href="/water-usage" class="nav-item"><span class="icon">📈</span> Water Usage</a>
-    <a href="/costs" class="nav-item active"><span class="icon">💵</span> Water Cost</a>
-    <a href="/flow" class="nav-item"><span class="icon">🩺</span> Flow &amp; Leaks</a>
-    <a href="/forecast" class="nav-item"><span class="icon">🌧️</span> Forecast</a>
-    <div class="nav-section">Tools</div>
-    <a href="/sensor-history" class="nav-item"><span class="icon">🌡️</span> Sensor History</a>
-    <a href="/map" class="nav-item"><span class="icon">🗺️</span> Zone Map</a>
-    <a href="/#settings" class="nav-item"><span class="icon">⚙️</span> Settings</a>
-    <a href="/#cam" class="nav-item"><span class="icon">📷</span> Cam</a>
-  </div>
-  <div class="sidebar-footer">
-    <span class="status-dot" id="sb-dot"></span>
-    <span id="sb-status">Connecting…</span>
-    <div style="margin-top:6px">Auto-refresh 60s</div>
-  </div>
-</nav>
-
+{% include '_appsidebar.html' %}
 <div class="main">
 <h1>💵 Water Cost</h1>
 <div class="toolnav">
   <a href="/water-usage">Usage</a>
-  <a class="active" href="/costs">Cost</a>
+  <a class="active" aria-current="page" href="/costs">Cost</a>
   <a href="/flow">Flow &amp; Leaks</a>
 </div>
 <div class="sub">Actual bill tracking from the live water-meter camera</div>
 
-<div id="content"><div class="loading">Loading meter &amp; cost data…</div></div>
+<div id="content" aria-busy="true"><div class="loading" role="status">Loading meter &amp; cost data…</div></div>
 </div><!-- /.main -->
 
 {% include '_mobilenav.html' %}
@@ -178,6 +148,7 @@ var TIER_COLORS = ['#94a3b8','#60a5fa','#34d399','#fbbf24','#fb923c','#ef4444'];
 
 function render(d){
   var c = document.getElementById('content');
+  c.setAttribute('aria-busy','false');
   if(!d || !d.rates){ c.innerHTML = '<div class="card">No data yet.</div>'; return; }
 
   var m = d.meter, cy = d.cycle, r = d.rates;
@@ -220,7 +191,7 @@ function render(d){
           + '<span class="muted">day ' + cy.days_elapsed + ' of ~' + cy.cycle_days + '</span></div>';
     html += '<p class="muted" style="margin:2px 0 8px">Cumulative water use climbing through the price tiers. '
           + 'Solid = so far, dashed = projected to cycle close. Each band is a price tier.</p>';
-    html += '<div class="chart-wrap tall"><canvas id="tierChart"></canvas></div>';
+    html += '<div class="chart-wrap tall"><canvas id="tierChart" role="img" aria-label="Cumulative water use and projected use by billing-cycle day"></canvas></div>';
 
     // tier legend
     html += '<div class="tier-legend">';
@@ -288,15 +259,16 @@ function render(d){
 
   // ── Bill history + estimate ──
   html += '<div class="card"><h2>Bill history</h2>';
-  html += '<div class="chart-wrap"><canvas id="billChart"></canvas></div>';
-  html += '<table style="margin-top:10px"><thead><tr><th>Cycle</th><th>Used (ft³)</th><th>Gallons</th>'
+  html += '<div class="chart-wrap"><canvas id="billChart" role="img" aria-label="Water, sewer, and storm cost by billing cycle"></canvas></div>';
+  html += '<div class="table-scroll" tabindex="0" role="region" aria-label="Bill history table"><table style="margin-top:10px"><thead><tr><th>Cycle</th><th>Used (ft³)</th><th>Gallons</th>'
         + '<th>Water</th><th>Sewer</th><th>Storm</th><th>Total</th></tr></thead><tbody>';
   d.history.forEach(function(h){
     html += '<tr class="' + (h.actual?'':'est') + '"><td>' + esc(h.label) + (h.actual?'':'')
           + '</td><td>' + num(h.used_cf,0) + '</td><td>' + num(h.used_gal,0) + '</td><td>' + money(h.water)
           + '</td><td>' + money(h.sewer) + '</td><td>' + money(h.storm) + '</td><td><b>' + money(h.total) + '</b></td></tr>';
   });
-  html += '</tbody></table>';
+  if(!d.history.length) html += '<tr><td colspan="7" class="muted">No bill history available.</td></tr>';
+  html += '</tbody></table></div>';
   html += '<p class="muted" style="margin-top:8px">Solid rows are real paid bills; the italic row is this cycle projected from the meter. '
         + 'Rates: ' + r.year + ' City of Duvall · base ' + money(r.base_fee) + ' · sewer ' + money(r.sewer)
         + ' · storm ' + money(r.storm) + ' · <a href="' + esc(r.source_url) + '" target="_blank" rel="noopener">rate source</a>.</p>';
@@ -305,7 +277,8 @@ function render(d){
   // ── Daily usage from meter snapshots ──
   html += '<div class="card"><h2>Daily water use (from meter)</h2>';
   if(d.snapshots && d.snapshots.filter(function(s){return s.used_cf>0;}).length){
-    html += '<div class="chart-wrap"><canvas id="usageChart"></canvas></div>';
+    html += '<div class="chart-wrap"><canvas id="usageChart" role="img" aria-label="Daily water usage in gallons"></canvas></div>';
+    html += accessibleSeries('Daily water usage values', d.snapshots);
     html += '<p class="muted" style="margin-top:8px">One snapshot per day from the camera. Bars before the first auto snapshot '
           + 'are interpolated from real bill reads.</p>';
   } else {
@@ -326,6 +299,11 @@ function stat(val,lbl,size,color,sub2){
   return '<div class="stat"><div class="val ' + (size||'') + ' ' + (color||'') + '">' + val + '</div>'
        + '<div class="lbl">' + esc(lbl) + '</div>'
        + (sub2?'<div class="sub2">' + esc(sub2) + '</div>':'') + '</div>';
+}
+function accessibleSeries(label, rows){
+  var out='<details class="muted"><summary>'+esc(label)+'</summary><ul>';
+  (rows||[]).forEach(function(row){out+='<li>'+esc(row.date)+': '+esc(num((Number(row.used_cf)||0)*7.48052,1))+' gal</li>';});
+  return out+'</ul></details>';
 }
 function rowKV(k,v){ return '<tr><td>' + esc(k) + '</td><td colspan="2" style="text-align:right">' + v + '</td></tr>'; }
 function rowMoney(k,v){ return '<tr><td>' + esc(k) + '</td><td></td><td style="text-align:right">' + money(v) + '</td></tr>'; }
@@ -476,9 +454,10 @@ function fmtTime(iso){ try{ var d=new Date(iso); return d.toLocaleString([], {mo
 function shortDate(s){ try{ var d=new Date(s+'T00:00:00'); return d.toLocaleDateString([], {month:'short',day:'numeric'}); }catch(e){ return s; } }
 
 function load(){
-  fetch('/api/water-cost').then(function(r){return r.json();}).then(render)
-    .catch(function(e){ document.getElementById('content').innerHTML =
-      '<div class="card red">Failed to load: ' + esc(e.message) + '</div>'; });
+  var c=document.getElementById('content'); c.setAttribute('aria-busy','true');
+  fetch('/api/water-cost').then(function(r){if(!r.ok) throw new Error('HTTP '+r.status); return r.json();}).then(render)
+    .catch(function(){ c.setAttribute('aria-busy','false'); c.innerHTML =
+      '<div class="card red" role="alert">Cost data could not be loaded. <button type="button" onclick="load()">Retry</button></div>'; });
 }
 
 function refreshSidebarStatus(){

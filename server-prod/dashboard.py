@@ -25,12 +25,14 @@ from irrigation import ESP32_MANUAL_TIMEOUT
 from cam_ocr import MeterReader
 import cam_ocr
 import seasonal
+from shadow_calibration_common import watering_policy_fingerprint
 
 log = logging.getLogger("smart-garden")
 
 
 def create_app(config, engine, weather, billing):
     import time
+    ALL_VALVES_ZONE_ID = -100
     app = Flask(__name__)
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # no caching during dev
     app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -116,6 +118,8 @@ def create_app(config, engine, weather, billing):
     def zone_number(zone_id):
         """Official user-facing zone number. Internal ids stay 0-based."""
         try:
+            if int(zone_id) == ALL_VALVES_ZONE_ID:
+                return "All"
             return int(zone_id) + 1
         except (TypeError, ValueError):
             return None
@@ -125,12 +129,19 @@ def create_app(config, engine, weather, billing):
             zid = int(zone_id)
         except (TypeError, ValueError):
             return f"Unknown zone {zone_id}"
+        if zid == ALL_VALVES_ZONE_ID:
+            return "All Valves"
         for z in config.get("zones", []):
             if int(z.get("id", -1)) == zid:
                 return z.get("name") or f"Zone {zid + 1}"
         return f"Zone {zid + 1}"
 
     def zone_label(zone_id):
+        try:
+            if int(zone_id) == ALL_VALVES_ZONE_ID:
+                return "All Valves"
+        except (TypeError, ValueError):
+            pass
         zn = zone_number(zone_id)
         name = zone_display_name(zone_id)
         return f"Zone {zn} - {name}" if zn is not None else name
@@ -550,6 +561,8 @@ def create_app(config, engine, weather, billing):
                 "taw": taw, "mad": mad, "bal": float(balance_mm),
                 "kc": z.get("kc", [0.9, 0.9, 0.9, 0.9]),
                 "run": z.get("max_runtime_min", 24),
+                "precip_rate_iph": z.get("precip_rate_iph", 1.0),
+                "wet_target_pct": z.get("wet_target", 75.0),
             }
             cols.append({"id": zid, "name": z["name"],
                          "type": z.get("type", "sprinkler")})
@@ -559,16 +572,84 @@ def create_app(config, engine, weather, billing):
         now = datetime.now()
         win_end = str(win.get("end", "08:00"))
         try:
-            end_h = int(win_end.split(":")[0])
+            end_h, end_m = (int(part) for part in win_end.split(":")[:2])
         except Exception:
-            end_h = 8
-        first_offset = 0 if now.hour < end_h else 1
+            end_h, end_m = 8, 0
+        evening_zones = set(int(z) for z in win.get("evening_zones", []))
+        try:
+            evening_h, evening_m = (
+                int(part) for part in str(win.get("evening_start", "20:00")).split(":")[:2]
+            )
+            evening_end_h, evening_end_m = (
+                int(part) for part in str(win.get("evening_end", "22:00")).split(":")[:2]
+            )
+        except Exception:
+            evening_h, evening_m = 20, 0
+            evening_end_h, evening_end_m = 22, 0
+        decision_gap = timedelta(
+            seconds=int(config.get("esp32", {}).get("poll_interval_sec", 300)))
+        today_window_end = datetime(
+            now.year, now.month, now.day, end_h, end_m)
+        first_offset = 0 if now <= today_window_end else 1
+        today = now.date()
+        today_iso = today.isoformat()
+        active_zones = set(int(z) for z in (summary.get("active_zones") or []))
+
+        today_events = {}
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT zone_id, MIN(start_ts) AS first_start, "
+                "SUM(CASE WHEN duration_sec > 60 THEN duration_sec ELSE 0 END) AS total_sec, "
+                "MAX(CASE WHEN end_ts IS NULL THEN start_ts ELSE NULL END) AS open_start "
+                "FROM watering_event "
+                "WHERE date(start_ts) = ? "
+                "GROUP BY zone_id",
+                (today_iso,),
+            ).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            zid = int(r["zone_id"])
+            if zid in zstate:
+                today_events[zid] = {
+                    "first_start": r["first_start"],
+                    "total_sec": float(r["total_sec"] or 0),
+                    "open_start": r["open_start"],
+                }
 
         def kc_for(zid):
             arr = zstate[zid]["kc"]
             if 0 <= season_idx < len(arr):
                 return arr[season_idx]
             return 0.0  # dormant -> no ET demand (engine skips irrigation)
+
+        def et_fraction_for(d):
+            if d != today:
+                return 1.0
+            try:
+                return max(0.0, 1.0 - engine._et_fraction(now))
+            except Exception:
+                return 1.0
+
+        def should_water(zid, et0, et_fraction):
+            s = zstate[zid]
+            remaining_et = et0 * kc_for(zid) * et_fraction
+            return s["bal"] - remaining_et <= s["mad"]
+
+        def desired_runtime(zid, et0, et_fraction, prior_minutes=0.0):
+            s = zstate[zid]
+            remaining_et = et0 * kc_for(zid) * et_fraction
+            target_mm = max(
+                0.0, min(s["taw"],
+                         s["mad"] + remaining_et + s["taw"] * 0.02))
+            required_mm = max(0.0, target_mm - s["bal"])
+            rate = float(s["precip_rate_iph"] or 0)
+            cap = float(s["run"]) * scale_pct / 100.0
+            required_min = (required_mm / (rate * 25.4) * 60.0
+                            if rate > 0 else cap)
+            remaining_cap = max(0.0, cap - prior_minutes)
+            return max(0, int(round(min(required_min, remaining_cap))))
 
         days = []
         next_water = {}  # zid -> {date_label, start, minutes, days_away}
@@ -577,11 +658,7 @@ def create_app(config, engine, weather, billing):
             fc = fc_by_date.get(d.isoformat())
             et0 = (fc["et0"] if fc and fc.get("et0") is not None else et0_today)
             rain = (fc["rain"] if fc and fc.get("rain") is not None else 0.0)
-
-            # Deplete every zone by its ET demand; credit rain.
-            for zid, s in zstate.items():
-                etc = et0 * kc_for(zid)
-                s["bal"] = max(0.0, s["bal"] - etc + rain)
+            decision_et_fraction = et_fraction_for(d)
 
             rain_skips = rain >= rain_skip_mm
 
@@ -589,33 +666,135 @@ def create_app(config, engine, weather, billing):
             firing = set()
             for gname, ids in groups.items():
                 members = [zid for zid in ids if zid in zstate]
-                if members and any(zstate[m]["bal"] <= zstate[m]["mad"]
+                if members and any(should_water(m, et0, decision_et_fraction)
                                    for m in members):
                     firing.update(members)
             for zid, s in zstate.items():
-                if zid not in member_of and s["bal"] <= s["mad"]:
+                if (zid not in member_of
+                        and should_water(zid, et0, decision_et_fraction)):
                     firing.add(zid)
             if rain_skips:
                 firing = set()
 
             # Serial schedule inside the window, ordered by zone id.
             t = datetime(d.year, d.month, d.day, wh, wm)
+            window_end_dt = datetime(d.year, d.month, d.day, end_h, end_m)
+            evening_start_dt = datetime(
+                d.year, d.month, d.day, evening_h, evening_m)
+            evening_end_dt = datetime(
+                d.year, d.month, d.day, evening_end_h, evening_end_m)
             day_sched = {}
-            for zid in sorted(firing):
-                run = int(round(zstate[zid]["run"] * scale_pct / 100.0))
-                day_sched[str(zid)] = {
-                    "start": t.strftime("%H:%M"), "minutes": run,
+            if d == today:
+                for zid, ev in today_events.items():
+                    open_start = ev.get("open_start")
+                    first_start = open_start or ev.get("first_start")
+                    if not first_start:
+                        continue
+                    try:
+                        actual_start = datetime.fromisoformat(first_start)
+                    except Exception:
+                        continue
+                    run = desired_runtime(
+                        zid, et0, decision_et_fraction,
+                        float(ev.get("total_sec", 0)) / 60.0)
+                    elapsed_min = max(0, int(round((now - actual_start).total_seconds() / 60.0)))
+                    total_min = max(1, int(round(ev.get("total_sec", 0) / 60.0)))
+                    running = zid in active_zones and bool(open_start)
+                    day_sched[str(zid)] = {
+                        "start": actual_start.strftime("%H:%M"),
+                        "minutes": run if running else total_min,
+                        "past": True,
+                        "ended": not running,
+                        "running": running,
+                        "actual": True,
+                        "elapsed": elapsed_min if running else total_min,
+                    }
+                    if running:
+                        t = max(t, actual_start + timedelta(minutes=run)
+                                + decision_gap)
+
+                done_today = set()
+                remaining_today_min = {}
+                for zid, ev in today_events.items():
+                    remaining = desired_runtime(
+                        zid, et0, decision_et_fraction,
+                        float(ev.get("total_sec", 0)) / 60.0)
+                    if remaining <= 0:
+                        done_today.add(zid)
+                    else:
+                        remaining_today_min[zid] = remaining
+
+                firing = {
+                    zid for zid in firing
+                    if zid not in done_today and zid not in active_zones
                 }
-                t = t + timedelta(minutes=run)
-                zstate[zid]["bal"] = zstate[zid]["taw"]  # refill to field cap
-                if zid not in next_water:
+                if active_zones:
+                    t = max(t, now)
+                elif t <= now:
+                    t = now + timedelta(minutes=1)
+
+            for zid in sorted(firing):
+                run = desired_runtime(zid, et0, decision_et_fraction)
+                if d == today and zid in remaining_today_min:
+                    run = remaining_today_min[zid]
+                if run <= 0:
+                    continue
+                slot_start = t
+                # The engine only requires a run to START inside the window; an
+                # active run may finish after it. Anything whose start is later
+                # remains dry and is reconsidered in the next allowed window.
+                if slot_start > window_end_dt:
+                    if zid not in evening_zones:
+                        continue
+                    slot_start = max(slot_start, evening_start_dt)
+                    if slot_start > evening_end_dt:
+                        continue
+                slot_end = t + timedelta(minutes=run)
+                slot_has_started = slot_start < now
+                slot_has_ended = slot_end <= now
+                day_sched[str(zid)] = {
+                    "start": slot_start.strftime("%H:%M"),
+                    "minutes": run,
+                    "past": slot_has_started,
+                    "ended": slot_has_ended,
+                }
+                t = slot_end + decision_gap
+                irrigation_mm = (
+                    (run / 60.0) * zstate[zid]["precip_rate_iph"] * 25.4
+                )
+                zstate[zid]["bal"] = min(
+                    zstate[zid]["taw"], zstate[zid]["bal"] + irrigation_mm
+                )
+                day_sched[str(zid)]["projected_pct"] = round(
+                    zstate[zid]["bal"] / zstate[zid]["taw"] * 100.0, 1
+                ) if zstate[zid]["taw"] > 0 else None
+                if slot_start >= now and zid not in next_water:
                     next_water[zid] = {
                         "date_label": d.strftime("%a %b %d"),
                         "iso": d.isoformat(),
                         "start": day_sched[str(zid)]["start"],
                         "minutes": run,
-                        "days_away": first_offset + n,
+                        "days_away": (d - today).days,
                     }
+
+            # Carry the water balance to the next morning. Watering occurs in
+            # the midnight/morning window; most ET occurs afterward during
+            # daylight. Today's stored balance already includes ET consumed so
+            # far, so subtract only the remaining fraction today.
+            et_fraction = 1.0
+            if d == today:
+                try:
+                    et_fraction = max(0.0, 1.0 - engine._et_fraction(now))
+                except Exception:
+                    et_fraction = 1.0
+            for zid, s in zstate.items():
+                etc = et0 * kc_for(zid) * et_fraction
+                s["bal"] = max(0.0, min(s["taw"], s["bal"] - etc + rain))
+                cell = day_sched.get(str(zid))
+                if cell and cell.get("projected_pct") is not None:
+                    cell["end_of_day_pct"] = round(
+                        s["bal"] / s["taw"] * 100.0, 1
+                    ) if s["taw"] > 0 else None
 
             days.append({
                 "date_label": d.strftime("%a %b %d"),
@@ -1013,6 +1192,127 @@ def create_app(config, engine, weather, billing):
         return jsonify({"ok": True, "zone_id": zone_id, "dry_bias_mm": 0})
 
     # ── Pages ──
+
+    @app.route("/api/zone-observations", methods=["GET", "POST"])
+    def api_zone_observations():
+        """Timestamped human field notes for later calibration analysis.
+
+        This dataset is deliberately observe-only: saving an observation does
+        not change MAD, water balance, runtime, or any irrigation decision.
+        """
+        conditions = {
+            "very_dry", "somewhat_dry", "healthy", "somewhat_wet",
+            "very_wet", "uncertain",
+        }
+        judgments = {
+            "much_more", "little_more", "about_right", "little_less",
+            "much_less", "unsure",
+        }
+        indicators_allowed = {
+            "wilting", "browning", "footprints", "firm_dry_soil",
+            "soft_soil", "squishy", "standing_water", "runoff",
+            "moss_algae", "fungal_growth", "uneven_patchiness",
+        }
+
+        if request.method == "GET":
+            raw_zone = request.args.get("zone_id")
+            zone_id = None if raw_zone in (None, "", "all") else coerce_int(
+                raw_zone, -1, min_value=-1, max_value=len(config["zones"]) - 1)
+            if zone_id == -1:
+                return jsonify({"ok": False, "error": "bad zone"}), 400
+            limit = query_int("limit", 50, min_value=1, max_value=500)
+            rows = db.get_zone_observations(zone_id=zone_id, limit=limit)
+            zone_names = {z["id"]: z["name"] for z in config["zones"]}
+            for row in rows:
+                row["zone_name"] = zone_names.get(row["zone_id"], "Unknown")
+                row.pop("context", None)
+                row.pop("policy_fingerprint", None)
+            return jsonify({"ok": True, "observations": rows})
+
+        payload = request.get_json(silent=True) or {}
+        try:
+            zone_id = int(payload.get("zone_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Select a zone"}), 400
+        if not (0 <= zone_id < len(config["zones"])):
+            return jsonify({"ok": False, "error": "bad zone"}), 400
+        condition = str(payload.get("condition") or "").strip()
+        judgment = str(payload.get("water_judgment") or "").strip()
+        if condition not in conditions:
+            return jsonify({"ok": False, "error": "Select an observed condition"}), 400
+        if judgment not in judgments:
+            return jsonify({"ok": False, "error": "Select your water judgment"}), 400
+        observed_raw = str(payload.get("observed_ts") or "").strip()
+        try:
+            observed_dt = datetime.fromisoformat(observed_raw)
+            if observed_dt.tzinfo is not None:
+                observed_dt = observed_dt.astimezone().replace(tzinfo=None)
+            observed_ts = observed_dt.replace(microsecond=0).isoformat()
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Invalid observation time"}), 400
+        if observed_dt > datetime.now() + timedelta(minutes=5):
+            return jsonify({"ok": False, "error": "Observation time cannot be in the future"}), 400
+        indicators = payload.get("indicators") or []
+        if not isinstance(indicators, list):
+            return jsonify({"ok": False, "error": "Invalid indicators"}), 400
+        indicators = list(dict.fromkeys(
+            str(value) for value in indicators if str(value) in indicators_allowed
+        ))
+        notes = str(payload.get("notes") or "").strip()
+        if len(notes) > 1000:
+            return jsonify({"ok": False, "error": "Notes are limited to 1000 characters"}), 400
+        context = None
+        policy_fingerprint = None
+        # Exact immutable context is safe only for near-real-time observations.
+        # A user may backdate a field note, but today's mutable daily balance is
+        # not evidence of what the model believed at that historical instant.
+        context_age_min = abs((datetime.now() - observed_dt).total_seconds()) / 60
+        if context_age_min <= 15:
+            policy_fingerprint, policy_payload = watering_policy_fingerprint(config)
+            balance = db.get_soil_balance(zone_id)
+            conn = db.get_conn()
+            try:
+                recent = conn.execute(
+                    "SELECT start_ts,end_ts,duration_sec,est_gallons,trigger_reason "
+                    "FROM watering_event WHERE zone_id=? "
+                    "AND start_ts>=? ORDER BY start_ts",
+                    (zone_id, (datetime.now() - timedelta(hours=72)).isoformat(
+                        timespec="seconds"))
+                ).fetchall()
+            finally:
+                conn.close()
+            context = {
+                "snapshot_quality": "exact_at_recording",
+                "snapshot_ts": datetime.now().isoformat(timespec="seconds"),
+                "policy_payload": policy_payload,
+                "soil_balance": dict(balance) if balance else None,
+                "weather": weather.get_current(allow_fetch=False),
+                "et0_today_mm": weather.get_today_et0(allow_fetch=False),
+                "watering_72h": [dict(item) for item in recent],
+                "active_watering": [dict(item) for item in recent
+                                     if item["end_ts"] is None],
+            }
+            fingerprint_after, _ = watering_policy_fingerprint(config)
+            if fingerprint_after != policy_fingerprint:
+                policy_fingerprint = None
+                context = {
+                    "snapshot_quality": "invalid_policy_race",
+                    "snapshot_ts": datetime.now().isoformat(timespec="seconds"),
+                    "reason": "Watering policy changed while context was captured",
+                }
+        else:
+            context = {
+                "snapshot_quality": "unavailable_backdated",
+                "snapshot_ts": datetime.now().isoformat(timespec="seconds"),
+                "reason": "Observation was entered more than 15 minutes from its timestamp",
+            }
+        row = db.add_zone_observation(
+            zone_id, observed_ts, condition, judgment, indicators, notes,
+            policy_fingerprint=policy_fingerprint, context=context)
+        row["zone_name"] = config["zones"][zone_id]["name"]
+        row.pop("context", None)
+        row.pop("policy_fingerprint", None)
+        return jsonify({"ok": True, "observation": row}), 201
 
     @app.route("/")
     def index():
@@ -1708,6 +2008,33 @@ def create_app(config, engine, weather, billing):
             return jsonify({"ok": ok, "zone_id": zone_id, "minutes": minutes, "soil_pct": soil_pct})
         return redirect(url_for("index"))
 
+    @app.route("/api/run-all", methods=["POST"])
+    def api_run_all_valves():
+        """Run every installed valve together for a max-flow test."""
+        minutes = request_int("minutes", 5, min_value=5, max_value=30)
+        allowed_minutes = {5, 10, 15, 20, 25, 30}
+        if minutes not in allowed_minutes:
+            return jsonify({
+                "ok": False,
+                "minutes": minutes,
+                "error": "invalid_minutes",
+                "allowed_minutes": sorted(allowed_minutes),
+            }), 400
+        ok = engine_command(
+            "start_all_valves_watering",
+            minutes,
+            command_timeout=ESP32_MANUAL_TIMEOUT,
+            retry=False,
+        )
+        status = 200 if ok else 409
+        return jsonify({
+            "ok": ok,
+            "zone_id": ALL_VALVES_ZONE_ID,
+            "zone_label": "All Valves",
+            "minutes": minutes,
+            "error": None if ok else "all_valves_busy_or_failed",
+        }), status
+
     @app.route("/api/status")
     def api_status():
         return jsonify(status_summary())
@@ -1798,21 +2125,62 @@ def create_app(config, engine, weather, billing):
     def water_usage_page():
         return render_template("water_usage.html")
 
+    TRUSTED_WATER_USAGE_START = "2026-06-25T22:00:00"
+
+    def _water_usage_display_metrics(row, end_ts):
+        """Repair zeroed cleanup metadata for display without changing the DB."""
+        duration_sec = row["duration_sec"]
+        derived = False
+        if end_ts and (duration_sec is None or duration_sec <= 0):
+            try:
+                duration_sec = max(0, int(round((
+                    datetime.fromisoformat(end_ts)
+                    - datetime.fromisoformat(row["start_ts"])
+                ).total_seconds())))
+                derived = duration_sec > 0
+            except (TypeError, ValueError):
+                pass
+        est_gallons = row["est_gallons"]
+        if derived and (est_gallons is None or est_gallons <= 0):
+            zone = next((z for z in config.get("zones", [])
+                         if z.get("id") == row["zone_id"]), None)
+            if zone and zone.get("est_gpm") is not None:
+                est_gallons = float(zone["est_gpm"]) * duration_sec / 60.0
+        return duration_sec, est_gallons, derived
+
+    def _water_usage_trust(start):
+        trusted = bool(start and start >= TRUSTED_WATER_USAGE_START)
+        return {
+            "trusted": trusted,
+            "cutoff": TRUSTED_WATER_USAGE_START,
+            "reason": (None if trusted else
+                       "selected window begins before the stabilized meter "
+                       "ledger cutoff; old OCR/re-anchor history can be "
+                       "internally consistent but physically misleading"),
+        }
+
     @app.route("/api/water-usage/events")
     def api_water_usage_events():
         """Recent watering events for quickly selecting a chart window."""
         days = query_int("days", 7, min_value=1, max_value=90)
         limit = query_int("limit", 80, min_value=1, max_value=300)
         pad_s = query_int("pad_s", 30, min_value=0, max_value=3600)
+        include_untrusted = (request.args.get("include_untrusted", "0")
+                             in ("1", "true", "yes"))
         now_iso = datetime.now().isoformat(timespec="seconds")
         conn = db.get_conn()
         try:
+            since = (datetime.now() - timedelta(days=days)).isoformat(
+                timespec="seconds")
+            if not include_untrusted and since < TRUSTED_WATER_USAGE_START:
+                since = TRUSTED_WATER_USAGE_START
             rows = conn.execute(
                 "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
                 "trigger_reason FROM watering_event "
-                "WHERE start_ts >= datetime('now','localtime',?) "
+                "WHERE start_ts >= ? "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
                 "ORDER BY start_ts DESC LIMIT ?",
-                (f"-{days} days", limit),
+                (since, limit),
             ).fetchall()
         finally:
             conn.close()
@@ -1821,6 +2189,8 @@ def create_app(config, engine, weather, billing):
         for r in rows:
             start_ts = r["start_ts"]
             end_ts = r["end_ts"] or now_iso
+            duration_sec, est_gallons, derived = (
+                _water_usage_display_metrics(r, r["end_ts"]))
             try:
                 sdt = datetime.fromisoformat(start_ts)
                 edt = datetime.fromisoformat(end_ts)
@@ -1840,13 +2210,17 @@ def create_app(config, engine, weather, billing):
                 "start": start_ts,
                 "end": r["end_ts"],
                 "open": r["end_ts"] is None,
-                "duration_sec": r["duration_sec"],
-                "est_gallons": r["est_gallons"],
+                "duration_sec": duration_sec,
+                "est_gallons": est_gallons,
+                "display_metrics_derived": derived,
                 "trigger_reason": r["trigger_reason"],
                 "select_start": sel_start,
                 "select_end": sel_end,
+                "trusted": start_ts >= TRUSTED_WATER_USAGE_START,
             })
-        return jsonify({"events": out, "now": now_iso, "pad_s": pad_s})
+        return jsonify({"events": out, "now": now_iso, "pad_s": pad_s,
+                        "trusted_start": TRUSTED_WATER_USAGE_START,
+                        "include_untrusted": include_untrusted})
 
     def _water_usage_window(default_minutes=60):
         """Resolve the water-usage window from either:
@@ -1898,6 +2272,723 @@ def create_app(config, engine, weather, billing):
         # Auto: aim for ~40 buckets, snapped to the 5s capture cadence.
         return max(5, int(round(win_s / 40 / 5)) * 5)
 
+    def _water_usage_stale_lock_context(start, end):
+        """Find watering events whose meter movement is missing/thin.
+
+        This catches the failure mode where the camera keeps writing fresh rows
+        but they are only held stale-lock values because OCR/oracle could not
+        advance the lock. The chart can be internally self-consistent in that
+        state, but it is not physically complete.
+        """
+        import meter_ledger
+
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE start_ts < ? AND COALESCE(end_ts, ?) > ? "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
+                "ORDER BY start_ts",
+                (end, now_iso, start),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        events = []
+        est_total = 0.0
+        measured_total = 0.0
+        for r in rows:
+            ev = dict(r)
+            ev_end = ev["end_ts"] or now_iso
+            est = float(ev.get("est_gallons") or 0.0)
+            if est <= 0:
+                continue
+            usage = meter_ledger.usage_for_window(ev["start_ts"], ev_end)
+            measured = usage.get("gallons")
+            measured_f = float(measured or 0.0)
+            est_total += est
+            measured_total += measured_f
+            # Treat as stale when the run should have moved material water but
+            # the ledger saw less than a quarter of it. This is a warning, not a
+            # replacement calculation; the UI still shows measured gallons.
+            if est >= 5.0 and measured_f < (est * 0.25):
+                events.append({
+                    "id": ev["id"],
+                    "zone_id": ev["zone_id"],
+                    "zone_label": zone_label(ev["zone_id"]),
+                    "start": ev["start_ts"],
+                    "end": ev_end,
+                    "est_gallons": round(est, 2),
+                    "meter_gallons": round(measured_f, 2),
+                    "coverage": usage.get("coverage"),
+                    "samples": usage.get("samples"),
+                })
+        return {
+            "active": bool(events),
+            "events": events,
+            "event_count": len(events),
+            "event_est_gallons": round(est_total, 2),
+            "event_meter_gallons": round(measured_total, 2),
+            "estimated_missing_gallons": round(
+                max(0.0, est_total - measured_total), 2),
+        }
+
+    def _median_num(values):
+        vals = sorted(float(v) for v in values if v is not None)
+        if not vals:
+            return None
+        mid = len(vals) // 2
+        if len(vals) % 2:
+            return vals[mid]
+        return (vals[mid - 1] + vals[mid]) / 2.0
+
+    def _water_usage_zone_report(start, end, baseline_days=90):
+        """Median per-run physical water usage by installed sprinkler zone."""
+        import meter_ledger
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        min_clean_duration_sec = int(os.environ.get(
+            "WATER_USAGE_ZONE_GPM_MIN_DURATION_SEC", "120"))
+        water_zones = [
+            z for z in config.get("zones", [])
+            if z.get("installed", False)
+            and z.get("type") in ("sprinkler", "drip")
+        ]
+        by_id = {int(z["id"]): {
+            "zone_id": int(z["id"]),
+            "zone_number": zone_number(z["id"]),
+            "zone_name": z.get("name", ""),
+            "zone_label": zone_label(z["id"]),
+            "est_gpm": z.get("est_gpm"),
+            "selected": [],
+            "baseline": [],
+        } for z in water_zones}
+        by_id[ALL_VALVES_ZONE_ID] = {
+            "zone_id": ALL_VALVES_ZONE_ID,
+            "zone_number": "All",
+            "zone_name": "All Valves",
+            "zone_label": "All Valves",
+            "est_gpm": None,
+            "selected": [],
+            "baseline": [],
+        }
+        if not by_id:
+            return {"zones": [], "baseline_days": baseline_days,
+                    "source": "meter_ledger"}
+
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE (end_ts IS NOT NULL OR start_ts <= ?) "
+                "AND start_ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
+                "ORDER BY start_ts",
+                (now_iso, f"-{baseline_days} days"),
+            ).fetchall()
+        finally:
+            conn.close()
+        events = [dict(r) for r in rows]
+
+        def overlaps_other(ev):
+            try:
+                sid = ev.get("id")
+                st = ev.get("start_ts")
+                en = ev.get("end_ts") or now_iso
+            except Exception:
+                return False
+            for other in events:
+                if other.get("id") == sid:
+                    continue
+                other_end = other.get("end_ts") or now_iso
+                if other.get("start_ts") < en and other_end > st:
+                    return True
+            return False
+
+        for r in events:
+            zid = int(r["zone_id"])
+            item = by_id.get(zid)
+            if not item:
+                continue
+            run_end = r["end_ts"] or now_iso
+            try:
+                dur = float(r["duration_sec"] or (
+                    datetime.fromisoformat(run_end)
+                    - datetime.fromisoformat(r["start_ts"])
+                ).total_seconds())
+            except Exception:
+                dur = float(r["duration_sec"] or 0)
+            if dur <= 0:
+                continue
+            usage = meter_ledger.usage_for_window(r["start_ts"], run_end)
+            rate_stats = meter_ledger.run_rate_stats(
+                r["start_ts"], run_end)
+            gal = usage.get("gallons")
+            source = "meter_ledger"
+            samples = int(usage.get("samples") or 0)
+            backward_steps = int(usage.get("backward_steps") or 0)
+            max_drop_cf = float(usage.get("max_drop_cf") or 0.0)
+            rate_segments = int(rate_stats.get("segment_count") or 0)
+            provenance_segments = int(
+                rate_stats.get("excluded_provenance_segments") or 0)
+            official_gpm = rate_stats.get("median_gpm")
+            official_method = "meter_ledger_raw_segments"
+            if official_gpm is None and rate_stats.get("span_gpm") is not None:
+                official_gpm = rate_stats.get("span_gpm")
+                official_method = rate_stats.get("span_source") or "meter_ledger_span"
+            est_gal = float(r["est_gallons"] or 0)
+            est_gpm = float(item.get("est_gpm") or 0)
+            configured_gal = est_gal or (est_gpm * dur / 60.0)
+            plausible_max = max(1.0, configured_gal * 2.5)
+            is_all_valves = zid == ALL_VALVES_ZONE_ID
+            overlap = False if is_all_valves else overlaps_other(r)
+            exclude_reasons = []
+            if r["start_ts"] < TRUSTED_WATER_USAGE_START:
+                exclude_reasons.append("pre_trust_cutoff")
+            if overlap:
+                exclude_reasons.append("overlap")
+            if dur < min_clean_duration_sec:
+                exclude_reasons.append("short_run")
+            if official_gpm is None or (
+                    rate_segments < 3
+                    and official_method not in ("meter_ledger_anchored_span",
+                                                "meter_span")):
+                exclude_reasons.append("thin_rate_segments")
+            if (provenance_segments > 0 and rate_segments < 3
+                    and official_method not in ("meter_ledger_anchored_span",
+                                                "meter_span")):
+                exclude_reasons.append("derived_rate_segments")
+            if gal is None or gal <= 0:
+                exclude_reasons.append("no_meter_delta")
+            if samples < 2:
+                exclude_reasons.append("thin_coverage")
+            implausible_total = bool(
+                not is_all_valves and gal is not None and gal > plausible_max)
+            physical_ok = not exclude_reasons
+            if not physical_ok:
+                gal = configured_gal
+                source = "configured_estimate"
+            if gal <= 0:
+                continue
+            rec = {
+                "start": r["start_ts"],
+                "end": run_end,
+                "open": r["end_ts"] is None,
+                "duration_sec": int(dur),
+                "gallons": gal,
+                "gpm": (official_gpm if physical_ok
+                        else gal / (dur / 60.0)),
+                "official_gpm": official_gpm,
+                "trigger_reason": r["trigger_reason"],
+                "source": source,
+                "ledger_samples": samples,
+                "rate_segments": rate_segments,
+                "derived_rate_segments": provenance_segments,
+                "rate_stats": rate_stats,
+                "official_method": official_method,
+                "backward_steps": backward_steps,
+                "max_drop_cf": max_drop_cf,
+                "overlap": bool(overlap),
+                "physical_ok": bool(physical_ok),
+                "has_backward_steps": bool(backward_steps > 0),
+                "has_implausible_total": implausible_total,
+                "exclude_reasons": exclude_reasons,
+            }
+            item["baseline"].append(rec)
+            if start <= r["start_ts"] < end:
+                item["selected"].append(rec)
+
+        def summarize(records):
+            physical_records = [
+                r for r in records if r.get("source") == "meter_ledger"
+                and r.get("physical_ok")]
+            estimated_records = [
+                r for r in records if r.get("source") != "meter_ledger"]
+            gallons = [r["gallons"] for r in physical_records]
+            gpms = [r["gpm"] for r in physical_records]
+            durations = [r["duration_sec"] / 60.0 for r in records]
+            est_gpms = [r["gpm"] for r in estimated_records]
+            est_gallons = [r["gallons"] for r in estimated_records]
+            physical = len(physical_records)
+            estimated = len(estimated_records)
+            overlaps = sum(1 for r in records if r.get("overlap"))
+            pre_cutoff = sum(
+                1 for r in records
+                if "pre_trust_cutoff" in (r.get("exclude_reasons") or []))
+            short = sum(
+                1 for r in records
+                if "short_run" in (r.get("exclude_reasons") or []))
+            thin = sum(
+                1 for r in records
+                if "thin_coverage" in (r.get("exclude_reasons") or []))
+            thin_rate = sum(
+                1 for r in records
+                if "thin_rate_segments" in (r.get("exclude_reasons") or []))
+            derived_rate = sum(
+                1 for r in records
+                if "derived_rate_segments" in (
+                    r.get("exclude_reasons") or []))
+            backward = sum(
+                1 for r in records if r.get("backward_steps", 0) > 0)
+            implausible = sum(
+                1 for r in records if r.get("has_implausible_total"))
+            uncovered = sum(
+                1 for r in estimated_records if not r.get("overlap"))
+            total = sum(gallons)
+            return {
+                "runs": len(records),
+                "physical_runs": physical,
+                    "estimated_runs": estimated,
+                    "overlap_runs": overlaps,
+                    "pre_cutoff_runs": pre_cutoff,
+                    "short_runs": short,
+                    "thin_runs": thin,
+                    "thin_rate_runs": thin_rate,
+                    "derived_rate_runs": derived_rate,
+                    "backward_runs": backward,
+                    "implausible_runs": implausible,
+                    "uncovered_runs": uncovered,
+                "physical_total_gal": round(total, 2),
+                "total_gal": round(total, 2),
+                "median_gal": (round(_median_num(gallons), 2)
+                               if gallons else None),
+                "median_gpm": (round(_median_num(gpms), 2)
+                               if gpms else None),
+                "estimate_median_gal": (
+                    round(_median_num(est_gallons), 2)
+                    if est_gallons else None),
+                "estimate_median_gpm": (
+                    round(_median_num(est_gpms), 2)
+                    if est_gpms else None),
+                "median_min": (round(_median_num(durations), 1)
+                               if durations else None),
+                "best_source": ("physical_meter"
+                                if physical else "insufficient_physical"),
+                "last_run": records[-1]["start"] if records else None,
+                "official_method": "meter_ledger_raw_segments",
+            }
+
+        out = []
+        overall_selected = []
+        overall_baseline = []
+        for zid in sorted(by_id):
+            item = by_id[zid]
+            selected = item.pop("selected")
+            baseline = item.pop("baseline")
+            overall_selected.extend(selected)
+            overall_baseline.extend(baseline)
+            history_records = [
+                r for r in baseline
+                if r.get("source") == "meter_ledger" and r.get("physical_ok")
+            ][-30:]
+            excluded_history_records = [
+                r for r in baseline
+                if not (
+                    r.get("source") == "meter_ledger"
+                    and r.get("physical_ok")
+                )
+            ][-30:]
+            item["history"] = [{
+                "start": r["start"],
+                "gpm": round(r["gpm"], 3),
+                "official_gpm": round(r["official_gpm"], 3),
+                "official_method": r.get("official_method"),
+                "gallons": round(r["gallons"], 2),
+                "duration_min": round(r["duration_sec"] / 60.0, 1),
+                "ledger_samples": r.get("ledger_samples", 0),
+                "rate_segments": r.get("rate_segments", 0),
+            } for r in history_records]
+            item["history_excluded"] = [{
+                "start": r["start"],
+                "gpm": round(r["gpm"], 3),
+                "gallons": round(r["gallons"], 2),
+                "duration_min": round(r["duration_sec"] / 60.0, 1),
+                "ledger_samples": r.get("ledger_samples", 0),
+                "rate_segments": r.get("rate_segments", 0),
+                "derived_rate_segments": r.get("derived_rate_segments", 0),
+                "reasons": r.get("exclude_reasons") or [],
+                "source": r.get("source"),
+            } for r in excluded_history_records]
+            item["selected_runs"] = [{
+                "event_start": r["start"],
+                "gpm": round(r["gpm"], 3) if r.get("gpm") is not None else None,
+                "official_gpm": (round(r["official_gpm"], 3)
+                                 if r.get("official_gpm") is not None else None),
+                "official_method": r.get("official_method"),
+                "gallons": round(r["gallons"], 2),
+                "duration_min": round(r["duration_sec"] / 60.0, 1),
+                "physical_ok": bool(r.get("physical_ok")),
+                "rate_segments": r.get("rate_segments", 0),
+                "exclude_reasons": r.get("exclude_reasons") or [],
+            } for r in selected]
+            item["selected"] = summarize(selected)
+            item["baseline"] = summarize(baseline)
+            out.append(item)
+        return {"zones": out, "baseline_days": baseline_days,
+                "trusted_start": TRUSTED_WATER_USAGE_START,
+                "min_clean_duration_sec": min_clean_duration_sec,
+                "overall": {
+                    "selected": summarize(overall_selected),
+                    "baseline": summarize(overall_baseline),
+                },
+                "source": "meter_ledger_raw_segment_median_runs",
+                "reference_source": "watering_event.est_gallons"}
+
+    def _water_usage_window_events(start, end):
+        """Watering events that overlap the current Water Usage chart window."""
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE start_ts < ? AND COALESCE(end_ts, ?) > ? "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
+                "ORDER BY start_ts",
+                (end, now_iso, start),
+            ).fetchall()
+        finally:
+            conn.close()
+        out = []
+        for r in rows:
+            zid = r["zone_id"]
+            event_end = r["end_ts"] or now_iso
+            duration_sec, est_gallons, derived = (
+                _water_usage_display_metrics(r, r["end_ts"]))
+            out.append({
+                "id": r["id"],
+                "zone_id": zid,
+                "zone_number": zone_number(zid),
+                "zone_name": zone_display_name(zid),
+                "zone_label": zone_label(zid),
+                "start": r["start_ts"],
+                "end": event_end,
+                "open": r["end_ts"] is None,
+                "duration_sec": duration_sec,
+                "est_gallons": est_gallons,
+                "display_metrics_derived": derived,
+                "trigger_reason": r["trigger_reason"],
+            })
+        return out
+
+    # Data-integrity guardrails for Water Usage. Two rules:
+    #  (1) Every watering event in the window MUST have a real measured per-run
+    #      median (clean meter segments). If it does not, that is an ERROR to
+    #      investigate -- the meter did not visibly record that zone run.
+    #  (2) If a run's median deviates substantially from that zone's own
+    #      historical median, flag it as an ANOMALY to investigate.
+    WATER_USAGE_MEDIAN_DEV_FRAC = float(os.environ.get(
+        "WATER_USAGE_MEDIAN_DEV_FRAC", "0.5"))
+    WATER_USAGE_MIN_MEDIAN_SEGMENTS = int(os.environ.get(
+        "WATER_USAGE_MIN_MEDIAN_SEGMENTS", "3"))
+
+    def _water_usage_integrity(zone_report):
+        """Flag events with no recorded median, or medians far from history."""
+        warnings = []
+        checked = missing = outliers = 0
+        for z in zone_report.get("zones", []):
+            zid = z.get("zone_id")
+            zlabel = z.get("zone_label") or z.get("zone_name") or f"Zone {zid}"
+            baseline_med = (z.get("baseline") or {}).get("median_gpm")
+            for run in z.get("selected_runs", []):
+                checked += 1
+                med = run.get("official_gpm")
+                segs = int(run.get("rate_segments") or 0)
+                method = run.get("official_method")
+                span_measured = method in (
+                    "meter_span", "meter_ledger_anchored_span")
+                has_median = bool(
+                    run.get("physical_ok") and med is not None
+                    and (segs >= WATER_USAGE_MIN_MEDIAN_SEGMENTS
+                         or span_measured))
+                if not has_median:
+                    missing += 1
+                    warnings.append({
+                        "severity": "error",
+                        "code": "missing_median",
+                        "zone_id": zid, "zone_label": zlabel,
+                        "event_start": run.get("event_start"),
+                        "median_gpm": med,
+                        "rate_segments": segs,
+                        "reasons": run.get("exclude_reasons") or [],
+                        "message": (f"{zlabel} run at "
+                                    f"{run.get('event_start')} has no recorded "
+                                    f"meter median -- investigate."),
+                    })
+                    continue
+                if baseline_med and baseline_med > 0:
+                    dev = abs(med - baseline_med) / baseline_med
+                    if dev > WATER_USAGE_MEDIAN_DEV_FRAC:
+                        outliers += 1
+                        warnings.append({
+                            "severity": "warn",
+                            "code": "median_outlier",
+                            "zone_id": zid, "zone_label": zlabel,
+                            "event_start": run.get("event_start"),
+                            "median_gpm": med,
+                            "zone_median_gpm": baseline_med,
+                            "deviation_pct": round(dev * 100, 1),
+                            "message": (f"{zlabel} run at "
+                                        f"{run.get('event_start')} median "
+                                        f"{med} GPM is {round(dev*100)}% off the "
+                                        f"zone median {baseline_med} GPM."),
+                        })
+        return {
+            "ok": missing == 0 and outliers == 0,
+            "checked_runs": checked,
+            "missing_median_count": missing,
+            "outlier_count": outliers,
+            "median_dev_frac": WATER_USAGE_MEDIAN_DEV_FRAC,
+            "min_median_segments": WATER_USAGE_MIN_MEDIAN_SEGMENTS,
+            "warnings": warnings,
+        }
+
+    def _water_usage_phase_tracker(start, end, zone_report):
+        """Shadow-mode low-digit tracker for watering event totals.
+
+        This is read-only evidence. It does not replace the canonical meter
+        ledger; it tells the operator which runs the software tracker could have
+        trusted without an expensive authority read.
+        """
+        try:
+            import meter_ledger
+            import meter_phase_tracker
+        except Exception as e:
+            return {"enabled": False, "error": str(e), "events": []}
+
+        def anchor_frame(row, role):
+            if not row or not row.get("image_file"):
+                return None
+            try:
+                ts_dt = datetime.fromisoformat(row["ts"])
+                ms = int(ts_dt.timestamp() * 1000)
+            except Exception:
+                ms = None
+            return {
+                "role": role,
+                "ts": row.get("ts"),
+                "image_file": row.get("image_file"),
+                "reading": row.get("committed"),
+                "reading_cf": row.get("committed_cf"),
+                "raw_reading": row.get("raw_reading"),
+                "raw_conf": row.get("raw_conf"),
+                "method": row.get("method"),
+                "confidence": row.get("confidence"),
+                "ms": ms,
+                "window_start_ms": ms - 20000 if ms is not None else None,
+                "window_end_ms": ms + 20000 if ms is not None else None,
+            }
+
+        def anchor_request(ev, meter_rows, cand):
+            """Recommend sparse real-photo anchors for uncertain events."""
+            if cand.get("decision") == "auto_accept":
+                return {"required": False, "frames": []}
+            try:
+                st = datetime.fromisoformat(ev["start_ts"])
+                en = datetime.fromisoformat(ev["end_ts"])
+            except Exception:
+                return {"required": True, "frames": [],
+                        "reason": "invalid_event_time"}
+
+            image_rows = []
+            for row in meter_rows:
+                if not row.get("image_file"):
+                    continue
+                try:
+                    row_dt = datetime.fromisoformat(row["ts"])
+                except Exception:
+                    continue
+                image_rows.append((row_dt, row))
+            if not image_rows:
+                return {"required": True, "frames": [],
+                        "reason": "no_image_rows_near_event"}
+
+            before = [r for ts, r in image_rows if ts <= st]
+            after = [r for ts, r in image_rows if ts >= en]
+            inside = [r for ts, r in image_rows if st <= ts <= en]
+            start_row = before[-1] if before else image_rows[0][1]
+            end_row = after[0] if after else (inside[-1] if inside else image_rows[-1][1])
+            frames = []
+            sf = anchor_frame(start_row, "start_anchor")
+            ef = anchor_frame(end_row, "end_anchor")
+            if sf:
+                frames.append(sf)
+            if ef and (not sf or ef.get("ts") != sf.get("ts")):
+                frames.append(ef)
+            return {
+                "required": True,
+                "reason": "tracker_needs_sparse_authority",
+                "frames": frames,
+                "candidate_gallons": cand.get("candidate_gallons"),
+                "reasons": cand.get("reasons") or [],
+            }
+
+        zone_priors = {}
+        for z in zone_report.get("zones", []):
+            try:
+                zid = int(z.get("zone_id"))
+            except Exception:
+                continue
+            prior = (z.get("baseline") or {}).get("median_gpm")
+            if prior is not None:
+                zone_priors[zid] = prior
+        for z in config.get("zones", []):
+            try:
+                zid = int(z.get("id"))
+            except Exception:
+                continue
+            if zid not in zone_priors and z.get("est_gpm") is not None:
+                zone_priors[zid] = z.get("est_gpm")
+
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        conn = db.get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE start_ts < ? AND COALESCE(end_ts, ?) > ? "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
+                "ORDER BY start_ts",
+                (end, now_iso, start),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        candidates = []
+        for r in rows:
+            ev = dict(r)
+            if not ev.get("end_ts"):
+                continue
+            ev_start = ev["start_ts"]
+            ev_end = ev["end_ts"]
+            try:
+                query_start = (
+                    datetime.fromisoformat(ev_start) - timedelta(seconds=90)
+                ).isoformat(timespec="seconds")
+                query_end = (
+                    datetime.fromisoformat(ev_end) + timedelta(seconds=90)
+                ).isoformat(timespec="seconds")
+            except Exception:
+                query_start, query_end = ev_start, ev_end
+            mrows = meter_ledger.readings_range(
+                start=query_start, end=query_end, order="asc", limit=20000)
+            phase_raw = meter_phase_tracker.cached_raw_by_ts(
+                query_start, query_end)
+            cand = meter_phase_tracker.evaluate_event_hybrid(
+                ev, mrows, phase_raw=phase_raw,
+                zone_prior_gpm=zone_priors.get(int(ev["zone_id"])))
+            cand["zone_label"] = zone_label(ev["zone_id"])
+            cand["zone_number"] = zone_number(ev["zone_id"])
+            cand["anchor_request"] = anchor_request(ev, mrows, cand)
+            candidates.append(cand)
+
+        summary = meter_phase_tracker.summarize(candidates)
+        try:
+            meter_phase_tracker.persist_event_decisions(candidates)
+        except Exception as e:
+            log.debug("phase tracker decision persist failed: %s", e)
+        resolution_summary = None
+        try:
+            resolution_rows = meter_phase_tracker.event_resolutions(
+                start=start, end=end, limit=2000)
+            if resolution_rows:
+                resolution_summary = meter_phase_tracker.summarize_resolutions(
+                    resolution_rows)
+        except Exception as e:
+            log.debug("phase tracker resolution summary failed: %s", e)
+        return {
+            "enabled": True,
+            "summary": summary,
+            "resolution_summary": resolution_summary,
+            "events": candidates,
+            "decision_store": {
+                "db": getattr(meter_phase_tracker, "PHASE_DB", None),
+                "persisted": True,
+            },
+            "profile": {
+                "mode": "suffix4_low_digit_shadow",
+                "ledger_raw_profile": {
+                    "guard_counts": 150,
+                    "min_coverage": 0.65,
+                    "zone_ratio": [0.35, 2.5],
+                },
+                "phase_cache_profile": {
+                    "guard_counts": 50,
+                    "min_coverage": 0.65,
+                    "zone_ratio": [0.35, 2.5],
+                },
+                "writes_ledger": False,
+            },
+        }
+
+    @app.route("/api/water-usage/phase-tracker/queue")
+    def api_water_usage_phase_tracker_queue():
+        """Persisted shadow tracker queue from meter_phase_tracker.db."""
+        start = request.args.get("start") or None
+        end = request.args.get("end") or None
+        decision = request.args.get("decision") or None
+        if decision == "all":
+            decision = None
+        try:
+            limit = int(request.args.get("limit") or 500)
+        except Exception:
+            limit = 500
+        try:
+            import meter_phase_tracker
+            rows = meter_phase_tracker.event_decision_queue(
+                start=start, end=end, decision=decision, limit=limit)
+            return jsonify({"ok": True, "count": len(rows), "events": rows})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e), "events": []}), 500
+
+    @app.route("/api/water-usage/phase-tracker/resolutions")
+    def api_water_usage_phase_tracker_resolutions():
+        """Resolved phase-tracker scoring from meter_phase_tracker.db."""
+        start = request.args.get("start") or None
+        end = request.args.get("end") or None
+        status = request.args.get("status") or None
+        if status == "all":
+            status = None
+        try:
+            limit = int(request.args.get("limit") or 500)
+        except Exception:
+            limit = 500
+        try:
+            import meter_phase_tracker
+            rows = meter_phase_tracker.event_resolutions(
+                start=start, end=end, status=status, limit=limit)
+            summary = meter_phase_tracker.summarize_resolutions(rows)
+            return jsonify({
+                "ok": True,
+                "count": len(rows),
+                "summary": summary,
+                "events": rows,
+            })
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e), "events": []}), 500
+
+    def _sync_water_usage_ledger(start, end=None):
+        """Apply late archive propagation before rendering Water Usage."""
+        try:
+            import meter_ledger
+
+            try:
+                since = (
+                    datetime.fromisoformat(start) - timedelta(minutes=5)
+                ).isoformat(timespec="seconds")
+            except Exception:
+                since = start
+            meter_ledger.backfill_from_archive(since)
+            meter_ledger.compute_deltas(only_null=True)
+            meter_ledger.recompute_daily(
+                start=since[:10] if since else None,
+                end=(end[:10] if end else None),
+            )
+        except Exception as e:
+            log.debug("water usage ledger sync failed: %s", e)
+
     @app.route("/api/water-usage")
     def api_water_usage():
         """Water usage over time for leak-spotting, at any zoom. Buckets the
@@ -1915,6 +3006,7 @@ def create_app(config, engine, weather, billing):
         if err:
             return jsonify({"error": err, "usage": [], "line": [],
                             "meter": []}), 400
+        _sync_water_usage_ledger(start, end)
         bucket_s = _water_usage_bucket_s(win_s)
         if int(win_s / bucket_s) > 6000:
             return jsonify({"error": "selected grain creates too many buckets; "
@@ -1925,6 +3017,13 @@ def create_app(config, engine, weather, billing):
             rate_mode = "actual"
         rows = meter_ledger.readings_range(start=start, end=end,
                                            order="asc", limit=500000)
+        trust = _water_usage_trust(start)
+        prior_row = meter_ledger.reading_before(start)
+        calc_rows = ([prior_row] if prior_row else []) + rows
+        try:
+            window_start_ep = _dt.fromisoformat(start).timestamp()
+        except Exception:
+            window_start_ep = None
         # METHODOLOGY: usage = how far the meter's HIGH-WATER MARK climbs. The
         # meter is a monotonic odometer, so a NEW HIGH in reading_cf is real
         # water — this includes the big "catch-up" jumps the live lock commits
@@ -1959,7 +3058,7 @@ def create_app(config, engine, weather, billing):
         USAGE_OUTLIER_FT3 = 20.0
         usage_outliers = 0
         max_usage_jump_cf = 0.0
-        for r in rows:
+        for r in calc_rows:
             rc = r["committed_cf"]
             dcf = r["delta_cf"] or 0.0
             # In the ledger a 'gap'-state row is the lock's over-ceiling catch-up
@@ -1967,18 +3066,20 @@ def create_app(config, engine, weather, billing):
             # reads. Health is derived purely from the committed-cf deltas.
             is_back = dcf < -0.001
             is_jump = (r["state"] == "gap") and dcf > 0.001
-            step_n += 1
-            if is_back:
-                backward_steps += 1
-                max_drop_cf = max(max_drop_cf, -dcf)
-            else:
-                nondec_n += 1
-            if is_jump:
-                big_jumps += 1
             try:
                 ep = _dt.fromisoformat(r["ts"]).timestamp()
             except Exception:
                 continue
+            in_window = r["ts"] >= start
+            if in_window:
+                step_n += 1
+                if is_back:
+                    backward_steps += 1
+                    max_drop_cf = max(max_drop_cf, -dcf)
+                else:
+                    nondec_n += 1
+                if is_jump:
+                    big_jumps += 1
             key = int(ep // bucket_s)
 
             # Usage = how far the meter's HIGH-WATER MARK climbs. A new high in
@@ -1999,6 +3100,9 @@ def create_app(config, engine, weather, billing):
                         max_usage_jump_cf = max(max_usage_jump_cf, rc - peak_cf)
                     peak_cf = rc
                     start_ep = peak_ep if peak_ep is not None else prev_ep
+                    if (start_ep is not None and window_start_ep is not None
+                            and start_ep < window_start_ep):
+                        start_ep = window_start_ep
                     if dgal > 0 and start_ep is not None and ep > start_ep:
                         for ik in range(int(start_ep // bucket_s),
                                         int(ep // bucket_s) + 1):
@@ -2023,6 +3127,9 @@ def create_app(config, engine, weather, billing):
                         ib["gal"] += dgal
                         ib["interpolated"] += 1
                     peak_ep = ep
+            if not in_window:
+                prev_ep = ep
+                continue
             cum += dgal
             b = buckets.get(key)
             if b is None:
@@ -2114,6 +3221,7 @@ def create_app(config, engine, weather, billing):
         flat = bool(real_steps) and max(real_steps) < 0.3
         leak_hint = (bool(real_steps) and len(real_steps) >= 5
                      and min(real_steps) > 0.3)
+        stale_lock = _water_usage_stale_lock_context(start, end)
         health = {"backward_steps": backward_steps,
                   "max_drop_gal": round(max_drop_cf * GAL, 1),
                   "big_jumps": big_jumps,
@@ -2121,17 +3229,72 @@ def create_app(config, engine, weather, billing):
                   "max_usage_jump_gal": round(max_usage_jump_cf * GAL, 1),
                   "pct_monotonic": (round(100.0 * nondec_n / step_n, 1)
                                     if step_n else 100.0),
-                  "samples": step_n}
+                  "samples": step_n,
+                  "stale_lock": stale_lock["active"],
+                  "stale_lock_events": stale_lock["events"],
+                  "stale_lock_event_count": stale_lock["event_count"],
+                  "stale_lock_estimated_missing_gal":
+                      stale_lock["estimated_missing_gallons"],
+                  "trusted": trust["trusted"],
+                  "trust_cutoff": trust["cutoff"],
+                  "trust_reason": trust["reason"]}
         coverage = {"ledger_rows": step_n,
                     "actual_buckets": len(buckets),
                     "interpolated_buckets": len(interp_buckets),
                     "emitted_buckets": len(usage)}
+        zone_report = _water_usage_zone_report(start, end)
+        window_events = _water_usage_window_events(start, end)
+        integrity = _water_usage_integrity(zone_report)
+        phase_tracker = _water_usage_phase_tracker(start, end, zone_report)
+        selected_run_stats = None
+        conn = db.get_conn()
+        try:
+            run_rows = conn.execute(
+                "SELECT id,zone_id,start_ts,end_ts,duration_sec,est_gallons,"
+                "trigger_reason FROM watering_event "
+                "WHERE start_ts >= ? AND start_ts < ? "
+                "AND COALESCE(trigger_reason,'') != 'manual_all_member' "
+                "ORDER BY start_ts",
+                (start, end),
+            ).fetchall()
+        finally:
+            conn.close()
+        if len(run_rows) == 1:
+            ev = dict(run_rows[0])
+            ev_end = ev["end_ts"] or datetime.now().isoformat(
+                timespec="seconds")
+            try:
+                ev_dur = ev["duration_sec"] or (
+                    datetime.fromisoformat(ev_end)
+                    - datetime.fromisoformat(ev["start_ts"])
+                ).total_seconds()
+            except Exception:
+                ev_dur = ev["duration_sec"]
+            run_rate = meter_ledger.run_rate_stats(
+                ev["start_ts"], ev_end)
+            selected_run_stats = {
+                "event_id": ev["id"],
+                "zone_id": ev["zone_id"],
+                "zone_number": zone_number(ev["zone_id"]),
+                "zone_label": zone_label(ev["zone_id"]),
+                "start": ev["start_ts"],
+                "end": ev_end,
+                "open": ev["end_ts"] is None,
+                "duration_sec": ev_dur,
+                **run_rate,
+            }
         return jsonify({"minutes": minutes, "mode": mode,
                         "window": {"start": start, "end": end},
                         "bucket_s": bucket_s, "rate_mode": rate_mode,
                         "bucket_label": blabel, "usage": usage, "line": line,
                         "meter": meter, "gaps": gap_n, "health": health,
                         "coverage": coverage,
+                        "events": window_events,
+                        "zone_report": zone_report,
+                        "integrity": integrity,
+                        "phase_tracker": phase_tracker,
+                        "selected_run_stats": selected_run_stats,
+                        "trust": trust,
                         "total_gal": total, "flat": flat,
                         "leak_hint": leak_hint})
 
@@ -2151,6 +3314,7 @@ def create_app(config, engine, weather, billing):
                             "by_raw_conf": {}, "by_context_conf": {},
                             "raw_mismatches": 0, "context_points": 0,
                             "frames": [], "error": err}), 400
+        _sync_water_usage_ledger(start, end)
         CAP = 4000
         try:
             # SINGLE SOURCE: the canonical ledger -- the SAME rows the photos
@@ -2237,14 +3401,18 @@ def create_app(config, engine, weather, billing):
         start, end, minutes, win_s, mode, err = _water_usage_window(60)
         if err:
             return jsonify({"error": err, "checks": [], "verdict": "review"}), 400
+        _sync_water_usage_ledger(start, end)
         rows = meter_ledger.readings_range(start=start, end=end,
                                            order="asc", limit=500000)
+        trust = _water_usage_trust(start)
+        prior_row = meter_ledger.reading_before(start)
+        calc_rows = ([prior_row] if prior_row else []) + rows
 
         def g(cf):
             return round((cf or 0.0) * GAL, 2)
 
         samples = len(rows)
-        reads = [r["committed_cf"] for r in rows
+        reads = [r["committed_cf"] for r in calc_rows
                  if r.get("committed_cf") is not None]
         meter_start = reads[0] if reads else None
         meter_end = reads[-1] if reads else None
@@ -2276,6 +3444,7 @@ def create_app(config, engine, weather, billing):
                         and (r["delta_cf"] or 0.0) > 0)
         reanchor_n = sum(1 for r in rows if (r["delta_cf"] or 0.0) < 0)
         gap_n = sum(1 for r in rows if r.get("state") == "gap")
+        stale_lock = _water_usage_stale_lock_context(start, end)
 
         tol_cf = max(0.5 / GAL, 0.02 * abs(meter_delta_cf))
         # The ledger mixes image-backed rows (~5s during flow, ~60s idle) and
@@ -2287,6 +3456,10 @@ def create_app(config, engine, weather, billing):
         fresh_reads = sum(1 for r in rows if r.get("method") == "read")
 
         checks = [
+            {"name": "Window is inside the stabilized meter ledger era",
+             "ok": trust["trusted"],
+             "detail": ("starts after " + trust["cutoff"]
+                        if trust["trusted"] else trust["reason"])},
             {"name": "Chart total matches the physical meter",
              "ok": abs(highwater_cf - meter_delta_cf) < tol_cf,
              "detail": (f"chart counts {g(highwater_cf)} gal; the meter "
@@ -2305,6 +3478,14 @@ def create_app(config, engine, weather, billing):
                         f"affect usage on a monotonic meter"
                         if reanchor_n
                         else "none — the reading only moved forward")},
+            {"name": "Active watering is visible in the meter ledger",
+             "ok": not stale_lock["active"],
+             "detail": ("meter movement covers overlapping watering events"
+                        if not stale_lock["active"]
+                        else f"{stale_lock['event_count']} watering event(s) "
+                             f"look undercounted; meter saw "
+                             f"{stale_lock['event_meter_gallons']} gal vs "
+                             f"{stale_lock['event_est_gallons']} gal estimated")},
             {"name": "Sample coverage",
              "ok": samples > 0,
              "detail": f"{samples} ledger rows in this window "
@@ -2312,13 +3493,16 @@ def create_app(config, engine, weather, billing):
                        f"{gap_n} flow-gap row(s). Density vs 1/min baseline: "
                        f"{coverage_pct}%"},
         ]
-        verdict = ("accurate" if abs(highwater_cf - meter_delta_cf) < tol_cf
+        verdict = ("accurate" if trust["trusted"]
+                   and not stale_lock["active"]
+                   and abs(highwater_cf - meter_delta_cf) < tol_cf
                    else "review")
 
         return jsonify({
             "minutes": minutes, "samples": samples,
             "mode": mode,
             "source": "meter_ledger",
+            "trust": trust,
             "window": {"start": start, "end": end,
                        "first_sample": rows[0]["ts"] if rows else None,
                        "last_sample": rows[-1]["ts"] if rows else None},
@@ -2331,6 +3515,7 @@ def create_app(config, engine, weather, billing):
                 "catchup_count": catchup_n, "catchup_gal": g(catchup_cf),
                 "reanchor_count": reanchor_n, "lingering_gal": g(lingering_cf),
                 "gap_samples": gap_n,
+                "stale_lock": stale_lock,
                 "image_backed": image_backed,
                 "fresh_reads": fresh_reads},
             "coverage": {"samples": samples, "expected": expected,
@@ -2352,13 +3537,18 @@ def create_app(config, engine, weather, billing):
         """Captured meter frames that JUSTIFY a usage bar: the reading just
         BEFORE the bucket plus the frames within it, so the climb (before →
         after) can be seen. Each frame carries an id/file so a misread can be
-        corrected into training. Pulls from the per-reading frame ring (recent
-        ~1h) and the banked gold frames (sparse but longer history)."""
+        corrected into training. Pulls from the long-term meter archive first,
+        with the per-reading frame ring and banked gold frames as fallbacks."""
         start_ms = query_int("start_ms", 0, min_value=0, max_value=4102444800000)
         end_ms = query_int("end_ms", 0, min_value=0, max_value=4102444800000)
         if end_ms <= start_ms:
             return jsonify({"frames": [], "before": None})
         from datetime import datetime as _dt
+        start_iso = _dt.fromtimestamp(start_ms / 1000.0).isoformat(
+            timespec="seconds")
+        end_iso = _dt.fromtimestamp(end_ms / 1000.0).isoformat(
+            timespec="seconds")
+        _sync_water_usage_ledger(start_iso, end_iso)
 
         def _hhmmss(ms):
             return _dt.fromtimestamp(ms / 1000.0).strftime("%H:%M:%S")
@@ -2410,6 +3600,45 @@ def create_app(config, engine, weather, billing):
                           "id": rid, "source": "live"})
         except FileNotFoundError:
             pass
+
+        # Long-term meter archive. This is the durable evidence store; the live
+        # frame ring above is only a short-lived cache. Keep this before the
+        # manual/propagate overlay so corrected archive frames show the truth.
+        try:
+            import meter_archive as _meter_archive
+            arc_start = _dt.fromtimestamp(
+                (start_ms - 3600000) / 1000.0).isoformat(timespec="seconds")
+            arc_end = _dt.fromtimestamp(
+                end_ms / 1000.0).isoformat(timespec="seconds")
+            for row in _meter_archive.list_range(
+                    start=arc_start, end=arc_end, order="asc", limit=10000):
+                fname = os.path.basename(str(row.get("filename") or ""))
+                if not fname:
+                    continue
+                fpath = os.path.join(ARCHIVE_DIR, fname)
+                if not os.path.exists(fpath):
+                    continue
+                try:
+                    ms = int(_dt.fromisoformat(row["ts"]).timestamp() * 1000)
+                except Exception:
+                    continue
+                rec = {
+                    "ts": _hhmmss(ms),
+                    "ms": ms,
+                    "reading": (f"{int(row['reading']):09d}"
+                                if row.get("reading") is not None else ""),
+                    "guess": (f"{int(row['raw_reading']):09d}"
+                              if row.get("raw_reading") is not None else ""),
+                    "guess_conf": row.get("raw_conf") or "",
+                    "read_source": row.get("source") or "archive",
+                    "read_conf": row.get("confidence") or "",
+                    "img": "/api/cam/archive/img?file=" + fname,
+                    "file": fname,
+                    "source": "archive",
+                }
+                _add(ms, rec)
+        except Exception as e:
+            log.debug("water usage archive frame lookup failed: %s", e)
 
         # Human truth + Anchor&Propagate overlay: a frame the user has corrected
         # (or that Propagate resolved from the user's anchors) must show THAT
@@ -2498,6 +3727,60 @@ def create_app(config, engine, weather, billing):
             _fill_guess(before_frame, budget)
         for fr in frames:
             _fill_guess(fr, budget)
+
+        # Overlay the canonical archive reading for each displayed frame. The
+        # live ring keeps transient OCR labels, but Water Usage is based on the
+        # committed archive/ledger value, so the modal should show that value as
+        # the primary caption and the raw CNN result only as supporting evidence.
+        try:
+            import bisect as _bisect
+            import meter_archive as _meter_archive
+            arc_start = _dt.fromtimestamp(
+                (start_ms - 3600000) / 1000.0).isoformat(timespec="seconds")
+            arc_end = _dt.fromtimestamp(
+                end_ms / 1000.0).isoformat(timespec="seconds")
+            arc_rows = _meter_archive.list_range(
+                start=arc_start, end=arc_end, order="asc", limit=10000)
+            canon = []
+            for row in arc_rows:
+                try:
+                    row_ms = int(_dt.fromisoformat(row["ts"]).timestamp()
+                                 * 1000)
+                except Exception:
+                    continue
+                canon.append((row_ms, row))
+            canon_ms = [x[0] for x in canon]
+
+            def _nearest_archive(ms):
+                if not canon_ms:
+                    return None
+                pos = _bisect.bisect_left(canon_ms, int(ms or 0))
+                best = None
+                for idx in (pos - 1, pos):
+                    if 0 <= idx < len(canon):
+                        dist = abs(canon[idx][0] - int(ms or 0))
+                        if best is None or dist < best[0]:
+                            best = (dist, canon[idx][1])
+                return best[1] if best and best[0] <= 1500 else None
+
+            def _apply_canonical(fr):
+                row = _nearest_archive(fr.get("ms"))
+                if not row or row.get("reading") is None:
+                    return
+                fr["reading"] = f"{int(row['reading']):09d}"
+                fr["read_source"] = row.get("source") or "archive"
+                fr["read_conf"] = row.get("confidence") or ""
+                raw = row.get("raw_reading")
+                if raw is not None and not fr.get("guess"):
+                    fr["guess"] = f"{int(raw):09d}"
+                    fr["guess_conf"] = row.get("raw_conf") or ""
+
+            if before_frame:
+                _apply_canonical(before_frame)
+            for fr in frames:
+                _apply_canonical(fr)
+        except Exception as e:
+            log.debug("water usage frame canonical overlay failed: %s", e)
         return jsonify({"frames": frames, "count": len(in_win),
                         "before": before_frame})
 
@@ -3517,7 +4800,7 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_ENABLED = os.environ.get("METER_ARCHIVE_ENABLED", "1") == "1"
     ARCHIVE_DIR = os.environ.get(
         "METER_ARCHIVE_DIR", os.path.expanduser("~/meter-archive"))
-    ARCHIVE_INTERVAL = float(os.environ.get("METER_ARCHIVE_INTERVAL", "60"))
+    ARCHIVE_INTERVAL = float(os.environ.get("METER_ARCHIVE_INTERVAL", "5"))
     # During flow (a zone running, or the meter advancing) capture far more
     # often so flow EVENTS get fine-grained ~5s history instead of a single
     # 1/min sample. Idle stays at ARCHIVE_INTERVAL. Bounded by the same disk cap.
@@ -3526,8 +4809,12 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_FLOW_COOLDOWN = float(
         os.environ.get("METER_ARCHIVE_FLOW_COOLDOWN", "120"))
     # 30 GiB default cap. Average frame ~48KB → ~640k images ≈ 440 days at 1/min.
+    ARCHIVE_RETENTION_DAYS = int(
+        os.environ.get("METER_ARCHIVE_RETENTION_DAYS", "365"))
     ARCHIVE_MAX_BYTES = int(
-        os.environ.get("METER_ARCHIVE_MAX_BYTES", str(30 * 1024 ** 3)))
+        os.environ.get("METER_ARCHIVE_MAX_BYTES", str(280 * 1024 ** 3)))
+    ARCHIVE_MIN_FREE_BYTES = int(
+        os.environ.get("METER_ARCHIVE_MIN_FREE_BYTES", str(50 * 1024 ** 3)))
     # If the live lock falls behind a corrected archive anchor, avoid pinning new
     # rows forever: periodically re-read the archived frame with the strong model
     # and accept only tightly-bounded forward moves.
@@ -3544,7 +4831,7 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_STALE_CNN_MAX_ADVANCE = int(
         os.environ.get("METER_ARCHIVE_STALE_CNN_MAX_ADVANCE", "2500"))
     ARCHIVE_STALE_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_STALE_CNN_MIN_CONF", "0.97"))
+        os.environ.get("METER_ARCHIVE_STALE_CNN_MIN_CONF", "0.95"))
     # Prefer reading the EXACT archived frame (free constrained CNN) instead of
     # inheriting a potentially stale live lock snapshot.
     ARCHIVE_EXACT_CNN_ENABLED = (
@@ -3552,7 +4839,7 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_EXACT_CNN_MAX_ADVANCE = int(
         os.environ.get("METER_ARCHIVE_EXACT_CNN_MAX_ADVANCE", "2500"))
     ARCHIVE_EXACT_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_EXACT_CNN_MIN_CONF", "0.97"))
+        os.environ.get("METER_ARCHIVE_EXACT_CNN_MIN_CONF", "0.95"))
     ARCHIVE_EXACT_CNN_TAIL_CONFLICT = int(
         os.environ.get("METER_ARCHIVE_EXACT_CNN_TAIL_CONFLICT", "800"))
     ARCHIVE_RAW_TAIL_MAX_ADVANCE = int(
@@ -3563,7 +4850,7 @@ def create_app(config, engine, weather, billing):
     ARCHIVE_REPROCESS_MAX_ORACLE = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_MAX_ORACLE", "30"))
     ARCHIVE_REPROCESS_CNN_MIN_CONF = float(
-        os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.97"))
+        os.environ.get("METER_ARCHIVE_REPROCESS_CNN_MIN_CONF", "0.95"))
     ARCHIVE_REPROCESS_CONSENSUS_COUNTS = int(
         os.environ.get("METER_ARCHIVE_REPROCESS_CONSENSUS_COUNTS", "80"))
     # Strict inference mode: use tower CPU (CNN constrained reads over real
@@ -3707,6 +4994,71 @@ def create_app(config, engine, weather, billing):
         except Exception as e:
             _archive_state["files"] = _deque()
             log.warning("archive init failed: %s", e)
+
+    def _archive_file_epoch(name):
+        try:
+            return datetime.strptime(str(name)[:15], "%Y%m%d-%H%M%S").timestamp()
+        except Exception:
+            return None
+
+    def _archive_disk_free():
+        try:
+            import shutil
+            return int(shutil.disk_usage(ARCHIVE_DIR).free)
+        except Exception:
+            return None
+
+    def _archive_avg_file_bytes():
+        files = _archive_state.get("files")
+        try:
+            n = len(files) if files is not None else 0
+        except Exception:
+            n = 0
+        if n <= 0:
+            return None
+        return float(_archive_state.get("bytes", 0) or 0) / float(n)
+
+    def _archive_storage_report():
+        avg = _archive_avg_file_bytes()
+        per_day = 86400.0 / max(float(ARCHIVE_INTERVAL or 5), 1.0)
+        target_files = int(per_day * max(int(ARCHIVE_RETENTION_DAYS), 1))
+        target_bytes = int((avg or 0.0) * target_files) if avg else None
+        free = _archive_disk_free()
+        capacity_bytes = int(ARCHIVE_MAX_BYTES)
+        if free is not None:
+            capacity_bytes = min(
+                capacity_bytes,
+                int(_archive_state["bytes"]) + max(0, free - ARCHIVE_MIN_FREE_BYTES),
+            )
+        feasible = (
+            target_bytes is not None
+            and target_bytes <= capacity_bytes
+            and (free is None or free >= ARCHIVE_MIN_FREE_BYTES)
+        )
+        return {
+            "target_days": int(ARCHIVE_RETENTION_DAYS),
+            "target_interval_s": float(ARCHIVE_INTERVAL),
+            "target_files": target_files,
+            "avg_file_bytes": int(avg) if avg else None,
+            "estimated_target_bytes": target_bytes,
+            "estimated_target_gb": (
+                round(target_bytes / 1024 ** 3, 2)
+                if target_bytes is not None else None),
+            "min_free_gb": round(ARCHIVE_MIN_FREE_BYTES / 1024 ** 3, 2),
+            "free_gb": round(free / 1024 ** 3, 2) if free is not None else None,
+            "safe_capacity_gb": round(capacity_bytes / 1024 ** 3, 2),
+            "feasible": bool(feasible),
+        }
+
+    def _archive_should_evict(oldest_name, now):
+        age_limit = max(1, int(ARCHIVE_RETENTION_DAYS)) * 86400
+        ep = _archive_file_epoch(oldest_name)
+        if ep is not None and now - ep > age_limit:
+            return True
+        if _archive_state["bytes"] > ARCHIVE_MAX_BYTES:
+            return True
+        free = _archive_disk_free()
+        return free is not None and free < ARCHIVE_MIN_FREE_BYTES
 
     def _mirror_archive_update_to_ledger(ts, reading, confidence, source,
                                          reviewed=True):
@@ -3940,6 +5292,27 @@ def create_app(config, engine, weather, billing):
             return None
         d = abs(da - db)
         return min(d, mod - d)
+
+    def _tail_corroborates(raw_value, candidate,
+                           limit=ARCHIVE_EXACT_CNN_TAIL_CONFLICT):
+        """True when an independent raw read does not contradict candidate.
+
+        Constrained CNN and hinted oracle reads are allowed to use context for
+        high digits, but they may not rewrite the rolling low digits that the
+        image reader actually saw. A missing raw read is neutral.
+        """
+        if raw_value is None or candidate is None:
+            return True
+        td = _low_tail_delta(raw_value, candidate)
+        return td is None or td <= int(limit)
+
+    def _raw_conf_high(conf, min_conf=None):
+        try:
+            if min_conf is not None and float(min_conf) >= CONSTRAINED_MIN_CONF:
+                return True
+        except Exception:
+            pass
+        return str(conf or "").lower() == "high"
 
     def _archive_try_conflict_reread(frame, raw_value=None):
         """Unbiased oracle read for anchor/CNN conflicts.
@@ -4673,9 +6046,11 @@ def create_app(config, engine, weather, billing):
                             log.debug("reconnect backfill failed: %s", _re)
                 except Exception as _ae:
                     log.debug("archive index failed: %s", _ae)
-                # Evict oldest until back under the cap (keep at least 1 file).
-                while (_archive_state["bytes"] > ARCHIVE_MAX_BYTES
-                       and len(_archive_state["files"]) > 1):
+                # Evict oldest only when the retention age, byte cap, or
+                # filesystem free-space guard requires it (keep at least 1 file).
+                while (_archive_state["files"] and len(_archive_state["files"]) > 1
+                       and _archive_should_evict(
+                           _archive_state["files"][0][0], now)):
                     oldn, olds = _archive_state["files"].popleft()
                     try:
                         os.remove(os.path.join(ARCHIVE_DIR, oldn))
@@ -5453,6 +6828,26 @@ def create_app(config, engine, weather, billing):
                             val, anchor)
                 _oracle_state["pending_val"] = None
                 return
+            try:
+                cnn_tail_conf = float(_oracle_state.get("last_cnn_conf") or 0.0)
+            except Exception:
+                cnn_tail_conf = 0.0
+            if (cnn_digits and str(cnn_digits).isdigit()
+                    and cnn_tail_conf >= CONSTRAINED_MIN_CONF
+                    and not _tail_corroborates(cnn_digits, val)):
+                _oracle_state["pending_val"] = None
+                cam_ocr_stats["oracle_tail_conflict"] = (
+                    cam_ocr_stats.get("oracle_tail_conflict", 0) + 1)
+                log.warning(
+                    "oracle read rejected: raw CNN tail disagrees "
+                    "(oracle=%s raw=%s lock=%s)", val, cnn_digits, lg)
+                try:
+                    raw_candidate = int(cnn_digits)
+                    if lg is not None:
+                        _consensus_auto_heal(frame, raw_candidate, int(lg), now)
+                except Exception:
+                    pass
+                return
             # ── Accept / corroborate ────────────────────────────────────────
             # A water meter is monotonic, but the LOCK is only an estimate and
             # can be wrong in EITHER direction (a local over-read ratchets it too
@@ -5787,6 +7182,7 @@ def create_app(config, engine, weather, billing):
                 used_constrained = False
                 cnn_big_jump = False    # high-conf CNN read, but a suspicious
                                         # big advance -> force oracle to confirm
+                cnn_anchor_conflict = False
                 trust_cnn = False
                 if cnn and cnn.get("confidence") == "high" and cnn.get("digits"):
                     # CONFIDENT-WRONG GUARD: don't trust a high-conf CNN read
@@ -5831,7 +7227,17 @@ def create_app(config, engine, weather, billing):
                         and cnn.get("constrained_value") is not None
                         and cnn_min_conf >= CONSTRAINED_MIN_CONF):
                     cv = int(cnn["constrained_value"])
-                    if c_anchor <= cv <= c_anchor + c_ceil:
+                    raw_cv = cnn.get("value")
+                    if not _tail_corroborates(raw_cv, cv):
+                        cnn_anchor_conflict = True
+                        _constr_window.clear()
+                        cam_ocr_stats["cnn_anchor_conflict"] = (
+                            cam_ocr_stats.get("cnn_anchor_conflict", 0) + 1)
+                        log.warning(
+                            "CNN constrained value rejected: raw=%s "
+                            "constrained=%s lock=%s ceil=%s",
+                            raw_cv, cv, c_anchor, c_ceil)
+                    elif c_anchor <= cv <= c_anchor + c_ceil:
                         _constr_window.append(cv)
                     if len(_constr_window) >= CONSTRAINED_MEDIAN_MIN:
                         sw = sorted(_constr_window)
@@ -5902,8 +7308,10 @@ def create_app(config, engine, weather, billing):
                     # lock is allowed to move that far.
                     # Also force once right after a long reconnect gap so we
                     # quickly get a trusted post-gap anchor for backfill.
-                    _maybe_oracle(frame, entry, captured_ts, cnn_digits,
-                                  force=(cnn_big_jump or reconnect_force))
+                    _maybe_oracle(
+                        frame, entry, captured_ts, cnn_digits,
+                        force=(cnn_big_jump or cnn_anchor_conflict
+                               or reconnect_force))
                     if reconnect_force:
                         cam_ocr_stats["oracle_forced_reconnect"] = (
                             cam_ocr_stats.get("oracle_forced_reconnect", 0) + 1)
@@ -6001,7 +7409,8 @@ def create_app(config, engine, weather, billing):
                 except Exception:
                     pass
                 log.debug("cam pinger: %s", e)
-            # Daily prune (keep 14 days).
+            # Raw cam telemetry is retained by default; database.py only prunes
+            # if SMART_GARDEN_ENABLE_CAM_TELEMETRY_PRUNE=1.
             if time.time() - _prune_at > 86400:
                 try:
                     db.prune_cam_telemetry(days=14)
@@ -6154,11 +7563,14 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/cam/status")
     def cam_status():
         """Return cam metadata."""
+        import meter_ledger
         _refresh_oracle_budget(force=False)
+        accepted = meter_ledger.latest_committed_reading()
         return jsonify({
             "has_image": cam_state["image"] is not None,
             "timestamp": cam_state["timestamp"],
             "size": len(cam_state["image"]) if cam_state["image"] else 0,
+            "accepted_meter": accepted,
             "wifi": {
                 "rssi": cam_state.get("rssi"),
                 "transfer_s": cam_state.get("transfer_s"),
@@ -6225,6 +7637,7 @@ def create_app(config, engine, weather, billing):
                 "bytes": _archive_state["bytes"],
                 "gb": round(_archive_state["bytes"] / 1024 ** 3, 2),
                 "cap_gb": round(ARCHIVE_MAX_BYTES / 1024 ** 3, 2),
+                "retention": _archive_storage_report(),
                 "saved_session": _archive_state["saved"],
                 "evicted_session": _archive_state["evicted"],
                 "reconnect_backfill": {
@@ -6304,12 +7717,14 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/cam/readings")
     def cam_readings_api():
         """Return OCR meter readings."""
+        import meter_ledger
         limit = request.args.get("limit", 100, type=int)
         return jsonify({
             "readings": meter_reader.get_readings(limit),
             "enabled": meter_reader.enabled,
             "orientation": meter_reader.orientation,
             "avg_rate": round(meter_reader.avg_rate, 4),
+            "accepted_meter": meter_ledger.latest_committed_reading(),
         })
 
     @app.route("/api/cam/training")
@@ -7311,14 +8726,33 @@ def create_app(config, engine, weather, billing):
         res = vision_oracle.read_meter(raw, rotate180=True, hint=hint)
         _record_oracle_spend(res, model_name=ORACLE_HEARTBEAT_MODEL)
         applied = False
+        applied_value = None
         if res.get("ok") and res.get("readable") and res.get("confidence") != "low":
-            applied = meter_reader.reanchor(res["value"], source="manual-oracle")
+            rval = res.get("value")
+            if lg0 is not None and rval is not None:
+                try:
+                    lock_ts = getattr(meter_reader, "_lock_ts", None) or time.time()
+                    ceiling = _oracle_ceiling(max(time.time() - float(lock_ts), 5))
+                    if not (0 <= int(rval) - int(lg0) <= ceiling):
+                        spliced = _oracle_splice(
+                            res.get("digits", ""), int(lg0), ceiling)
+                        if spliced is not None:
+                            rval = spliced
+                        else:
+                            rval = None
+                except Exception:
+                    rval = None
+            if rval is not None:
+                applied = meter_reader.reanchor(rval, source="manual-oracle")
+                if applied:
+                    applied_value = int(rval)
             if applied:
                 _truth_guard_clear(
                     "manual oracle re-anchor applied",
                     source="manual-oracle",
-                    details={"value": int(res["value"])})
+                    details={"value": applied_value})
         return jsonify({"ok": res.get("ok"), "value": res.get("value"),
+                        "applied_value": applied_value,
                         "confidence": res.get("confidence"),
                         "readable": res.get("readable"),
                         "reanchored": applied,
@@ -7569,6 +9003,7 @@ def create_app(config, engine, weather, billing):
             if frame is not None and prev_val is not None:
                 cnn = _read_via_cnn(frame, anchor=prev_val, ceil=max_adv)
                 if cnn:
+                    raw_v = cnn.get("value")
                     conf_txt = (cnn.get("confidence") or "").lower()
                     try:
                         min_conf = float(cnn.get("min_conf", 0.0) or 0.0)
@@ -7579,6 +9014,8 @@ def create_app(config, engine, weather, billing):
                         try:
                             v = int(cv)
                             if (min_conf >= ARCHIVE_REPROCESS_CNN_MIN_CONF
+                                    and (not _raw_conf_high(conf_txt, min_conf)
+                                         or _tail_corroborates(raw_v, v))
                                     and _fits(v, prev_val, right_v, max_adv,
                                               right_strict=right_strict)):
                                 cands.append({
@@ -7610,6 +9047,8 @@ def create_app(config, engine, weather, billing):
                            and oracle_ok and oracle_calls < int(oracle_budget)
                            and top_score < 0.85)
             if need_oracle and vision_oracle is not None:
+                raw_for_oracle = row.get("raw_reading")
+                raw_conf_for_oracle = row.get("raw_conf")
                 hint = {
                     "last_value": int(prev_val),
                     "high_prefix": f"{int(prev_val):09d}"[:5],
@@ -7624,8 +9063,10 @@ def create_app(config, engine, weather, billing):
                             and ores.get("value") is not None
                             and ores.get("confidence") != "low"):
                         v = int(ores.get("value"))
-                        if _fits(v, prev_val, right_v, max_adv,
-                                 right_strict=right_strict):
+                        if ((not _raw_conf_high(raw_conf_for_oracle)
+                             or _tail_corroborates(raw_for_oracle, v))
+                                and _fits(v, prev_val, right_v, max_adv,
+                                          right_strict=right_strict)):
                             cands.append({
                                 "value": v,
                                 "source": "oracle",
@@ -7878,13 +9319,27 @@ def create_app(config, engine, weather, billing):
                 rval = int(res.get("value"))
             except Exception:
                 rval = None
+            if nb is not None and rval is not None:
+                try:
+                    prev_val = int(nb)
+                    if not (prev_val - ARCHIVE_HEAL_TOL_COUNTS
+                            <= rval
+                            <= prev_val + ARCHIVE_STALE_REREAD_MAX_ADVANCE):
+                        spliced = _oracle_splice(
+                            res.get("digits", ""), prev_val,
+                            ARCHIVE_STALE_REREAD_MAX_ADVANCE)
+                        rval = spliced
+                except Exception:
+                    rval = None
             trusted_lock = _lock_trusted_value()
             floor = int(getattr(meter_reader, "anchor_value", 0) or 0)
             in_bounds = True
             if trusted_lock is not None and rval is not None:
                 ceil = int(trusted_lock) + ARCHIVE_HEAL_TOL_COUNTS
                 in_bounds = (floor <= rval <= ceil)
-            if in_bounds and rval is not None:
+            if (in_bounds and rval is not None
+                    and (not _raw_conf_high(row.get("raw_conf"))
+                         or _tail_corroborates(row.get("raw_reading"), rval))):
                 updated = meter_archive.update_reading(
                     ts, rval, res.get("confidence"), source="oracle",
                     reviewed=True)

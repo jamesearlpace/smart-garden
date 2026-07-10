@@ -94,3 +94,44 @@ The earlier open `moisture-sim` console/resource row is superseded by the captur
 Merged all 20 findings from `orchestrator/findings-1.json` through `findings-5.json`; existing page/category rows above were refined in place instead of duplicated. No new watering-behavior finding was reported. Additional low findings retained for a later polish pass: Forecast friendly Retry/stale-data recovery; Flow full date/age/timezone freshness labels; Costs empty Bill History message; Convergence explicit main-API error/Retry and empty verification state; and a restrictive CSP after remaining inline code is removed. The focused Forecast latency auditor superseded the earlier high/medium latency observations with 10 fast desktop reloads and a 233ms throttled-mobile API completion.
 
 Two broader medium items remain open: the cross-camera-page unsafe-rendering pattern needs a dedicated page-by-page regression campaign, and compatible site-wide security headers/CSP need staged rollout after inline scripts are removed. The proven Convergence exploit paths are fixed.
+
+## 2026-07-10 serial-fixer merge — camera, audit, and security
+
+All 32 raw findings in `orchestrator/findings-0.json` through `findings-5.json` were reviewed. The site-wide favicon and missing-security-header reports were deduplicated against existing rows; 30 findings were newly folded into the backlog. None was watering behavior.
+
+| Page | Severity | Status | Category | Expected vs Actual | Resolution / RCA |
+|------|----------|--------|----------|--------------------|------------------|
+| cam/labels | high | fixed (`d359536`) | DOM XSS / API status | API status crossed class and HTML contexts without validation. | Status is enum-normalized and job messages use `textContent`. |
+| cam/archive | high | fixed (`d359536`) | DOM XSS / readings | API readings and totals entered HTML without numeric validation. | Readings/counts are finite-number normalized and escaped before markup. |
+| cam/review, cam/test-audit, cam/regression | med | fixed (`d359536`, `6b3629f`, `aab11c3`) | API image URL validation | API URLs could load arbitrary origins or paths. | Each page now enforces same-origin, route-specific camera image paths. |
+| authenticated site | med | fixed (`8e9fc40`) | security headers | Responses omitted browser defense-in-depth headers. | Added nosniff, DENY framing, referrer, permissions, HSTS, and CSP Report-Only headers; verified live with curl. |
+| authenticated site | med | open — broader RCA | CSP readiness | Inline script/style and dynamic inline presentation prevent a strict enforced CSP. | Report-Only policy is staged (`8e9fc40`), but removing hundreds of inline sinks is a site-wide migration; director should schedule a CSP extraction campaign. |
+| authentication | med | fixed (`8e9fc40`) | fail-open session secret | Missing environment configuration silently selected a known signing key. | Startup now rejects missing, default, or shorter-than-32-character secrets; live service restarted successfully with configured secret. |
+| protected APIs | low | open | authentication response semantics | Unauthenticated JSON endpoints redirect to HTML login instead of returning JSON 401. | Later API-consistency pass. |
+| cam / cam/focus mobile | med | fixed (`eebf053`) | More toggle blocked | Open sheet intercepted the More button. | Mobile navigation stays above the sheet so the same button can close it. |
+| cam/focus | med | fixed (`eebf053`) | error-state interaction safety | Frame-dependent actions remained enabled after HTTP/fetch failure. | Controls start disabled and re-disable on failure; only a successful fresh frame enables them, while Refresh remains available. |
+| cam/focus | med | open — broader RCA | intermittent network reliability | A deep link intermittently returned 502 for CSS and APIs. | UI recovery is safe, but simultaneous static/API 502s originate at service/tunnel availability, not display code; schedule infrastructure RCA if recaptured. |
+| cam / cam/focus | low | open (deduped site-wide) | favicon | `/favicon.ico` returns 404. | Existing site-wide favicon row. |
+| audit / history APIs | high | fixed (`8e9fc40`) | T-separated 24-hour cutoff | Space-separated `datetime()` cutoffs overstated 24-hour counts. | Display/report queries use T-separated `strftime`; authenticated curl now returns 57 watering events with oldest `2026-07-09T20:16:54`. |
+| audit | med | fixed (`8e9fc40`) | health coverage | Only 13 of 25 application tables were audited. | All 25 are now specified and displayed. |
+| audit | med | fixed (`8e9fc40`) | unused table semantics | Dead `billing_cycle` inflated actionable EMPTY. | It is `DISABLED` and excluded from EMPTY totals. |
+| audit | med | fixed (`8e9fc40`) | sensor labeling | Active observe-only logging was called disabled. | Label now separates active logging from disabled control gates. |
+| audit | med | fixed (`8e9fc40`) | loading/error/empty states | Fetch failures left Loading or stale/blank content. | Status/schema checks, accessible loading/error/empty states, and Retry are present. |
+| audit mobile | med | fixed (`8e9fc40`) | horizontal overflow | The 541px table widened a 390px document. | Table is contained in a labeled keyboard-scroll region; live document overflow is zero. |
+| audit | low | open | timezone labeling | Local timestamps omit Pacific timezone/offset. | Later polish pass. |
+| cam/regression | high | fixed (`6b3629f`) | HTTP error semantics | HTTP errors rendered as valid-empty with enabled mutation UI. | Status checks render an announced Retry error and no cards/actions. |
+| cam/regression | med | fixed (`6b3629f`) | malformed envelope | JSON null had an undifferentiated failure with no recovery. | Envelope validation gives a format error and Retry. |
+| cam/regression | med | fixed (`6b3629f`) | malformed records | Bad rows collapsed into valid-empty. | Records validate independently; valid rows render and rejected count is announced. |
+| cam/quality | high | fixed (`6b3629f`) | HTTP failure | A 500 removed useful quality content with no recovery. | Headings/tables remain, unavailable rows are explicit, and Retry is announced. |
+| cam/quality | high | fixed (`6b3629f`) | loading robustness | Pending and failed states were indistinguishable blank shells. | Explicit live loading transitions to data, empty, or error. |
+| cam regression / quality | med | fixed (`6b3629f`) | shared request-state cause | Neither page enforced status/schema/error states. | Both now implement the same success-gated request-state pattern. |
+| cam/test-audit | high | fixed (`aab11c3`) | image alternatives | Decision-critical meter images had empty alt text. | Alt text identifies frame, stored label, and model prediction; live 27-image check found zero empty alternatives. |
+| cam/test-audit | med | fixed (`aab11c3`) | async announcements | Long model work had no live status, timeout, or Retry. | Polite status, 30-second timeout, alert failure, and GET-only Retry added. |
+| cam/test-audit | med | fixed (`aab11c3`) | repeated control names | Card actions did not identify their frame. | Every repeated action includes its frame identifier in `aria-label`. |
+| cam/test-audit / cam/cnn-report | med | fixed (`aab11c3`) | landmarks | Pages lacked a main landmark and skip link. | Both now provide one main landmark and visible-on-focus skip link. |
+| cam/cnn-report | high | fixed (`aab11c3`) | mobile reflow | Wide tables/tool links widened the 390px document. | Labeled scroll regions contain tables; live document overflow is zero. |
+| cam/cnn-report | med | fixed (`aab11c3`) | blank table header | Decorative accuracy bar occupied an unnamed column. | Bar moved into Accuracy and is hidden from accessibility APIs. |
+| cam/cnn-report | med | fixed (`aab11c3`) | contrast | Small green/blue text failed AA contrast. | Tokens changed to darker AA-compatible values. |
+| cam/cnn-report | low | open | touch target size | Some tool/back links are under 44px. | Later polish pass. |
+
+Live verification used the authenticated isolated Playwright state plus curl. Browser checks confirmed audit 25 rows/no mobile overflow, announced regression/quality HTTP 500 states, 27 test images with non-empty alternatives and frame-specific actions, CNN report no overflow/blank headers, and disabled Focus actions with Refresh available. The two remaining medium findings are broader campaigns rather than watering/control changes.

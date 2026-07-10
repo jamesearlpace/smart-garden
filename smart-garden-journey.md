@@ -2289,3 +2289,15 @@ Decisions: The focused Forecast performance audit superseded the earlier latency
 State: Commits `4d1b9b9`, `a6ed348`, `05c4ce4`, and `10ca8de` deployed with timestamped remote backups. `/login` returned 200; local/server SHA-256 parity passed for all six deployed templates. Live Costs at 390px had no document overflow and all three canvases had accessible names; Forecast comparison rendered 236 validated predictions at 97.9%; Flow showed no active anomaly instead of the stale orphan alert. No backend `.py` file was edited.
 
 Next: Run dedicated camera-page injection regression and CSP/header rollout campaigns; low-only polish remains in `UX-AUDIT.md`.
+
+## 2026-07-10 - Serial UX fixer: camera, audit, and response hardening
+
+Context: Six parallel auditor files supplied 32 raw display/usability/security findings across camera tools, DB Audit, and shared response policy.
+
+Changes: Corrected T-separated 24-hour reporting and expanded Audit to all 25 tables with disabled/error/mobile semantics (`8e9fc40`); added browser security headers and fail-closed session-secret startup (`8e9fc40`); hardened camera label/archive/review rendering (`d359536`); added success-gated loading/error/schema states to Regression and Quality (`6b3629f`); added test-audit/CNN report alternatives, landmarks, names, reflow, semantics, and contrast (`aab11c3`); and disabled Focus actions until a fresh frame succeeds while keeping mobile More closable (`eebf053`).
+
+Decisions: CSP remains Report-Only because strict enforcement requires a site-wide inline-code extraction campaign. Intermittent simultaneous static/API 502s remain an infrastructure RCA item; display controls now fail safe. `dashboard.py` changes are reporting/auth-response-only and do not touch balance, schedule, runtime, precipitation, valve, or irrigation decisions.
+
+State: Five guarded deployments used timestamped remote backups, service restarts, `/login` smoke checks, and post-deploy SHA256 parity. Authenticated Playwright verified mobile Audit/CNN reflow, camera error states, 27 meaningful test-frame alternatives, named actions, and Focus failure gating. Curl verified 25 audited tables, 57 true last-24h watering rows, and live security headers. Two medium broader campaigns remain open: strict CSP migration and intermittent tunnel/service 502 RCA.
+
+Next: Director should schedule the CSP extraction campaign and only open the infrastructure RCA when the simultaneous CSS/API 502 can be recaptured with proxy/service telemetry.

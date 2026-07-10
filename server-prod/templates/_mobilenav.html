@@ -138,5 +138,10 @@
       if(on) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');
     });
   })();
+  fetch('/api/dashboard').then(function(r){if(!r.ok)throw new Error();return r.json();}).then(function(d){
+    var dot=document.getElementById('sb-dot'), label=document.getElementById('sb-status');
+    if(dot)dot.className='status-dot '+(d.esp32_online?'online':'offline');
+    if(label)label.textContent=d.esp32_online?'ESP32 online':'ESP32 offline';
+  }).catch(function(){var label=document.getElementById('sb-status');if(label)label.textContent='Status unavailable';});
 })();
 </script>

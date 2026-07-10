@@ -1286,7 +1286,8 @@ function eventLabel(ev){
   var start = ev.start ? fullStamp(ev.start) : '?';
   var dur = ev.open ? 'running' : (ev.duration_sec!=null ? Math.round(ev.duration_sec/60)+' min' : '? min');
   var end = ev.open ? 'now' : (ev.end ? ev.end.slice(11,19) : '?');
-  var gal = ev.est_gallons!=null ? (' · est '+Number(ev.est_gallons).toFixed(1)+' gal') : '';
+  var rate = ev.duration_sec ? Number(ev.est_gallons)/(Number(ev.duration_sec)/60) : null;
+  var gal = ev.est_gallons!=null ? (' · configured estimate '+(isFinite(rate)?rate.toFixed(2)+' gpm · ':'')+Number(ev.est_gallons).toFixed(1)+' gal') : '';
   return (ev.zone_label || ('Zone '+(Number(ev.zone_id)+1)+' · '+ev.zone_name))+' · '+start+' -> '+end+' · '+dur+gal;
 }
 

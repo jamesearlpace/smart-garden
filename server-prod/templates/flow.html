@@ -45,8 +45,10 @@ th{color:var(--text2);font-weight:600;position:sticky;top:0;background:var(--car
 .row{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
 button{font:inherit;padding:5px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
-<body>
+<body class="sg-with-sidebar">
+{% include '_appsidebar.html' %}
   <div class="row">
     <div><h1>💧 Flow & Leak Monitor</h1>
       <div class="toolnav">
@@ -89,11 +91,13 @@ button{font:inherit;padding:5px 12px;border:1px solid var(--border);border-radiu
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function fmtTime(iso){try{return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit'})}catch(e){return iso}}
+function isStaleOpen(e, latest){return latest && latest.state==='idle' && Number(latest.gpm||0)===0 && (Date.now()-new Date(latest.ts).getTime())<120000 && (new Date(latest.ts)-new Date(e.start_ts))>120000;}
 
 function load(){
   fetch('/api/flow?samples=150').then(r=>r.json()).then(d=>{
     // Banner
-    var open=d.open_events||[];
+    var latest=(d.samples||[])[0]||null;
+    var open=(d.open_events||[]).filter(e=>!isStaleOpen(e,latest));
     var b=document.getElementById('banner');
     if(open.length){
       var urgent=open.some(e=>e.severity==='urgent');
@@ -118,7 +122,8 @@ function load(){
     }).join('') || '<div class="muted">No zones configured.</div>';
     // Events
     document.getElementById('events').innerHTML=(d.events||[]).slice(0,12).map(e=>{
-      var when=fmtTime(e.start_ts)+(e.end_ts?(' → '+fmtTime(e.end_ts)):' (ongoing)');
+      var stale=isStaleOpen(e,latest);
+      var when=fmtTime(e.start_ts)+(e.end_ts?(' → '+fmtTime(e.end_ts)):(stale?' (stale unresolved record)':' (ongoing)'));
       var g=e.gallons?(' · '+e.gallons.toFixed(1)+' gal'):'';
       var pk=e.peak_gpm?(' · peak '+e.peak_gpm.toFixed(2)+' gpm'):'';
       return '<div class="ev '+esc(e.severity||'')+'"><b>'+esc((e.kind||'').toUpperCase())+'</b> — '+esc(e.note||'')+
@@ -131,7 +136,7 @@ function load(){
       '<td>'+(s.gpm!=null?s.gpm.toFixed(2):'—')+'</td><td>'+esc(s.active_zones||'—')+'</td>'+
       '<td class="s-'+esc(s.state)+'">'+esc(s.state)+'</td><td class="muted">'+esc(s.note||'')+'</td></tr>'
     ).join('') || '<tr><td colspan="8" class="muted">No samples yet.</td></tr>';
-  }).catch(e=>{document.getElementById('banner').className='banner warn';document.getElementById('banner').textContent='Failed to load: '+e});
+  }).catch(e=>{var b=document.getElementById('banner');b.className='banner warn';b.textContent='Flow data could not be refreshed. Alerts are unavailable until retry.';document.getElementById('events').innerHTML='<div class="muted">Prior alerts hidden because current flow status is unavailable.</div>';});
 }
 load(); setInterval(load, 15000);
 </script>

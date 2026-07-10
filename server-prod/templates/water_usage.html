@@ -75,7 +75,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .readhealth{font-size:.74rem;margin:5px 2px 0;padding:5px 9px;border-radius:7px;line-height:1.35}
 .rh-ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
 .rh-warn{background:#fff7ed;color:#9a3412;border:1px solid #fed7aa}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:50;
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;z-index:1000;
   padding:24px;overflow:auto}
 .modal.on{display:block}
 .modal-card{background:var(--card);border-radius:12px;max-width:1000px;margin:0 auto;padding:16px 18px}
@@ -93,15 +93,30 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .fixinp{font-family:ui-monospace,monospace;font-size:.78rem;padding:2px 5px;width:88px;
   border:1px solid var(--blue);border-radius:5px}
 .savebtn{font-size:.66rem;padding:2px 8px;border:none;border-radius:5px;background:var(--blue);color:#fff;cursor:pointer}
+.zonereport{overflow-x:auto}
+.zrtable{width:100%;border-collapse:collapse;font-size:.82rem;min-width:980px}
+.zrtable th,.zrtable td{padding:8px 9px;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+.zrtable th:first-child,.zrtable td:first-child{text-align:left}
+.zrtable th{font-size:.68rem;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;background:#f8fafc}
+.zrtable tbody tr:hover{background:#f8fafc}
+.zrmuted{color:var(--text2)}
+.zrstrong{font-weight:700;color:var(--text)}
+.zrspark{width:120px;height:34px;display:block}
+.zrmini{font-size:.7rem;color:var(--text2);line-height:1.25}
+.zrmini b{color:var(--text)}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
-<body>
-<a href="/#cam" style="font-size:.85rem">&larr; Back to dashboard</a>
+<body class="sg-with-sidebar">
+{% include '_appsidebar.html' %}
+<a href="/" style="font-size:.85rem">&larr; Back to dashboard</a>
 <h1>💧 Water Usage Over Time</h1>
 <div class="toolnav">
   <a class="active" href="/water-usage">Usage</a>
   <a href="/costs">Cost</a>
   <a href="/flow">Flow &amp; Leaks</a>
+  <a href="/#cam">Meter Camera</a>
+  <a href="/cam/archive">Meter Archive</a>
 </div>
 <div class="sub" id="sub">Loading…</div>
 <div class="ratesummary" id="rateSummary" style="display:none"></div>
@@ -167,6 +182,27 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <div class="wrap" style="height:260px"><canvas id="auditChart"></canvas></div>
   <div id="auditLegend" style="display:flex;flex-wrap:wrap;gap:12px;font-size:.72rem;margin-top:8px;color:var(--text2)"></div>
   <div id="auditNote" style="font-size:.72rem;color:var(--text2);margin-top:4px"></div>
+</div>
+
+<div class="card" id="integrityCard" style="display:none">
+  <div class="cap">Data integrity
+    <span class="capsub">- every watering run should record a meter median; big deviations are flagged</span></div>
+  <div id="integritySummary" style="font-size:.8rem;margin:4px 0 8px"></div>
+  <div id="integrityList"></div>
+</div>
+
+<div class="card" id="phaseTrackerCard" style="display:none">
+  <div class="cap">Software meter tracker
+    <span class="capsub">- shadow-mode low-digit phase tracker; does not write the ledger</span></div>
+  <div id="phaseTrackerSummary" style="font-size:.8rem;margin:4px 0 8px"></div>
+  <div id="phaseTrackerList"></div>
+</div>
+
+<div class="card" id="zoneReportCard">
+  <div class="cap">Zone water usage medians
+    <span class="capsub">- physical meter gallons per completed run when covered</span></div>
+  <div class="hint" id="zoneReportHint">Loading zone medians...</div>
+  <div class="zonereport" id="zoneReport"></div>
 </div>
 
 <div class="modal" id="modal">
@@ -297,6 +333,43 @@ function fmtRate(v){
   if(!isFinite(n)) return '0';
   return n >= 10 ? n.toFixed(1) : n.toFixed(2);
 }
+function currentSelectedEvent(){
+  if(selectedEventId == null) return null;
+  for(var i=0;i<EVENTS.length;i++){
+    if(String(EVENTS[i].id) === String(selectedEventId)) return EVENTS[i];
+  }
+  return null;
+}
+function selectedRunBucketStats(usage){
+  var ev = currentSelectedEvent();
+  if(!ev || !ev.start || !ev.end) return null;
+  var startMs = Date.parse(ev.start);
+  var endMs = Date.parse(ev.end);
+  if(!isFinite(startMs) || !isFinite(endMs) || endMs <= startMs) return null;
+  var rows = (usage || []).filter(function(u){
+    if(u.gap || !(u.gallons > 0) || !isFinite(Number(u.gpm))) return false;
+    var bs = Number(u.start_ms);
+    var be = Number(u.end_ms);
+    if(!isFinite(bs) || !isFinite(be) || be <= bs) return false;
+    var center = bs + ((be - bs) / 2);
+    return center >= startMs && center <= endMs;
+  });
+  var gpms = rows.map(function(u){ return Number(u.gpm) || 0; });
+  return {
+    event: ev,
+    buckets: rows.length,
+    median_gpm: gpms.length ? median(gpms) : null
+  };
+}
+function apiSelectedRunStats(d){
+  var s = d.selected_run_stats || null;
+  if(!s) return null;
+  return {
+    event: {zone_label: s.zone_label || 'selected run'},
+    segments: s.segment_count || 0,
+    median_gpm: s.median_gpm
+  };
+}
 function renderRateSummary(d){
   var el = document.getElementById('rateSummary');
   if(!el) return;
@@ -313,23 +386,312 @@ function renderRateSummary(d){
     if(isFinite(ms) && ms > 0) winMin = ms / 60000;
   }
   var avgGpm = winMin > 0 ? (Number(d.total_gal || 0) / winMin) : 0;
+  var selectedRun = apiSelectedRunStats(d);
   var cov = d.coverage || {};
   var covText = (cov.ledger_rows != null)
     ? (cov.ledger_rows + ' rows / ' + (cov.emitted_buckets || usage.length) + ' buckets')
     : (active.length + ' nonzero / ' + usage.length + ' total');
+  var zr = d.zone_report || {};
+  var zonesWithSelectedRuns = (zr.zones || []).filter(function(z){
+    return z.selected && (z.selected.runs || 0) > 0;
+  });
+  var scopedZone = zonesWithSelectedRuns.length === 1 ? zonesWithSelectedRuns[0] : null;
+  var zrOverall = zr.overall || {};
+  var zrSelected = scopedZone ? (scopedZone.selected || {}) : (zrOverall.selected || {});
+  var zrBaseline = scopedZone ? (scopedZone.baseline || {}) : (zrOverall.baseline || {});
+  var scopePrefix = scopedZone ? ((scopedZone.zone_label || ('Zone '+scopedZone.zone_number)) + ' ') : '';
+  var physicalGpm = zrSelected.median_gpm;
+  var physicalRuns = zrSelected.physical_runs || 0;
+  var physicalScope = scopePrefix + 'selected clean runs';
+  if((physicalGpm == null || !isFinite(Number(physicalGpm))) && zrBaseline.median_gpm != null){
+    physicalGpm = zrBaseline.median_gpm;
+    physicalRuns = zrBaseline.physical_runs || 0;
+    physicalScope = scopePrefix + '90d clean baseline';
+  }
   el.style.display = 'flex';
   el.innerHTML =
     '<div class="ratepill"><div class="l">Total Gallons</div><div class="n">'+fmtRate(d.total_gal || 0)+'</div><div class="s">selected range</div></div>'
     + '<div class="ratepill"><div class="l">Window Avg GPM</div><div class="n">'+fmtRate(avgGpm)+'</div><div class="s">includes quiet time</div></div>'
-    + '<div class="ratepill"><div class="l">Median GPM</div><div class="n">'+fmtRate(medGpm)+'</div><div class="s">active buckets</div></div>'
-    + '<div class="ratepill"><div class="l">Median GPH</div><div class="n">'+fmtRate(medGph)+'</div><div class="s">same median x 60</div></div>'
+    + (selectedRun ? '<div class="ratepill"><div class="l">Selected Run Median GPM</div><div class="n">'+fmtMaybe(selectedRun.median_gpm, 2)+'</div><div class="s">'+esc(selectedRun.event.zone_label || 'selected run')+' · '+esc(selectedRun.segments)+' meter segments</div></div>' : '')
+    + '<div class="ratepill"><div class="l">Meter History Median GPM</div><div class="n">'+fmtMaybe(physicalGpm, 2)+'</div><div class="s">'+esc(physicalScope)+' · '+esc(physicalRuns)+' runs</div></div>'
+    + '<div class="ratepill"><div class="l">Bucket Median GPM</div><div class="n">'+fmtRate(medGpm)+'</div><div class="s">active chart buckets; grain-sensitive</div></div>'
+    + '<div class="ratepill"><div class="l">Bucket Median GPH</div><div class="n">'+fmtRate(medGph)+'</div><div class="s">same bucket median x 60</div></div>'
     + '<div class="ratepill"><div class="l">Coverage</div><div class="n">'+active.length+'</div><div class="s">'+esc(covText)+'</div></div>';
+}
+function fmtMaybe(v, digits){
+  if(v == null || !isFinite(Number(v))) return '<span class="zrmuted">-</span>';
+  return Number(v).toFixed(digits);
+}
+function zoneSparkline(history, medianGpm, excludedHistory){
+  var pts = (history || []).filter(function(p){ return p && isFinite(Number(p.gpm)); });
+  var xpts = (excludedHistory || []).filter(function(p){ return p && isFinite(Number(p.gpm)); });
+  if(!pts.length && !xpts.length) return '<span class="zrmuted">-</span>';
+  var allPts = pts.concat(xpts);
+  var vals = allPts.map(function(p){ return Number(p.gpm); });
+  var lo = Math.min.apply(null, vals);
+  var hi = Math.max.apply(null, vals);
+  if(isFinite(Number(medianGpm))){
+    lo = Math.min(lo, Number(medianGpm));
+    hi = Math.max(hi, Number(medianGpm));
+  }
+  if(hi === lo){ hi += 0.1; lo -= 0.1; }
+  var w = 120, h = 34, pad = 4;
+  function x(i, arr){ return arr.length === 1 ? w / 2 : pad + i * ((w - 2 * pad) / (arr.length - 1)); }
+  function y(v){ return pad + (hi - v) * ((h - 2 * pad) / (hi - lo)); }
+  var poly = pts.map(function(p,i){ return x(i, pts).toFixed(1)+','+y(Number(p.gpm)).toFixed(1); }).join(' ');
+  var med = isFinite(Number(medianGpm)) ? y(Number(medianGpm)).toFixed(1) : null;
+  var title = pts.length+' clean point(s), '+xpts.length+' excluded point(s)';
+  return '<svg class="zrspark" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="'+esc(title)+'">'
+    + '<title>'+esc(title)+'</title>'
+    + (med ? '<line x1="'+pad+'" x2="'+(w-pad)+'" y1="'+med+'" y2="'+med+'" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>' : '')
+    + xpts.map(function(p,i){ return '<circle cx="'+x(i, xpts).toFixed(1)+'" cy="'+y(Number(p.gpm)).toFixed(1)+'" r="2.4" fill="#fff" stroke="#94a3b8" stroke-width="1.4"/>'; }).join('')
+    + (pts.length > 1 ? '<polyline points="'+poly+'" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' : '')
+    + pts.map(function(p,i){ return '<circle cx="'+x(i, pts).toFixed(1)+'" cy="'+y(Number(p.gpm)).toFixed(1)+'" r="2.2" fill="#2563eb"/>'; }).join('')
+    + '</svg>';
+}
+function zoneRangeText(history, medianGpm, excludedHistory){
+  var vals = (history || []).map(function(p){ return Number(p.gpm); }).filter(function(v){ return isFinite(v); });
+  var xcount = (excludedHistory || []).length;
+  if(!vals.length) return '<span class="zrmuted">No clean history'
+    + (xcount ? '<br>'+esc(xcount)+' excluded shown gray' : '') + '</span>';
+  var lo = Math.min.apply(null, vals);
+  var hi = Math.max.apply(null, vals);
+  var last = vals[vals.length - 1];
+  return '<div class="zrmini"><b>'+fmtMaybe(medianGpm, 2)+'</b> med<br>'
+    + lo.toFixed(2)+'-'+hi.toFixed(2)+' range<br>'
+    + last.toFixed(2)+' last'
+    + (xcount ? '<br>'+esc(xcount)+' excluded gray' : '')
+    + '</div>';
+}
+function renderZoneReport(d){
+  var wrap = document.getElementById('zoneReport');
+  var hint = document.getElementById('zoneReportHint');
+  if(!wrap || !hint) return;
+  var zr = d.zone_report || {};
+  var zones = zr.zones || [];
+  if(!zones.length){
+    hint.textContent = 'No installed water zones found.';
+    wrap.innerHTML = '';
+    return;
+  }
+  var anySelected = zones.some(function(z){ return z.selected && z.selected.runs > 0; });
+  hint.textContent = (anySelected ? 'Window columns use runs that start inside the chart window. ' : 'No zone runs start inside this chart window; window medians are blank. ')
+    + 'Official GPM uses the same clean meter-segment median as the selected-run card: no chart buckets, no interpolation grain. History excludes overlap, too-short, sparse, pre-trust, derived/repaired, or implausible meter runs; backward meter steps are counted as warnings, not automatic exclusions.';
+  var html = '<table class="zrtable"><thead><tr>'
+    + '<th>Zone</th><th>Runs in Window</th><th>Clean Meter Runs</th><th>Window Official Median GPM</th><th>Window Estimate GPM</th>'
+    + '<th>GPM History</th><th>GPM Stats</th><th>History Runs</th><th>Clean Meter Runs</th><th>Official Median GPM</th><th>History Estimate GPM</th><th>Excluded Runs</th><th>Latest Run</th>'
+    + '</tr></thead><tbody>';
+  zones.forEach(function(z){
+    var s = z.selected || {}, b = z.baseline || {};
+    var excluded = (b.overlap_runs || 0) + (b.pre_cutoff_runs || 0)
+      + (b.short_runs || 0) + (b.thin_runs || 0) + (b.thin_rate_runs || 0)
+      + (b.derived_rate_runs || 0) + (b.backward_runs || 0)
+      + (b.implausible_runs || 0);
+    html += '<tr>'
+      + '<td><span class="zrstrong">'+esc(z.zone_label || ('Zone '+z.zone_number))+'</span></td>'
+      + '<td>'+esc(s.runs || 0)+'</td>'
+      + '<td>'+esc(s.physical_runs || 0)+'</td>'
+      + '<td>'+fmtMaybe(s.median_gpm, 2)+'</td>'
+      + '<td>'+fmtMaybe(s.estimate_median_gpm, 2)+'</td>'
+      + '<td>'+zoneSparkline(z.history || [], b.median_gpm, z.history_excluded || [])+'</td>'
+      + '<td>'+zoneRangeText(z.history || [], b.median_gpm, z.history_excluded || [])+'</td>'
+      + '<td>'+esc(b.runs || 0)+'</td>'
+      + '<td>'+esc(b.physical_runs || 0)+'</td>'
+      + '<td>'+fmtMaybe(b.median_gpm, 2)+'</td>'
+      + '<td>'+fmtMaybe(b.estimate_median_gpm, 2)+'</td>'
+      + '<td>'+esc(excluded)+'</td>'
+      + '<td>'+(b.last_run ? esc(fullStamp(b.last_run)) : '<span class="zrmuted">-</span>')+'</td>'
+      + '</tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+}
+
+function renderIntegrity(d){
+  var card = document.getElementById('integrityCard');
+  var sum = document.getElementById('integritySummary');
+  var list = document.getElementById('integrityList');
+  if(!card || !sum || !list) return;
+  var ig = d.integrity;
+  if(!ig || !ig.checked_runs){ card.style.display='none'; return; }
+  card.style.display='';
+  var warns = ig.warnings || [];
+  if(ig.ok){
+    sum.innerHTML = '<span style="color:#2e7d32;font-weight:600">&#10003; All '
+      + esc(ig.checked_runs) + ' runs in this window recorded a meter median '
+      + 'within normal range.</span>';
+    list.innerHTML = '';
+    return;
+  }
+  sum.innerHTML = '<span style="color:#c62828;font-weight:600">'
+    + esc(ig.missing_median_count||0) + ' run(s) with NO recorded median</span> &middot; '
+    + '<span style="color:#ef6c00;font-weight:600">'
+    + esc(ig.outlier_count||0) + ' median anomaly(ies)</span> across '
+    + esc(ig.checked_runs) + ' run(s) in window.';
+  var rows = warns.map(function(w){
+    var isErr = w.severity === 'error';
+    var color = isErr ? '#c62828' : '#ef6c00';
+    var tag = isErr ? 'NO MEDIAN' : 'ANOMALY';
+    var detail = isErr
+      ? ('reasons: ' + esc((w.reasons||[]).join(', ') || 'no clean meter segments'))
+      : ('median ' + fmtMaybe(w.median_gpm,2) + ' GPM vs zone '
+         + fmtMaybe(w.zone_median_gpm,2) + ' GPM (' + esc(w.deviation_pct) + '% off)');
+    return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
+      + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
+      + '<span style="color:'+color+';font-weight:700">'+tag+'</span> &middot; '
+      + '<strong>'+esc(w.zone_label||('Zone '+w.zone_id))+'</strong> &middot; '
+      + esc(fullStamp(w.event_start)) + '<br>'
+      + '<span style="color:var(--text2)">'+detail+'</span></div>';
+  }).join('');
+  list.innerHTML = rows;
+}
+
+function renderPhaseTracker(d){
+  var card = document.getElementById('phaseTrackerCard');
+  var sum = document.getElementById('phaseTrackerSummary');
+  var list = document.getElementById('phaseTrackerList');
+  if(!card || !sum || !list) return;
+  var pt = d.phase_tracker || null;
+  if(!pt || !pt.enabled || !(pt.events || []).length){
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  var s = pt.summary || {};
+  var by = s.by_decision || {};
+  sum.innerHTML =
+    '<span style="font-weight:700;color:#2563eb">'+esc(by.auto_accept || 0)+'</span> auto-accept'
+    + ' &middot; <span style="font-weight:700;color:#ef6c00">'+esc(by.needs_anchor || 0)+'</span> need anchor'
+    + ' &middot; <span style="font-weight:700;color:#c62828">'+esc(by.reject || 0)+'</span> reject'
+    + (s.accepted_max_error_gal != null
+      ? ' &middot; accepted max shadow error '+esc(s.accepted_max_error_gal)+' gal'
+      : '')
+    + '<br><span style="color:var(--text2)">Uses raw CNN low digits + monotonic counter physics. This is a candidate total, not a committed reading.</span>';
+  var rs = pt.resolution_summary || null;
+  if(rs && rs.auto_accept_n){
+    sum.innerHTML += '<br><span style="color:var(--text2)">Validated auto-accept: '
+      + '<b>'+esc(rs.auto_accept_n)+'</b> resolved, '
+      + '<b style="color:'+(rs.auto_accept_failed ? '#c62828' : '#16a34a')+'">'
+      + esc(rs.auto_accept_failed || 0)+'</b> failed, max error '
+      + esc(rs.auto_accept_max_error_gal)+' gal.</span>';
+  }
+  var evs = (pt.events || []).slice().sort(function(a,b){
+    var rank = {needs_anchor:0,reject:1,auto_accept:2};
+    return (rank[a.decision] == null ? 9 : rank[a.decision])
+      - (rank[b.decision] == null ? 9 : rank[b.decision]);
+  });
+  list.innerHTML = evs.map(function(e){
+    var dec = e.decision || 'reject';
+    var color = dec === 'auto_accept' ? '#2563eb' : (dec === 'needs_anchor' ? '#ef6c00' : '#c62828');
+    var label = dec === 'auto_accept' ? 'AUTO' : (dec === 'needs_anchor' ? 'NEEDS ANCHOR' : 'REJECT');
+    var reasons = (e.reasons || []).join(', ') || 'passed conservative profile';
+    var truth = e.truth_gallons == null ? '' : ' vs ledger '+esc(e.truth_gallons)+' gal';
+    var err = e.delta_error_gal == null ? '' : ' · shadow error '+esc(e.delta_error_gal)+' gal';
+    var src = e.evidence_source ? ' · source '+esc(e.evidence_source) : '';
+    return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
+      + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
+      + '<span style="color:'+color+';font-weight:700">'+label+'</span> &middot; '
+      + '<strong>'+esc(e.zone_label || ('Zone '+e.zone_id))+'</strong> &middot; '
+      + esc(fullStamp(e.start)) + '<br>'
+      + '<span style="color:var(--text2)">candidate '+esc(e.candidate_gallons)+' gal'
+      + truth + err + ' · coverage '+esc(e.coverage)
+      + src + ' · '+esc(reasons)+'</span></div>';
+  }).join('');
+}
+
+function renderPhaseTracker(d){
+  var card = document.getElementById('phaseTrackerCard');
+  var sum = document.getElementById('phaseTrackerSummary');
+  var list = document.getElementById('phaseTrackerList');
+  if(!card || !sum || !list) return;
+  var pt = d.phase_tracker || null;
+  if(!pt || !pt.enabled || !(pt.events || []).length){
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  var s = pt.summary || {};
+  var by = s.by_decision || {};
+  sum.innerHTML =
+    '<span style="font-weight:700;color:#2563eb">'+esc(by.auto_accept || 0)+'</span> auto-accept'
+    + ' &middot; <span style="font-weight:700;color:#ef6c00">'+esc(by.needs_anchor || 0)+'</span> need anchor'
+    + ' &middot; <span style="font-weight:700;color:#c62828">'+esc(by.reject || 0)+'</span> reject'
+    + (s.accepted_max_error_gal != null
+      ? ' &middot; accepted max shadow error '+esc(s.accepted_max_error_gal)+' gal'
+      : '')
+    + '<br><span style="color:var(--text2)">Uses raw CNN low digits + monotonic counter physics. This is a candidate total, not a committed reading.</span>';
+  var rs = pt.resolution_summary || null;
+  if(rs && rs.auto_accept_n){
+    sum.innerHTML += '<br><span style="color:var(--text2)">Validated auto-accept: '
+      + '<b>'+esc(rs.auto_accept_n)+'</b> resolved, '
+      + '<b style="color:'+(rs.auto_accept_failed ? '#c62828' : '#16a34a')+'">'
+      + esc(rs.auto_accept_failed || 0)+'</b> failed, max error '
+      + esc(rs.auto_accept_max_error_gal)+' gal.</span>';
+  }
+  var evs = (pt.events || []).slice().sort(function(a,b){
+    var rank = {needs_anchor:0,reject:1,auto_accept:2};
+    return (rank[a.decision] == null ? 9 : rank[a.decision])
+      - (rank[b.decision] == null ? 9 : rank[b.decision]);
+  });
+  list.innerHTML = evs.map(function(e){
+    var dec = e.decision || 'reject';
+    var color = dec === 'auto_accept' ? '#2563eb' : (dec === 'needs_anchor' ? '#ef6c00' : '#c62828');
+    var label = dec === 'auto_accept' ? 'AUTO' : (dec === 'needs_anchor' ? 'NEEDS ANCHOR' : 'REJECT');
+    var reasons = (e.reasons || []).join(', ') || 'passed conservative profile';
+    var truth = e.truth_gallons == null ? '' : ' vs ledger '+esc(e.truth_gallons)+' gal';
+    var err = e.delta_error_gal == null ? '' : ' - shadow error '+esc(e.delta_error_gal)+' gal';
+    var src = e.evidence_source ? ' - source '+esc(e.evidence_source) : '';
+    var ar = e.anchor_request || {};
+    var anchors = '';
+    if(ar.required && (ar.frames || []).length){
+      anchors = '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">';
+      anchors += (ar.frames || []).map(function(f){
+        var txt = f.role === 'start_anchor' ? 'start photo' : 'end photo';
+        return '<button class="anchorFrameBtn" data-start-ms="'+esc(f.window_start_ms)+'"'
+          + ' data-end-ms="'+esc(f.window_end_ms)+'" data-ts="'+esc(f.ts || '')+'"'
+          + ' data-gal="'+esc(e.candidate_gallons == null ? '' : e.candidate_gallons)+'"'
+          + ' style="border:1px solid #f59e0b;background:#fff7ed;color:#9a3412;'
+          + 'border-radius:5px;padding:4px 8px;font-size:.72rem;cursor:pointer">'
+          + esc(txt)+' - '+esc(fullStamp(f.ts))+'</button>';
+      }).join('');
+      anchors += '</div>';
+    }
+    return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
+      + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
+      + '<span style="color:'+color+';font-weight:700">'+label+'</span> &middot; '
+      + '<strong>'+esc(e.zone_label || ('Zone '+e.zone_id))+'</strong> &middot; '
+      + esc(fullStamp(e.start)) + '<br>'
+      + '<span style="color:var(--text2)">candidate '+esc(e.candidate_gallons)+' gal'
+      + truth + err + ' - coverage '+esc(e.coverage)
+      + src + ' - '+esc(reasons)+'</span>'+anchors+'</div>';
+  }).join('');
+  wireAnchorFrameButtons();
+}
+
+function wireAnchorFrameButtons(){
+  document.querySelectorAll('.anchorFrameBtn').forEach(function(btn){
+    btn.onclick = function(){
+      var s = parseInt(btn.getAttribute('data-start-ms'), 10);
+      var e = parseInt(btn.getAttribute('data-end-ms'), 10);
+      if(!isFinite(s) || !isFinite(e)) return;
+      showFrames({
+        start_ms: s,
+        end_ms: e,
+        gallons: btn.getAttribute('data-gal') || 0,
+        t: btn.getAttribute('data-ts') || ''
+      });
+    };
+  });
 }
 
 function render(d){
   var usage = d.usage || [], line = d.line || [];
   LAST_USAGE = usage;
   renderRateSummary(d);
+  renderZoneReport(d);
+  renderIntegrity(d);
+  renderPhaseTracker(d);
+  var windowEvents = d.events || [];
   var rateMode = d.rate_mode || state.rate_mode || 'actual';
   document.getElementById('bar-title').innerHTML = 'Gallons per bar'
     + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label
@@ -337,6 +699,7 @@ function render(d){
   document.getElementById('sub').innerHTML =
     '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
     + (d.total_gal||0)+' gal total this window · ledger sampled at capture cadence'
+    + (windowEvents.length ? ' · <b style="color:#7c3aed">'+windowEvents.length+'</b> watering event(s) shown' : '')
     + (rateMode==='interpolated' ? ' · <b style="color:#0d9488">rate interpolation on</b>' : '')
     + (d.gaps ? ' · <b style="color:#94a3b8">'+d.gaps+'</b> gap bucket(s) (offline, shown dashed)' : '')
     + (windowLabel(d) ? '<br><span style="font-size:.78rem">'+windowLabel(d)+'</span>' : '');
@@ -356,7 +719,19 @@ function render(d){
     // Backward steps are the real correctness problem (a monotonic meter can't
     // go down). Catch-up jumps are NORMAL fast-flow, so they don't trigger a
     // warning on their own.
-    if (!hh.samples) { rhEl.className='readhealth'; rhEl.innerHTML=''; }
+    if (hh.samples && hh.stale_lock) {
+      rhEl.className='readhealth rh-warn';
+      rhEl.innerHTML='\u26a0 Meter lock stale/incomplete: <b>'
+        + esc(hh.stale_lock_event_count || 0) + '</b> watering event(s) overlap this window, but the ledger saw little/no movement'
+        + (hh.stale_lock_estimated_missing_gal ? (' (up to ~'+esc(hh.stale_lock_estimated_missing_gal)+' gal missing vs event estimates)') : '')
+        + '. Re-anchor or verify the meter image before trusting this total.';
+    }
+    else if (hh.samples && hh.trusted === false) {
+      rhEl.className='readhealth rh-warn';
+      rhEl.innerHTML='\u26a0 Trust boundary: this window starts before '+esc(hh.trust_cutoff || 'the stabilized cutoff')
+        +'. Old OCR/re-anchor history can make totals look precise while needing review.';
+    }
+    else if (!hh.samples) { rhEl.className='readhealth'; rhEl.innerHTML=''; }
     else if (!hh.backward_steps) {
       rhEl.className='readhealth rh-ok';
       rhEl.innerHTML='\u2713 Reading health: clean \u2014 0 backward steps, '+hh.pct_monotonic+'% monotonic across '+hh.samples+' samples'
@@ -412,6 +787,58 @@ function render(d){
   // every plot area starts at the same x and a vertical line hits the same time
   // on all three charts.
   var YW = 82;
+  var eventBands = chartEventBands(windowEvents, usage);
+  var eventBandsPlugin = {
+    id: 'waterEventBands',
+    beforeDatasetsDraw: function(chart){
+      var bands = chart.$eventBands || [];
+      if(!bands.length) return;
+      var x = chart.scales.x;
+      var area = chart.chartArea;
+      var ctx = chart.ctx;
+      if(!x || !area) return;
+      ctx.save();
+      bands.forEach(function(b){
+        var x1 = x.getPixelForValue(b.first);
+        var x2 = x.getPixelForValue(b.last);
+        if(!isFinite(x1) || !isFinite(x2)) return;
+        if(x2 < x1){ var tmp=x1; x1=x2; x2=tmp; }
+        var step = Math.max(6, Math.abs(x.getPixelForValue(Math.min(b.first+1, usage.length-1)) - x1));
+        var left = Math.max(area.left, x1 - step/2);
+        var right = Math.min(area.right, x2 + step/2);
+        var mid = Math.max(area.left, Math.min(area.right, (left + right) / 2));
+        ctx.fillStyle = b.color;
+        ctx.fillRect(left, area.top, Math.max(2, right-left), area.bottom-area.top);
+        ctx.strokeStyle = b.stroke;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(mid, area.top);
+        ctx.lineTo(mid, area.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = b.stroke;
+        ctx.beginPath();
+        ctx.moveTo(mid, area.top + 1);
+        ctx.lineTo(mid - 4, area.top + 8);
+        ctx.lineTo(mid + 4, area.top + 8);
+        ctx.closePath();
+        ctx.fill();
+        if((right-left) > 36){
+          ctx.fillStyle = '#5b21b6';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.textBaseline = 'top';
+          ctx.fillText(b.shortLabel, left + 3, area.top + 3);
+        } else if((right-left) > 10){
+          ctx.fillStyle = b.stroke;
+          ctx.font = '9px system-ui, sans-serif';
+          ctx.textBaseline = 'top';
+          ctx.fillText(b.shortLabel, Math.min(mid + 5, area.right - 18), area.top + 3);
+        }
+      });
+      ctx.restore();
+    }
+  };
   function xAxis(showTicks){ return {grid:{display:true,color:'#eef2f6'},
     ticks:{display:showTicks!==false,
       maxRotation:90,minRotation:45,autoSkip:true,autoSkipPadding:8,
@@ -438,7 +865,7 @@ function render(d){
     data:{labels:labels, datasets:[{label:'gal', data:gph,
       backgroundColor:usage.map(function(u){return u.interpolated?'#0d9488':'#3b82f6';}),
       borderRadius:3}]},
-    plugins: DL ? [DL] : [],
+    plugins: DL ? [eventBandsPlugin, DL] : [eventBandsPlugin],
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
       onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u && !u.gap) showFrames(u); } },
@@ -460,6 +887,8 @@ function render(d){
              + (usage[c.dataIndex]&&usage[c.dataIndex].interpolated?' (interpolated)':'')); }}}},
       scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
+  barC.$eventBands = eventBands;
+  barC.update('none');
 
   if (lineC) lineC.destroy();
   lineC = new Chart(document.getElementById('lineChart'), {
@@ -468,7 +897,7 @@ function render(d){
       datasets:[{label:'gallons (cumulative)', data:line.map(function(p){return p.gal;}),
         borderColor:'#3b82f6', backgroundColor:'rgba(59,130,246,.08)',
         fill:true, pointRadius:0, pointHoverRadius:4, borderWidth:2, tension:.2, segment:gapSeg()}]},
-    plugins: DL ? [DL] : [],
+    plugins: DL ? [eventBandsPlugin, DL] : [eventBandsPlugin],
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
       plugins:{legend:{display:false}, tooltip:xTooltip(),
@@ -483,6 +912,8 @@ function render(d){
             click:function(){ var u=LAST_USAGE[LAST_USAGE.length-1]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } } }},
       scales:{x:xAxis(false), y:yAxis('gallons',{beginAtZero:true})}}
   });
+  lineC.$eventBands = eventBands;
+  lineC.update('none');
 
   if (meterC) meterC.destroy();
   meterC = new Chart(document.getElementById('meterChart'), {
@@ -495,7 +926,7 @@ function render(d){
         pointRadius:meterArr.map(function(p){return p.anomaly?4:0;}),
         pointBackgroundColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');}),
         pointBorderColor:meterArr.map(function(p){return p.anomaly==='back'?'#ef4444':(p.anomaly==='jump'?'#f59e0b':'rgba(0,0,0,0)');})}]},
-    plugins: DL ? [DL] : [],
+    plugins: DL ? [eventBandsPlugin, DL] : [eventBandsPlugin],
     options:{responsive:true,maintainAspectRatio:false,
       interaction:{mode:'index',intersect:false},
       onClick:function(evt, els){ if(els.length){ var u=LAST_USAGE[els[0].index]; if(u && u.start_ms!=null && !u.gap) showFrames(u); } },
@@ -525,6 +956,41 @@ function render(d){
         y:yAxis('ft\u00b3',{beginAtZero:false,
           ticks:{font:{size:9},callback:function(v){ return Number(v).toLocaleString(undefined,{maximumFractionDigits:1}); }}})}}
   });
+  meterC.$eventBands = eventBands;
+  meterC.update('none');
+}
+
+function chartEventBands(events, usage){
+  if(!events || !events.length || !usage || !usage.length) return [];
+  var palette = ['rgba(124,58,237,.13)','rgba(14,165,233,.13)','rgba(245,158,11,.14)','rgba(16,185,129,.13)','rgba(244,63,94,.12)'];
+  function znum(ev){
+    if(ev.zone_number != null) return String(ev.zone_number);
+    if(ev.zone_id != null) return String(Number(ev.zone_id)+1);
+    return '?';
+  }
+  return events.map(function(ev, ei){
+    var es = Date.parse(ev.start);
+    var ee = Date.parse(ev.end || ev.start);
+    if(!isFinite(es) || !isFinite(ee)) return null;
+    var first = -1, last = -1;
+    usage.forEach(function(u, i){
+      var bs = Number(u.start_ms), be = Number(u.end_ms);
+      if(!isFinite(bs) || !isFinite(be)) return;
+      if(bs < ee && be > es){
+        if(first < 0) first = i;
+        last = i;
+      }
+    });
+    if(first < 0) return null;
+    return {
+      first: first,
+      last: last,
+      color: palette[ei % palette.length],
+      stroke: ['#7c3aed','#0284c7','#d97706','#059669','#e11d48'][ei % 5],
+      shortLabel: 'Z'+znum(ev),
+      label: ev.zone_label || ('Zone '+znum(ev))
+    };
+  }).filter(Boolean);
 }
 
 function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
@@ -539,16 +1005,19 @@ function frameCell(x, tag){
   } else if (x.propagated){
     disp = '<b style="color:#0d9488">'+read+'</b> ft\u00b3';
     badge = '<span style="color:#0d9488;font-weight:700">\u2197 from your fixes</span> ';
-  } else if (guess){ disp = '<span style="color:#f59e0b">AI reads <b style="color:#f59e0b">'+guess+'</b></span> ft\u00b3'
-    + (read && read!==guess ? '<br><span style="color:#94a3b8;font-size:.66rem">held '+read+'</span>' : ''); }
-  else if (read){ disp = '<b>'+read+'</b> ft\u00b3'; }
+  } else if (read){ disp = '<b>'+read+'</b> ft\u00b3'
+    + (guess && read!==guess ? '<br><span style="color:#b45309;font-size:.66rem">raw CNN '+guess+'</span>' : ''); }
+  else if (guess){ disp = '<span style="color:#f59e0b">raw CNN <b style="color:#f59e0b">'+guess+'</b></span> ft\u00b3'; }
   else { disp = '<span style="color:#94a3b8">no read'+(x.note?(' \u00b7 '+esc(x.note)):'')+'</span>'; }
   var cur = dig(x.reading) || dig(x.guess);
   var attr = x.file ? ('data-file="'+esc(x.file)+'"') : ('data-id="'+esc(x.id)+'"');
+  var src = x.source + (x.read_source ? (' \u00b7 '+x.read_source) : '')
+    + (x.read_conf ? ('/'+x.read_conf) : '');
   return '<div class="fcell" '+attr+' data-ms="'+x.ms+'" data-cur="'+esc(cur)+'">'
     + '<img loading="lazy" src="'+x.img+'">'
     + '<div class="cap">'+(tag?('<span style="color:#0d9488;font-weight:700">'+tag+'</span> '):'')
     + badge+disp+'<br>'+x.ts+' \u00b7 '+x.source
+    + (src!==x.source ? '<br><span style="color:#64748b">'+esc(src)+'</span>' : '')
     + '<div class="fixrow"><button class="fixbtn">Fix reading</button></div></div></div>';
 }
 
@@ -603,8 +1072,8 @@ function showFrames(u){
         + ' &nbsp;\u00b7&nbsp; <b>'+(u.gallons||0)+' gal</b> used this bucket'
         + (u.graph_anom==='back' ? ' &nbsp;\u00b7&nbsp; <span style="color:#ef4444;font-weight:700">\u26a0 graph flagged a BACKWARD step</span>' : '')
         + (u.graph_anom==='jump' ? ' &nbsp;\u00b7&nbsp; <span style="color:#b45309;font-weight:700">\u26a0 graph flagged a catch-up JUMP</span>' : '')
-        + '<br><span style="color:#5f7082;font-size:.74rem">The photos below should read the same number. '
-        + 'If a photo clearly shows something different, that frame was misread \u2014 click <b>Fix reading</b>.</span></div>';
+        + '<br><span style="color:#5f7082;font-size:.74rem">Photos inside the bucket can be slightly before this endpoint while water is moving. '
+        + 'If a photo clearly shows a different value than its own caption, click <b>Fix reading</b>.</span></div>';
       if (d.before){
         html += '<div style="grid-column:1/-1;font-weight:700;color:#5f7082;font-size:.8rem">⬅ Before this window (last reading prior):</div>';
         html += frameCell(d.before, 'BEFORE');
@@ -612,7 +1081,7 @@ function showFrames(u){
       }
       document.getElementById('modal-sub').innerHTML = f.length
         ? (d.count+' frame(s) in this window. If a reading looks wrong, click <b>Fix reading</b> — your correction goes straight into training.')
-        : 'No saved photos for this window (frames kept ~1h live + a sample of banked readings; older windows pruned).';
+        : 'No archived meter photos matched this bucket. The long-term archive is expected to keep disk-backed meter photos; this usually means the frame lookup missed the capture time or the archive was unavailable.';
       html += f.map(function(x){ return frameCell(x, ''); }).join('');
       document.getElementById('modal-grid').innerHTML = html;
       wireFixes();
@@ -684,6 +1153,8 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
       var vc={accurate:'v-accurate',undercount:'v-undercount',review:'v-review'}[a.verdict]||'v-review';
       var vt={accurate:'✅ Accurate — the chart total matches the meter',
               review:'🔎 Review — re-anchor corrections affect this window'}[a.verdict]||a.verdict;
+      if(a.verdict === 'review') vt = 'Review - verify this window before trusting the total';
+      if(a.verdict === 'accurate') vt = 'Accurate - the chart total matches the meter';
       var h='<div class="verdict '+vc+'">'+vt+'</div>';
       h+='<div class="auditnums">'
         + num(a.chart_total_gal+' gal','Chart total (water used)')
@@ -700,6 +1171,10 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
         return '<div class="auditcheck"><span class="ck" style="color:'+(c.ok?'#16a34a':'#ef4444')+'">'
           +(c.ok?'✓':'✗')+'</span><span><b>'+esc(c.name)+'</b> — '+esc(c.detail)+'</span></div>'; }).join('');
       h+='<div style="font-size:.72rem;color:var(--text2);margin-top:10px">Window '+esc((a.window&&a.window.start)||'')+' → '+esc((a.window&&a.window.end)||'')+' · '+a.samples+' samples · '+((a.coverage&&a.coverage.pct))+'% coverage</div>';
+      if(a.trust && a.trust.trusted===false){
+        h+='<div style="font-size:.78rem;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:7px 9px;margin-top:8px">'
+          + esc(a.trust.reason || 'This window is outside the trusted meter history.') + '</div>';
+      }
       panel.innerHTML=h;
     }).catch(function(){ panel.innerHTML='<div style="color:#ef4444">Audit failed to load.</div>'; });
   };

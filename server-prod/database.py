@@ -1644,6 +1644,14 @@ def get_forecast_vs_actual(days: int = 30) -> list[dict]:
         else:
             d["outcome"] = "no_event"             # predicted future water, nothing today — fine
 
+        # Only completed auto-engine decisions are comparable. Manual-mode
+        # snapshots and days with no decision remain available as history, but
+        # must not inflate the accuracy denominator.
+        d["scored"] = (
+            d["predicted_skip_reason"] != "manual_mode"
+            and d["outcome"] != "no_event"
+        )
+
         result.append(d)
 
     return result
@@ -1652,11 +1660,12 @@ def get_forecast_vs_actual(days: int = 30) -> list[dict]:
 def get_forecast_accuracy_summary(days: int = 30) -> dict:
     """Aggregate accuracy stats over the last N days."""
     rows = get_forecast_vs_actual(days)
+    rows = [r for r in rows if r.get("scored")]
     total = len(rows)
     if total == 0:
         return {"total": 0, "accuracy_pct": None, "message": "No forecast data yet"}
 
-    correct = sum(1 for r in rows if r["outcome"] in ("correct_water", "correct_skip", "no_event"))
+    correct = sum(1 for r in rows if r["outcome"] in ("correct_water", "correct_skip"))
     false_skips = sum(1 for r in rows if r["outcome"] == "false_skip")
     missed_skips = sum(1 for r in rows if r["outcome"] == "missed_skip")
     early_waters = sum(1 for r in rows if r["outcome"] == "early_water")

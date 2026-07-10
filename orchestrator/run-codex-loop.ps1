@@ -36,8 +36,8 @@ $start = Get-Date
 Add-Content $logFile "`n## Run started $($start.ToString('u')) (max $MaxIterations iters / $MaxMinutes min)"
 
 if ($DryRun) {
-  Write-Host "DRY RUN — would run up to $MaxIterations iterations, $MaxMinutes min cap."
-  Write-Host "codex exec --skip-git-repo-check --sandbox workspace-write --output-schema `"$schema`" -o <iter>.json <prompt>"
+  Write-Host "DRY RUN - would run up to $MaxIterations iterations, $MaxMinutes min cap."
+  Write-Host 'Per iter: codex exec --skip-git-repo-check --sandbox workspace-write --output-schema <schema.json> -o <iter.json> <prompt>'
   return
 }
 
@@ -57,7 +57,7 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
     --output-schema $schema -o $outJson $prompt 2>&1 | Out-Null
 
   if (-not (Test-Path $outJson)) {
-    Add-Content $logFile "- iter $i : NO verdict file produced — stopping (check codex auth/errors)."
+    Add-Content $logFile "- iter $i : NO verdict file produced - stopping (check codex auth/errors)."
     Write-Host "No verdict produced. Stopping." -ForegroundColor Yellow
     break
   }
@@ -65,13 +65,13 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
   try {
     $v = Get-Content $outJson -Raw | ConvertFrom-Json
   } catch {
-    Add-Content $logFile "- iter $i : verdict not valid JSON — stopping."
+    Add-Content $logFile "- iter $i : verdict not valid JSON - stopping."
     Write-Host "Verdict not valid JSON. Stopping." -ForegroundColor Yellow
     break
   }
 
   $stamp = (Get-Date).ToString('u')
-  Add-Content $logFile ("- iter {0} [{1}]: high_med_open={2} new={3} fixed={4} deployed={5} — {6}" -f `
+  Add-Content $logFile ("- iter {0} [{1}]: high_med_open={2} new={3} fixed={4} deployed={5} - {6}" -f `
     $i, $stamp, $v.high_med_open, $v.new_findings_this_pass, $v.fixed_this_iter, $v.deployed, $v.summary)
   Write-Host ("  open(high/med)={0}  new={1}  fixed={2}  -> {3}" -f `
     $v.high_med_open, $v.new_findings_this_pass, $v.fixed_this_iter, $v.summary)
@@ -84,5 +84,6 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
 }
 
 $mins = [int]((Get-Date) - $start).TotalMinutes
-Add-Content $logFile "## Run ended $((Get-Date).ToString('u')) — $mins min total"
+Add-Content $logFile "## Run ended $((Get-Date).ToString('u')) - $mins min total"
 Write-Host "Loop finished after $mins min. Log: $logFile" -ForegroundColor Green
+

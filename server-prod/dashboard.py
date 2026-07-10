@@ -9977,6 +9977,7 @@ h1{margin:0 0 2px 0;font-size:1.4rem;font-weight:700;letter-spacing:-.02em;}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
 button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;}
 button:hover{background:var(--border-light);}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #0b63ce;outline-offset:2px;}
 button:disabled{opacity:.5;cursor:default;}
 .btn-dry{background:#fef3c7;border-color:#f59e0b;color:#92400e;}
 .btn-wet{background:#dbeafe;border-color:#3b82f6;color:#1e40af;}
@@ -9987,7 +9988,7 @@ button:disabled{opacity:.5;cursor:default;}
 .live{font-variant-numeric:tabular-nums;}
 .raw{font-size:26px;font-weight:700;color:var(--text);}
 .pct{font-size:22px;font-weight:700;color:var(--text);}
-.muted{color:var(--text2);font-size:12px;}
+.muted{color:#4b5f73;font-size:12px;}
 .endpoints{display:flex;gap:18px;margin:8px 0;font-size:13px;color:var(--text2);}
 .endpoints b{color:var(--text);}
 .drift{font-size:12px;color:var(--text2);margin:2px 0 8px;padding:6px 8px;background:var(--border-light);border-radius:6px;}
@@ -10016,10 +10017,10 @@ a{color:var(--blue);text-decoration:none;}
 /* ── Mobile bottom nav ── */
 .mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:#fff;
   border-top:1px solid var(--border);box-shadow:0 -2px 8px rgba(0,0,0,.05);z-index:200;padding:4px 0;}
-.mobile-nav-inner{display:flex;justify-content:space-around;}
+.mobile-nav-inner{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));}
 .mob-nav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 8px;
-  font-size:.62rem;color:var(--text2);text-decoration:none;cursor:pointer;font-weight:600;}
-.mob-nav-item.active{color:var(--green-dark);}
+  min-width:0;font-size:.62rem;color:#4b5f73;text-decoration:none;cursor:pointer;font-weight:600;}
+.mob-nav-item.active{color:#135c2b;}
 .mob-nav-item .mob-icon{font-size:1.2rem;}
 @media(max-width:768px){
   .sidebar{display:none;}
@@ -10062,7 +10063,7 @@ a{color:var(--blue);text-decoration:none;}
   </div>
 </nav>
 
-<div class="main">
+<main class="main" id="main-content">
 <h1>🎛️ Sensor Calibration</h1>
 <div class="sub">Tune the server-side calibration for the battery and soil sensors — saved to the server, no reflash.</div>
 
@@ -10074,7 +10075,7 @@ a{color:var(--blue);text-decoration:none;}
 <div id="battery-cal" class="card">Loading…</div>
 <div class="card" id="battery-chart-card" style="display:none">
   <div class="muted" style="margin-bottom:8px">Calibration curve — <b style="color:#3b82f6">your readings</b> (dots), <b style="color:#16a34a">best-fit</b> (line), <b style="color:#d97706">right now</b> (◆). X = ESP32 raw, Y = Wanderer actual.</div>
-  <div style="height:230px"><canvas id="bat-chart"></canvas></div>
+  <div style="height:230px"><canvas id="bat-chart" role="img" aria-label="Battery calibration curve showing saved reference points, fitted correction, and the current reading"></canvas></div>
 </div>
 
 <h2 style="font-size:16px;margin:22px 0 6px">🌱 Soil Sensors</h2>
@@ -10092,12 +10093,12 @@ a{color:var(--blue);text-decoration:none;}
 </div>
 
 <div class="bar">
-  <button class="btn-go" id="liveBtn" onclick="startLive()">▶ Start Live Mode (fast readings)</button>
-  <span class="muted" id="liveState">Live mode off — readings update hourly</span>
+  <button class="btn-go" id="liveBtn" onclick="startLive()" disabled>▶ Start Live Mode (fast readings)</button>
+  <span class="muted" id="liveState" role="status" aria-live="polite">Live mode off — readings update hourly</span>
 </div>
 
 <div id="cards"></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 var POLL_MS = 3000;
@@ -10117,6 +10118,7 @@ var DRIFT = {};  // "idx|point" -> drift entry
 async function load(){
   try{
     var r = await fetch('/api/calibration');
+    if(!r.ok) throw new Error('Calibration request failed');
     var d = await r.json();
     // Pull drift history in parallel (best-effort).
     try{
@@ -10126,7 +10128,11 @@ async function load(){
       (hd.drift||[]).forEach(function(e){ DRIFT[e.sensor_idx + '|' + e.point] = e; });
     }catch(e){}
     render(d);
-  }catch(e){ /* keep last view */ }
+    document.getElementById('liveBtn').disabled = false;
+  }catch(e){
+    document.getElementById('cards').innerHTML = '<div class="advice adv-overdue" role="alert"><b>Calibration data unavailable.</b> Check the connection and retry. <button onclick="load()">Retry</button></div>';
+    document.getElementById('liveBtn').disabled = true;
+  }
 }
 
 function driftLine(idx){
@@ -10165,8 +10171,9 @@ function render(d){
     var advIcon = {ok:'✅', info:'👀', due:'🔧', overdue:'⏰', bad:'❌'}[adv.status] || '✅';
     var advLabel = {ok:'Good', info:'Watch', due:'Recalibrate soon', overdue:'Recalibrate now', bad:'Hardware issue'}[adv.status] || 'Good';
     var advHtml = '<div class="advice ' + advCls + '"><b>' + advIcon + ' ' + advLabel + '</b> — ' + (adv.reason||'') + '</div>';
-    html += '<div class="card">'
-      + '<div class="row"><span class="nm">#' + s.index + ' · ' + (s.name||'') + '</span>' + badge + '</div>'
+    var sensorLabel = s.name || ('Sensor ' + s.index);
+    html += '<section class="card" aria-labelledby="sensor-title-' + s.index + '">'
+      + '<div class="row"><h3 class="nm" id="sensor-title-' + s.index + '">#' + s.index + ' · ' + sensorLabel + '</h3>' + badge + '</div>'
       + advHtml
       + '<div class="row" style="margin-top:6px">'
       +   '<div><div class="muted">live raw</div><div class="raw live">' + fmt(s.raw) + '</div></div>'
@@ -10175,17 +10182,17 @@ function render(d){
       + '<div class="endpoints"><span>dry (0%): <b>' + s.dry + '</b></span><span>wet (100%): <b>' + s.wet + '</b></span></div>'
       + driftLine(s.index)
       + '<div class="actions">'
-      +   '<button class="btn-dry" onclick="capture(' + s.index + ',\\'dry\\')">☀️ Set Dry (in air)</button>'
-      +   '<button class="btn-wet" onclick="capture(' + s.index + ',\\'wet\\')">💧 Set Wet (in water)</button>'
+      +   '<button class="btn-dry" aria-label="Set ' + sensorLabel + ' sensor dry" onclick="capture(' + s.index + ',\\'dry\\')">☀️ Set Dry (in air)</button>'
+      +   '<button class="btn-wet" aria-label="Set ' + sensorLabel + ' sensor wet" onclick="capture(' + s.index + ',\\'wet\\')">💧 Set Wet (in water)</button>'
       + '</div>'
       + '<div class="manual">'
       +   '<span class="muted">manual:</span>'
-      +   '<input class="nm" id="nm' + s.index + '" placeholder="name" value="' + (s.name||'').replace(/"/g,'&quot;') + '">'
-      +   '<input id="dry' + s.index + '" type="number" placeholder="dry" value="' + s.dry + '">'
-      +   '<input id="wet' + s.index + '" type="number" placeholder="wet" value="' + s.wet + '">'
-      +   '<button onclick="saveManual(' + s.index + ')">Save</button>'
+      +   '<input class="nm" id="nm' + s.index + '" aria-label="Sensor ' + s.index + ' name" placeholder="name" value="' + (s.name||'').replace(/"/g,'&quot;') + '">'
+      +   '<input id="dry' + s.index + '" aria-label="Sensor ' + s.index + ' dry calibration value" type="number" placeholder="dry" value="' + s.dry + '">'
+      +   '<input id="wet' + s.index + '" aria-label="Sensor ' + s.index + ' wet calibration value" type="number" placeholder="wet" value="' + s.wet + '">'
+      +   '<button aria-label="Save sensor ' + s.index + ' calibration" onclick="saveManual(' + s.index + ')">Save</button>'
       + '</div>'
-      + '</div>';
+      + '</section>';
   });
   c.innerHTML = html;
 }
@@ -10237,9 +10244,12 @@ function toggleBatEdit(){
 async function loadBattery(){
   try{
     var r = await fetch('/api/battery-calibration');
+    if(!r.ok) throw new Error('Battery calibration request failed');
     var d = await r.json();
     renderBattery(d);
-  }catch(e){ /* keep last view */ }
+  }catch(e){
+    document.getElementById('battery-cal').innerHTML = '<div class="advice adv-overdue" role="alert"><b>Battery calibration unavailable.</b> Check the connection and retry. <button onclick="loadBattery()">Retry</button></div>';
+  }
 }
 
 function renderBattery(d){
@@ -10269,7 +10279,7 @@ function renderBattery(d){
   // Add-reading input
   var inputHtml = '<div class="manual" style="margin-top:10px">'
     + '<span class="muted">Actual voltage from the Wanderer:</span>'
-    + '<input id="bat-actual" type="number" step="0.01" placeholder="e.g. 13.40" style="width:100px">'
+    + '<input id="bat-actual" aria-label="Actual Wanderer voltage" type="number" step="0.01" placeholder="e.g. 13.40" style="width:100px">'
     + '<button class="btn-go" onclick="addBatteryPoint()">➕ Add reading</button>'
     + '</div>';
   // Points table
@@ -10283,7 +10293,7 @@ function renderBattery(d){
       + '<td>' + vfmt(p.predicted_v) + '</td>'
       + '<td style="' + errCls + '">' + sign + Number(p.error_v).toFixed(2) + '</td>'
       + (batEditMode
-          ? '<td><button onclick="deleteBatteryPoint(\\'' + (p.ts||'') + '\\')" title="Delete this reading" style="padding:3px 9px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">✕</button></td>'
+          ? '<td><button aria-label="Delete battery reading from ' + (p.ts||'').replace('T',' ') + '" onclick="deleteBatteryPoint(\\'' + (p.ts||'') + '\\')" style="padding:3px 9px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">✕</button></td>'
           : '')
       + '</tr>';
   }).join('');
@@ -10296,9 +10306,9 @@ function renderBattery(d){
     if (batEditMode) {
       // Expanded: full table with per-row delete + clear-all.
       var clearBtn = ' <button onclick="resetBattery()" style="padding:5px 12px;font-size:12px;background:#fee2e2;border-color:#ef4444;color:#991b1b">🗑 Clear all points</button>';
-      tableHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">'
+      tableHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px"><caption class="muted">Saved battery calibration readings</caption>'
         + '<thead><tr style="color:#9ba8b5;text-align:left;font-size:11px;text-transform:uppercase">'
-        + '<th>when</th><th>actual</th><th>esp32 raw</th><th>predicted</th><th>err</th><th></th></tr></thead>'
+        + '<th scope="col">when</th><th scope="col">actual</th><th scope="col">esp32 raw</th><th scope="col">predicted</th><th scope="col">err</th><th scope="col">Actions</th></tr></thead>'
         + '<tbody>' + rows + '</tbody></table>'
         + '<div class="actions" style="margin-top:10px">' + editBtn + clearBtn + '</div>';
     } else {
@@ -10402,6 +10412,7 @@ async function addBatteryPoint(){
 }
 
 async function deleteBatteryPoint(ts){
+  if(!confirm('Delete the battery calibration reading from ' + ts.replace('T',' ') + '?')) return;
   try{
     var r = await fetch('/api/battery-calibration/delete', {method:'POST', headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'}, body: JSON.stringify({ts:ts})});
     var d = await r.json();
@@ -10442,7 +10453,7 @@ load();
 loadBattery();
 loadStatus();
 restartPoll();</script>
-</div><!-- /.main -->
+</main><!-- /.main -->
 
 <!-- ═══ Mobile bottom nav ═══ -->
 <div class="mobile-nav">

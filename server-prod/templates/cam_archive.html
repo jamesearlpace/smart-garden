@@ -56,6 +56,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
   border-radius:9px;background:var(--card);cursor:pointer;font-weight:600}
 .empty{color:var(--text2);font-size:.9rem;padding:30px;text-align:center}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -118,8 +119,9 @@ var barC = null, lineC = null, loading = false, exhausted = false;
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function tlabel(ts){ return ts ? ts.slice(5,19).replace('T',' ') : ''; }
-function cf(v){ return v==null ? '—' : (v).toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3}); }
-function fmtReading(v){ return v==null ? '—' : String(v).padStart(9,'0'); }
+function finite(v){var n=Number(v);return Number.isFinite(n)?n:null;}
+function cf(v){ var n=finite(v); return n==null ? '—' : n.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3}); }
+function fmtReading(v){ var n=finite(v); return n==null ? '—' : String(Math.max(0,Math.trunc(n))).padStart(9,'0'); }
 
 function chips(){
   var c = document.getElementById('chips');
@@ -288,7 +290,7 @@ function loadList(reset){
     var count = Number(d.count||0), countTotal = Number(d.count_total||count);
     var hidden = Math.max(0, countTotal - count);
     document.getElementById('listMsg').textContent =
-      count + ' images in window'
+      Math.max(0,Number.isFinite(count)?count:0) + ' images in window'
       + (unrev?' (unreviewed)':'')
       + (!includeProp && hidden>0 ? (' · ' + hidden + ' inferred hidden') : '');
     var grid = document.getElementById('grid');
@@ -300,7 +302,7 @@ function loadList(reset){
       (offset===0 && items.length===0) ? 'block' : 'none';
     var b = d.bounds||{};
     document.getElementById('sub').innerHTML =
-      'Archive holds <b>'+(b.total||0).toLocaleString()+'</b> images'
+      'Archive holds <b>'+esc((finite(b.total)||0).toLocaleString())+'</b> images'
       + (b.min ? ' · oldest '+esc(tlabel(b.min)) : '')
       + (b.max ? ' · newest '+esc(tlabel(b.max)) : '');
   }).catch(function(){ loading=false; document.getElementById('listMsg').textContent='failed'; });
@@ -352,5 +354,6 @@ function refresh(){ chips(); loadUsage(); loadAccuracyBudget(); loadList(true); 
 refresh();
 setInterval(loadAccuracyBudget, 30000);
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

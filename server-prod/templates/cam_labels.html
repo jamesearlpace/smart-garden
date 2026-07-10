@@ -87,6 +87,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .prop .pacts .acc{color:var(--green);border-color:#bbf7d0}
 .prop .pacts .dis{color:var(--red);border-color:#fecaca}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -138,6 +139,8 @@ function fmtLabel(l){
   if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
+var STATUS_SET={manual:1,verified:1,promoted:1,corrected:1,review:1,rejected:1,banked:1,flagged:1,repaired:1,confirmed:1};
+function safeStatus(v){v=String(v||'');return STATUS_SET[v]?v:'review';}
 var ALL = [], filter = 'all', CAPTURES = 500, PROPAGATED = false, SORT = 'newest';
 
 function filtered(){
@@ -158,6 +161,7 @@ function sortItems(items){
 function render(){
   var items = sortItems(filtered());
   document.getElementById('grid').innerHTML = items.map(function(i){
+    var status=safeStatus(i.status);
     var prop = '';
     if (i.proposed){
       var cls = i.proposed_agree ? '' : ' changed';
@@ -171,11 +175,11 @@ function render(){
         +   '<button class="dis" data-pact="dismiss">Dismiss</button>'
         + '</div></div>';
     }
-    return '<div class="cell '+i.status+'" data-file="'+esc(i.file)+'" data-prop="'+esc(i.proposed||'')+'">'
+    return '<div class="cell '+status+'" data-file="'+esc(i.file)+'" data-prop="'+esc(i.proposed||'')+'">'
       + '<img loading="lazy" src="/api/cam/training/img/'+encodeURIComponent(i.file)+'">'
       + '<div class="meta">'
       + '<span class="lblwrap">'+fmtLabel(i.label)+' <span class="muted" style="font-size:.6rem">ft\u00b3</span></span>'
-      + '<div class="st '+i.status+'">'+i.status+'</div>'
+      + '<div class="st '+status+'">'+esc(status)+'</div>'
       + (i.detail ? '<div class="dt">'+esc(i.detail)+'</div>' : '')
       + (function(){ var t=fmtTime(i.captured_ms); return t ? '<div class="ts'+(t.fresh?' fresh':'')+'">\ud83d\udd52 '+esc(t.abs)+' \u00b7 '+esc(t.rel)+'</div>' : ''; })()
       + '<div class="acts">'
@@ -315,7 +319,7 @@ function loadLabels(){
   });
 }
 
-function setJob(msg){ document.getElementById('jobstatus').innerHTML = msg||''; }
+function setJob(msg){ document.getElementById('jobstatus').textContent = msg||''; }
 
 var pollTimer = null;
 function pollReprocess(){
@@ -394,5 +398,6 @@ document.getElementById('btn-retrain').onclick = function(){
 loadLabels();
 pollReprocess();
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

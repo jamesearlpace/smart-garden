@@ -29,6 +29,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .msg{font-size:.75rem;color:var(--text2)}
 .empty{padding:40px;text-align:center;color:var(--text2)}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -42,10 +43,12 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }
 function fmt9(s){ var d=dig(s); return d.length===9 ? d.slice(0,6)+'.'+d.slice(6) : (d||''); }
+function safeImg(v){try{var u=new URL(String(v||''),location.origin);return u.origin===location.origin&&/^\/api\/cam\/frame\/[A-Za-z0-9._-]+$/.test(u.pathname)?u.pathname+u.search:'';}catch(e){return '';}}
 
 function card(it){
+  var img=safeImg(it.img);
   return '<div class="card" data-id="'+esc(it.id)+'">'
-    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="imgwrap">'+(img?'<img loading="lazy" alt="Meter review frame '+esc(it.id)+'" src="'+esc(img)+'">':'<div class="empty">Frame unavailable</div>')+'</div>'
     + '<div class="body">'
     + '<div class="ai" data-ai>🤖 reading…</div>'
     + '<div class="meta">'+esc((it.ts||'').slice(11,19))+(it.note?(' · '+esc(it.note)):'')+'</div>'
@@ -97,5 +100,6 @@ fetch('/api/cam/review-queue?n=40').then(function(r){return r.json();}).then(fun
   document.querySelectorAll('#grid .card').forEach(wireCard);
 }).catch(function(){ document.getElementById('sub').textContent='Could not load the queue.'; });
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

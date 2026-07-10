@@ -187,7 +187,7 @@ a { color: var(--blue); text-decoration: none; }
       <option value="no_event">— No event</option>
     </select>
   </div>
-  <div id="comparison-content"><div class="loading">Loading...</div></div>
+  <div id="comparison-content" role="status" aria-live="polite"><div class="loading">Loading...</div></div>
 </div>
 
 </div><!-- /.main -->
@@ -324,17 +324,49 @@ let rawData = null;
 let compLoaded = false;
 
 async function loadComparison() {
-  compLoaded = true;
   const days = document.getElementById('dayRange').value;
+  const box = document.getElementById('comparison-content');
+  box.innerHTML = '<div class="card">Updating comparison…</div>';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    const r = await fetch('/api/forecast-vs-actual?days=' + days);
-    if (r.status === 401) { window.location.href = '/login'; return; }
-    rawData = await r.json();
+    const r = await fetch('/api/forecast-vs-actual?days=' + days, {signal:controller.signal, headers:{'X-Requested-With':'XMLHttpRequest'}});
+    if (r.status === 401) throw new Error('Your session expired. Sign in again, then retry this view.');
+    if (!r.ok) throw new Error('Comparison service returned HTTP ' + r.status + '.');
+    rawData = normalizeComparison(await r.json());
+    compLoaded = true;
     populateZoneFilter(rawData.comparisons.filter(c => c.scored));
     applyFilter();
   } catch(e) {
-    document.getElementById('comparison-content').innerHTML = '<div class="card">Error: ' + e.message + '</div>';
+    compLoaded = false;
+    const msg = e.name === 'AbortError' ? 'The comparison request timed out.' : e.message;
+    box.innerHTML = '<div class="card" role="alert">' + esc(msg) + ' <button type="button" onclick="loadComparison()">Retry</button></div>';
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+function normalizeComparison(payload) {
+  if(!payload || !Array.isArray(payload.comparisons)) throw new Error('Comparison data was malformed.');
+  const rows = payload.comparisons.filter(function(c){
+    return c && typeof c === 'object' && Number.isInteger(Number(c.zone_id)) &&
+      typeof c.zone_name === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.forecast_date||'');
+  }).map(function(c){ c.zone_id=Number(c.zone_id); c.scored=!!c.scored; return c; });
+  return {comparisons:rows, invalid_count:payload.comparisons.length-rows.length};
+}
+
+function accuracyFrom(rows){
+  const a={total:rows.length,total_waterings:0,total_skips:0,false_skips:0,missed_skips:0,early_waters:0};
+  let correct=0;
+  rows.forEach(function(c){
+    if(c.actually_watered)a.total_waterings++; else a.total_skips++;
+    if(c.outcome==='correct_water'||c.outcome==='correct_skip')correct++;
+    if(c.outcome==='false_skip')a.false_skips++;
+    if(c.outcome==='missed_skip')a.missed_skips++;
+    if(c.outcome==='early_water')a.early_waters++;
+  });
+  a.accuracy_pct=a.total?Math.round(correct/a.total*1000)/10:null;
+  return a;
 }
 
 function populateZoneFilter(comparisons) {
@@ -354,7 +386,7 @@ function applyFilter() {
   let filtered = rawData.comparisons.filter(c => c.scored);
   if (zoneVal !== 'all') filtered = filtered.filter(c => c.zone_id == zoneVal);
   if (outcomeVal !== 'all') filtered = filtered.filter(c => c.outcome === outcomeVal);
-  renderComparison(rawData.accuracy, filtered);
+  renderComparison(accuracyFrom(filtered), filtered);
 }
 
 function renderComparison(accuracy, comparisons) {
@@ -375,9 +407,11 @@ function renderComparison(accuracy, comparisons) {
   }
   if (!comparisons || comparisons.length === 0) {
     html += '<div class="card empty"><div class="icon">📊</div><div>No forecast data yet.</div>';
-    html += '<div style="color:var(--text2);font-size:.85rem;margin-top:8px">Forecasts are captured daily at 3:55 AM.<br>';
-    html += 'You can take a manual snapshot now to start collecting data.</div>';
-    html += '<button class="seed-btn" onclick="seedSnapshot()">Take Snapshot Now</button></div>';
+    const hasRows = rawData && rawData.comparisons.length;
+    html += '<div style="color:var(--text2);font-size:.85rem;margin-top:8px">' +
+      (hasRows ? 'No scored rows match these filters.' : 'Forecasts are captured daily at 3:55 AM.') + '</div>';
+    if(!hasRows) html += '<button class="seed-btn" onclick="seedSnapshot()">Take Snapshot Now</button>';
+    html += '</div>';
     document.getElementById('comparison-content').innerHTML = html;
     return;
   }

@@ -58,6 +58,7 @@ issues (not display bugs).
 
 if (-not (Test-Path $log)) { "# Campaign log`n" | Set-Content $log }
 $start = Get-Date
+$runStamp = $start.ToString('yyyyMMdd-HHmmss')
 Add-Content $log "`n## Parallel director run started $($start.ToString('u')) (max $MaxRounds rounds / $MaxMinutes min)"
 
 if ($DryRun) {
@@ -122,6 +123,29 @@ for ($round = 1; $round -le $MaxRounds; $round++) {
   } else {
     Add-Content $log "    fix: no verdict produced this round."
   }
+
+  # 5. ARCHIVE this round's generated prompts + findings + verdict for later review
+  $rd = Join-Path $orch ("runs\{0}\round-{1:D2}" -f $runStamp, $round)
+  New-Item -ItemType Directory -Force -Path $rd | Out-Null
+  if (Test-Path $dirOut) { Copy-Item $dirOut (Join-Path $rd "director-campaigns.json") -ErrorAction SilentlyContinue }
+  Get-ChildItem (Join-Path $orch "findings-*.json") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
+  Get-ChildItem (Join-Path $orch "campaign-*.txt") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
+  if (Test-Path $fixOut) { Copy-Item $fixOut (Join-Path $rd "fix-verdict.json") -ErrorAction SilentlyContinue }
+  $sum = @("# Round $round - $stamp", "", "## Director campaigns (angles + the exact prompts it generated)")
+  for ($k = 0; $k -lt $campaigns.Count; $k++) {
+    $cc = $campaigns[$k]
+    $sum += ("### {0}. {1} -> {2}" -f ($k + 1), $cc.angle, $cc.target)
+    $sum += '```'
+    $sum += $cc.campaign_prompt
+    $sum += '```'
+  }
+  if ($fx) {
+    $sum += "## Fix verdict"
+    $sum += ("fixed={0} still_open={1} merged={2} watering_flags={3} deployed={4}" -f $fx.fixed, $fx.still_open_high_med, $fx.merged_new_findings, $fx.watering_flags, $fx.deployed)
+    $sum += $fx.summary
+  }
+  ($sum -join "`n") | Set-Content (Join-Path $rd "round-summary.md") -Encoding ascii
+  Write-Host ("  archived -> {0}" -f $rd)
 }
 
 $mins = [int]((Get-Date) - $start).TotalMinutes

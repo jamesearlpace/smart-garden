@@ -15,6 +15,13 @@ HARD SAFETY SCOPE (never cross):
 - DISPLAY / USABILITY only. Do NOT change the irrigation engine, valves, MAD, runtimes,
   precip rates, schedule generation, or config.yaml watering params. Real wrong-watering
   behavior is logged, never fixed.
+- BACKEND CAUTION: reporting/display QUERY functions (e.g. forecast-accuracy scoring,
+  read-only aggregations that compute a displayed number) MAY be edited to fix what the UI
+  shows. But NEVER edit functions that compute the irrigation water balance/credit (e.g.
+  irrigation_mm), decide when/how valves run, or generate the watering schedule. If a fix
+  would require changing control/balance/scheduling logic, STOP and log it as a
+  watering-behavior item instead of fixing it. In your summary, name any backend (.py) file
+  you edited and state why the change is display-only.
 - Back up before any deploy. Diff server vs local before AND after; server and git must
   agree at the end. Put ssh/shell logic in scripts. No force-push, no --no-verify.
 

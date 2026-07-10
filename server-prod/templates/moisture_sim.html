@@ -430,6 +430,9 @@ h2 { margin: 0; font-size: 1.05rem; }
        The standalone precip canvas is kept hidden for backward compat. -->
   <div id="chart-section">
     <div style="height:0; overflow:hidden; position:relative"><canvas id="precip-chart"></canvas></div>
+    <div id="chart-dependency-error" role="alert" hidden style="padding:16px;border:1px solid #ef4444;border-radius:8px;background:#fef2f2;color:#991b1b">
+      Chart unavailable. Reload the page to retry; schedule details below remain available.
+    </div>
     <div style="height:340px; position:relative"><canvas id="moisture-chart"></canvas></div>
 
     <div class="stats" id="stats-row"></div>
@@ -1963,10 +1966,12 @@ function buildChart(zoneId, days, data, actualWaterings, liveData) {
       setTimeout(function() { buildChart(zoneId, days, data, actualWaterings, liveData); }, 150);
     } else {
       console.error('Chart.js never loaded after 30 retries — chart will be blank.');
+      document.getElementById('chart-dependency-error').hidden = false;
     }
     return;
   }
   buildChart._retries = 0;
+  document.getElementById('chart-dependency-error').hidden = true;
   var zone = getZoneBrainConfig(zoneId);
   var MAD = zone.madPct;
   var isReal = data.isRealData === true;

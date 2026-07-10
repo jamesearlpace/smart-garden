@@ -1367,6 +1367,11 @@ function load(){
   }).catch(function(e){
     ctlMsg(e.message||'Could not load usage.', true);
     document.getElementById('sub').textContent='Could not load usage.';
+    var banner=document.getElementById('banner');
+    if(banner){
+      banner.className='banner bad';
+      banner.textContent='Water usage data could not be loaded. Retry or choose another range.';
+    }
     var rs=document.getElementById('rateSummary');
     if(rs) rs.style.display='none';
   });

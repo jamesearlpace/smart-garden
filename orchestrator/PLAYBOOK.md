@@ -141,3 +141,69 @@ pattern). Check:
       --output-schema ... -o ... - < prompt 2>&1"`, `ErrorActionPreference` guarded.
 - [ ] 3-iteration proving run passes the success checklist.
 - [ ] Only then scale `-MaxIterations` / `-MaxMinutes`.
+
+---
+
+## Architecture options (2026-07-10) — and which to pick
+Three levels of sophistication, in increasing order of build cost:
+- **A. Single worker, angle-rotating prompt.** The proven `run-codex-loop.ps1` but the
+  prompt tells ONE agent to rotate lenses (functional -> perf -> data-accuracy -> RCA) and
+  self-critique. Cheapest, least failure surface. ~70% of the variety benefit.
+- **B. Sequential director + worker.** A planner agent generates one campaign, a worker
+  runs it. Better variety enforcement, but NO parallelism -> it pays multi-agent
+  complexity without the parallelism that justifies multi-agent. **Least attractive.**
+- **C. Director + PARALLEL read-only audit + SERIAL fix (`run-director-parallel.ps1`).**
+  Director emits 3-6 independent audit campaigns; they run CONCURRENTLY (background jobs),
+  each read-only (browse + write own `findings-N.json`, no repo writes -> safe to
+  parallelize); then ONE serial fixer merges findings + fixes high/med one at a time
+  (serial -> no git/deploy races). **This is the one to build for a single deploy target.**
+  Key principle: **parallelize the read-only phase, serialize the write/deploy phase.**
+
+## Research grounding (2026-07-10) — is anyone else doing this?
+Yes; it is a named, frontier pattern. Sources read:
+- **Anthropic "Building Effective Agents"** — names *evaluator-optimizer* (my director+verdict)
+  and *orchestrator-workers* (director+workers); agents = LLMs+tools in a loop with explicit
+  stopping conditions. Endorses exactly this shape.
+- **Anthropic "How we built our multi-agent research system"** — a LEAD agent spawns
+  subagents to explore different aspects in parallel, then synthesizes and refines. Findings:
+  multi-agent beat single-agent by 90% on breadth-first tasks; **token usage alone explained
+  80% of performance variance** (so "cost no object -> more spend buys thoroughness" is real);
+  BUT ~15x the tokens of a chat, and **coding is a WEAKER fit than research** (fewer
+  parallelizable subtasks, coordination is hard). "Teach the orchestrator to delegate"
+  (specific bounded prompts) and "start wide then narrow."
+- **Lilian Weng "LLM Powered Autonomous Agents"** — BabyAGI (task-generating agent that
+  creates new tasks from prior results = the director), AutoGPT (self-critique + spawns
+  sub-agents), Reflexion / Self-Refine (the "look again, did you consider X" loop),
+  HuggingGPT (LLM planner decomposes + dispatches), Generative Agents (reflection: "generate
+  the salient questions, then answer them").
+- **Simon Willison / community** — Codex has a native `/goal` (the "Ralph loop") that loops
+  to a goal until done or budget exhausted. Cost cautions: Uber capped AI spend at $1.5K/mo
+  after blowout; James Shore's maintenance-cost math; Geoffrey Litt's "cognitive debt";
+  "tokenmaxxing" viewed skeptically. Consensus healthy frame: **it's your loop you invite
+  agents into** — measure *verified value shipped*, not hours/tokens burned.
+
+## Safety under danger-full-access — the borderline lesson (2026-07-10)
+- The parallel run's fixer edited `server-prod/database.py` (a control-ADJACENT backend
+  file). On inspection it only touched `get_forecast_vs_actual` / `get_forecast_accuracy_summary`
+  (READ/reporting functions that compute a displayed score) — NOT the irrigation
+  balance/credit (`irrigation_mm`) or scheduling. So it was a legit display-accuracy fix.
+- LESSON: `danger-full-access` means the guardrail is the PROMPT, not a wall. A future RCA
+  *could* edit control logic. Mitigation applied: the fix-prompt now says reporting/display
+  queries MAY be edited but balance/credit/scheduling functions NEVER, stop-and-log if a fix
+  needs control changes, and name+justify any backend `.py` edit. The success checklist's
+  "`git diff` touches zero control code" gate is what catches a violation.
+
+## Running it on a home server (FUTURE consideration, 2026-07-10 — not done)
+Goal: run the loop on the NUC so closing the laptop doesn't stop it. It's a PORT, not a copy
+(servers are Linux; this stack is Windows/PowerShell/cmd). Chosen target: **NUC
+(192.168.0.157)** — beefier (i7, 30GB), won't compete with the live site on the Acer;
+deploys to Acer over ssh (as the script already does). Port checklist:
+- [ ] Codex CLI installed + AUTHENTICATED on the NUC (the friction: copy `~/.codex/auth.json`
+      + `config.toml` from laptop, OR `codex login` device-code flow — needs James's hands).
+- [ ] Playwright MCP + `npx playwright install chromium` on Linux (headless works well).
+- [ ] Copy `.mcp-auth/storage-state.json` (or run `mint_session_state.py` on the NUC).
+- [ ] Clone `jamesearlpace/smart-garden` on the NUC; confirm NUC can `ssh acer` to deploy.
+- [ ] Port the `.ps1` orchestrator to **bash** (replace `cmd /c "... < f 2>&1"` with plain
+      `codex exec ... < f 2>&1`; Start-Job -> `&` background + `wait`). Re-test the harness.
+- [ ] Run under **tmux** or a **systemd** unit so it survives SSH/laptop disconnect.
+- NOTE: NUC ssh was flaky during recon ("Connection reset") — verify stable access first.

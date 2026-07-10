@@ -28,6 +28,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 .miss{color:var(--red)}.ok{color:var(--green)}
 .note{font-size:.8rem;color:var(--text2);margin-top:6px}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -35,7 +36,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 <h1>&#128202; Live quality &amp; oracle health</h1>
 <div class="sub">The honest number: how often the CNN reads the meter right on its own, graded by the GPT-4o oracle. And whether the oracle (your safety net) is alive.</div>
 
-<div id="banner" class="banner up">Checking oracle&hellip;</div>
+<div id="banner" class="banner up" role="status" aria-live="polite">Checking oracle&hellip;</div>
 
 <h2>Live CNN accuracy over time <span class="note">(oracle-graded &mdash; this is the real metric, not the offline benchmark)</span></h2>
 <table id="daily"><thead><tr><th>Date</th><th>Model</th><th class="r">CNN accuracy</th><th class="r">samples</th><th class="r">fell back to oracle</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table>
@@ -49,7 +50,19 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return
 function fmt9(s){var d=(String(s||'').match(/\d/g)||[]).join('');return d.length===9?d.slice(0,6)+'.'+d.slice(6):(s||'(none)');}
 function accClass(a){return a==null?'':(a>=80?'acc-hi':(a>=40?'acc-mid':'acc-lo'));}
 
-fetch('/api/cam/quality').then(function(r){return r.json();}).then(function(d){
+function qualityError(message){
+  var b=document.getElementById('banner'); b.className='banner down';
+  b.setAttribute('role','alert'); b.innerHTML=esc(message)+' <button type="button" id="qualityRetry">Retry</button>';
+  document.querySelector('#daily tbody').innerHTML='<tr><td colspan="5">Quality data unavailable.</td></tr>';
+  document.querySelector('#recent tbody').innerHTML='<tr><td colspan="5">Recent checks unavailable.</td></tr>';
+  document.getElementById('qualityRetry').addEventListener('click',loadQuality);
+}
+function loadQuality(){
+ var banner=document.getElementById('banner'); banner.className='banner up'; banner.setAttribute('role','status'); banner.textContent='Loading quality data…';
+ document.querySelector('#daily tbody').innerHTML='<tr><td colspan="5">Loading…</td></tr>';
+ document.querySelector('#recent tbody').innerHTML='<tr><td colspan="5">Loading…</td></tr>';
+ fetch('/api/cam/quality').then(function(r){if(!r.ok) throw new Error(r.status===401?'Your session expired. Reload to sign in.':'Could not load quality data (HTTP '+r.status+').'); return r.json();}).then(function(d){
+  if(!d || typeof d!=='object' || !Array.isArray(d.daily) || !Array.isArray(d.recent) || !d.oracle) throw new Error('Quality data has an invalid format.');
   var o = d.oracle||{};
   var b = document.getElementById('banner');
   if(o.down){
@@ -79,7 +92,10 @@ fetch('/api/cam/quality').then(function(r){return r.json();}).then(function(d){
       +'<td class="'+(ok?'ok':'miss')+'">'+(ok?'&#10003;':'&#10007;')+'</td>'
       +'<td class="mono">'+fmt9(x.cnn)+'</td><td class="mono">'+fmt9(x.oracle)+'</td><td>'+esc(x.version||'')+'</td></tr>';
   }).join('') : '<tr><td colspan="5">No data yet.</td></tr>';
-}).catch(function(){ document.getElementById('banner').innerHTML='Could not load quality data.'; });
+ }).catch(function(e){ qualityError(e.message||'Could not load quality data.'); });
+}
+loadQuality();
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

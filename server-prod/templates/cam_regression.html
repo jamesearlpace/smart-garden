@@ -33,6 +33,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .rm{font-size:.74rem;padding:4px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text2);cursor:pointer}
 .msg{font-size:.72rem}
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
 {% include '_meternav.html' %}
@@ -47,6 +48,12 @@ h1{font-size:1.35rem;margin-bottom:2px}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmt9(s){ var d=(String(s||'').match(/\d/g)||[]).join(''); return d.length===9?d.slice(0,6)+'.'+d.slice(6):(d||''); }
+function safeImg(v){
+  try { var u=new URL(String(v||''),location.origin), p=u.pathname;
+    return u.origin===location.origin && /^\/api\/cam\/(training\/img|regression\/img)\/[A-Za-z0-9._-]+$/.test(p) ? u.pathname+u.search : '';
+  } catch(e){ return ''; }
+}
+function validFrame(it){ return it && typeof it==='object' && typeof it.file==='string' && /^\d{9}$/.test(String(it.label||'')) && safeImg(it.img); }
 
 function card(it){
   var p = it.pass;
@@ -58,7 +65,7 @@ function card(it){
     ? (p ? '<div class="verdict" style="color:var(--green)">\u2713 PASS</div>'
          : '<div class="verdict" style="color:var(--red)">\u2717 FAIL</div>') : '';
   return '<div class="card '+(it.cnn?(p?'pass':'fail'):'')+'" data-file="'+esc(it.file)+'">'
-    + '<div class="imgwrap"><img loading="lazy" src="'+esc(it.img)+'"></div>'
+    + '<div class="imgwrap"><img loading="lazy" alt="Regression frame '+esc(it.file)+'; verified label '+fmt9(it.label)+'" src="'+esc(safeImg(it.img))+'"></div>'
     + '<div class="body">'
     + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span></div>'
     + read + verdict
@@ -80,23 +87,35 @@ function wire(el){
   };
 }
 
-document.getElementById('sub').textContent = 'Running the model on each regression frame\u2026';
-fetch('/api/cam/regression/list?flag=1').then(function(r){return r.json();}).then(function(d){
-  var fr = d.frames||[];
+function showLoadError(message){
+  document.getElementById('sub').innerHTML = '<span role="alert">'+esc(message)+'</span> <button type="button" id="retry">Retry</button>';
+  document.getElementById('score').textContent=''; document.getElementById('grid').innerHTML='';
+  document.getElementById('retry').addEventListener('click', loadRegression);
+}
+function loadRegression(){
+ document.getElementById('sub').setAttribute('role','status');
+ document.getElementById('sub').textContent = 'Running the model on each regression frame\u2026';
+ fetch('/api/cam/regression/list?flag=1').then(function(r){if(!r.ok) throw new Error(r.status===401?'Your session expired. Reload to sign in.':'Could not load regression set (HTTP '+r.status+').'); return r.json();}).then(function(d){
+  if(!d || typeof d!=='object' || !Array.isArray(d.frames)) throw new Error('Regression data has an invalid format.');
+  var rejected=d.frames.length-d.frames.filter(validFrame).length, fr=d.frames.filter(validFrame);
   var n = fr.length, np = d.passing||0;
-  if(!n){
+  if(!n && !rejected){
     document.getElementById('sub').innerHTML = 'The regression set is empty. Seed it from the <a href="/cam/test-audit">benchmark audit</a> using the \u9875 button on hard frames.';
     document.getElementById('score').textContent = '';
     return;
   }
   document.getElementById('sub').textContent = 'Known-hard frames the model must always get right.';
+  if(rejected) document.getElementById('sub').textContent += ' '+rejected+' invalid frame'+(rejected===1?' was':'s were')+' skipped.';
   var pct = Math.round(100*np/n);
   var col = pct===100 ? 'var(--green)' : (pct>=80 ? 'var(--amber)' : 'var(--red)');
   document.getElementById('score').innerHTML =
     '<span style="color:'+col+'">'+np+' / '+n+' passing ('+pct+'%)</span>';
   document.getElementById('grid').innerHTML = fr.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wire);
-}).catch(function(){ document.getElementById('sub').textContent='Could not load the regression set.'; });
+ }).catch(function(e){ showLoadError(e.message||'Could not load the regression set.'); });
+}
+loadRegression();
 </script>
+{% include '_mobilenav.html' %}
 </body>
 </html>

@@ -2193,3 +2193,28 @@ De-risk plan (do #1 and #2 before logging much more data; rest can wait until ca
 - Near-term action unchanged: log another survey tomorrow and again 48-72h after watering; do NOT tune watering from today's appearance.
 
 Safety re-verified after #1/#3/#4 (2026-07-10): tool still writes only its own bookkeeping files (`calibration_state.json`, `calibration-alerts.log`, `calibration-weekly.log`); grep confirms no INSERT/UPDATE/DELETE/commit against the control DB, no config writes, no valve/HTTP control. Live run after deploy left `config.yaml` unmodified. Deployed tool committed to git (was previously untracked).
+
+Adversarial hardening supersedes the initial #1/#3/#4 implementation (2026-07-10):
+- Removed the inferred `calibration_state.json` stability clock. New near-real-time observations atomically capture immutable model/weather/watering context plus a semantic policy fingerprint. The fingerprint covers actual engine config inputs and the `irrigation.py` algorithm hash; equivalent numeric YAML values normalize. Legacy/backdated notes remain baseline-only and cannot unlock review.
+- Report construction is pure and opens snapshot databases SQLite `mode=ro`. Evidence is partitioned by exact policy fingerprint, must cover 3 days/72h, requires 2 non-uncertain material 24-72h responses, and must show directionally coherent condition + management judgment.
+- Added explicit stages: `collecting`, `enough_data`, `anomaly_detected`, `diagnosis_supported`. Only the last becomes `review_candidate`; independent area provenance plus catch-can rate/uniformity are required. Area alone does nothing.
+- Whole-house meter evidence uses only isolated >=10-minute runs with clean meter segments and is advisory; it cannot support a delivery diagnosis because household co-flow remains unattributed.
+- Alert-state emission is explicit and transition-deduplicated; normal/JSON reports have no alert side effect.
+- Replaced append-only cron/log files with `smart-garden-calibration-shadow.timer` (Monday 06:15 Pacific). The oneshot takes SQLite-consistent private snapshots, runs read-only against them, and logs through bounded journald. Legacy cron entry removed.
+- Added six adversarial tests: policy coverage/normalization/code hash, missing DB no-create, pure report, area-alone gate, coherent physical-evidence candidate, conflicting observations hold, and alert deduplication. Local temporary and live suites pass.
+
+State: Live shadow report is `collecting / HOLD` for every observed turf zone; existing observations predate immutable context capture. `config.yaml` and irrigation behavior were unchanged. Future observations begin the valid evidence series.
+
+## 2026-07-10 - Triaged website high/medium fixes
+
+Context: Worked the existing `UX-AUDIT.md` queue without browser access, using live authenticated APIs, service logs, source inspection, and server/local diffs. Scope was display/usability only.
+
+Changes:
+- Fixed single-zone chart drift: `/api/moisture-data` returns all-zone events, so the chart now filters irrigation credits by selected `zone_id` before reconciling to authoritative daily balance.
+- Fixed Water Usage orphan-cleanup rows that stored zero duration/volume: the display API derives elapsed time from immutable timestamps and a configured-volume estimate, without changing DB records.
+- Corrected Water Usage Back navigation and added an explicit main-load/leak-banner error state.
+- Gave Recent Activity's View All control a real history target. Confirmed the Moisture banner's final writer is `/api/schedule-7day`, whose live same-day entries were all future-facing.
+
+Validation: Python compile, inline JavaScript parse, diff checks, guarded backups/deploys, `/login` smoke tests, authenticated API checks, and post-deploy SHA256 parity passed. The intermittent browser-observed 502 remains open because service logs and all first-party endpoints were clean and no browser Network/console runtime was available to identify the third-party resource.
+
+State: Every actionable high/medium audit item is fixed; the unidentifiable intermittent 502 is explicitly skipped/open. No irrigation engine, valve, MAD, runtime, precipitation, schedule-generation, or watering-parameter code was changed.

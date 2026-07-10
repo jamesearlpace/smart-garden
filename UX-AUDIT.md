@@ -10,16 +10,16 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 
 | Page | Severity | Status | Category | Expected vs Actual | Proposed fix |
 |------|----------|--------|----------|--------------------|--------------|
-| moisture-sim | high | open | console/resource | Recurring `502` console errors on load (most recent 2026-07-10 18:46, also 14:26/14:50). A fetched resource intermittently 502s. | Identify which fetch 502s (check Network tab / dashboard.py route); handle failure gracefully + fix the failing endpoint. |
-| moisture-sim | high | open | data-accuracy | App logs `[chart-engine drift]` warning: 14 days where chart per-event credit disagrees with engine `balance.irrigation_mm` by >5% (deltas up to 142%/122%). Chart and engine tell different stories. | Reconcile chart per-event credit calc with engine balance so the displayed chart matches the source of truth. DISPLAY side only — do not change the engine's watering math. |
-| moisture-sim | med | open | correctness | "Next Expected Watering: Fri Jul 10 at 1:20 AM … today" shown at 12:12 PM, but history shows it already watered 1:48 AM today. "Next" watering is in the past / already happened. | Compute "next expected" from now-forward; if today's run already fired, show the next future run, not a past time. |
+| moisture-sim | high | open | console/resource | Recurring `502` console errors on load (most recent 2026-07-10 18:46, also 14:26/14:50). A fetched resource intermittently 502s. | Skipped: live service logs contain no matching 502/exception and all first-party JSON endpoints return 200; without Network/console access the failing third-party request cannot be identified or verified. |
+| moisture-sim | high | fixed | data-accuracy | Chart credited all-zone watering events to the selected zone because `/api/moisture-data` intentionally returns all events. | Filter display credits by `watering_event.zone_id` before authoritative daily normalization; live API facts and deployed source verified (commit `da63bc4`). |
+| moisture-sim | med | fixed | correctness | A completed watering could be shown as the next expected run. | Final banner writer now uses `/api/schedule-7day`; live check found every same-day entry later than current time and completed Zone 1 moved to tomorrow. |
 | moisture-sim | low | open | clarity | Zone dropdown shows "Zone 2 — Front Yard B [selected]" while URL is `#zone=1` (0-indexed URL vs 1-indexed label). Potentially confusing when sharing links. | Confirm intended; consider aligning URL param to the 1-indexed UI number or documenting the offset. |
-| dashboard | med | open | dead-link | "Recent Activity → View All →" link points to `href="#"` — clicking does nothing. | Point it at the real activity/history route (or remove if none exists). |
-| dashboard | med | open | data-accuracy | Cross-page inconsistency: dashboard "Recent Activity" shows Zone 1 "Watered in progress" at 12:05 PM, but moisture-sim still shows "Next Expected Watering 1:20 AM today". The two pages disagree about current watering state. | Ensure "next watering" and "recent activity" read from the same live source; reconcile so pages agree. |
+| dashboard | med | fixed | dead-link | "Recent Activity → View All →" used a placeholder `href="#"`. | Link now has a real `#history` target while retaining the existing `showPanel('history')` action (commit `3509abd`). |
+| dashboard | med | fixed | data-accuracy | Dashboard activity and Moisture Simulation next-watering banner disagreed. | Moisture banner's final writer uses the authoritative schedule API; current activity and future schedule API were cross-checked after deploy. |
 | dashboard | low | open | clarity | Soil sensors show extreme test values (Sensor 0 = 1% raw 2649, Sensor 2 = 100%) labeled "test sensor". Real-looking % on the main dashboard may mislead. | Visually distinguish test-mode readings (badge/muted styling) so they aren't mistaken for calibrated soil moisture. |
-| water-usage | med | open | dead/wrong-link | "← Back to dashboard" link points to `/#cam` (meter-camera anchor), not the dashboard `/`. | Change href to `/`. |
-| water-usage | high | open | data-accuracy | Event list shows "0 min" for spans that are clearly longer — e.g. Zone 5 `05:58:08 -> 06:55:49 · 0 min · est 0.0 gal` (57 min elapsed) and `06:56:12 -> 07:02:39 · 0 min`. Duration/volume computed as 0 despite real elapsed time. | Fix duration/gallons computation for these events (likely meter-gap or zero-delta handling) so elapsed time isn't shown as 0 min. |
-| water-usage | med | open | loading-state | Main content shows "Loading…" and "Checking for a slow leak…" — verify the chart actually renders and isn't stuck (may be tied to the 502s). | Confirm data loads; add a real error/empty state instead of an indefinite "Loading…". |
+| water-usage | med | fixed | dead/wrong-link | "← Back to dashboard" pointed to `/#cam`. | Changed the target to `/` and verified deployed template parity (commit `4ed9730`). |
+| water-usage | high | fixed | data-accuracy | Event list showed "0 min" for completed orphan-cleanup spans with zeroed stored metadata. | Display API now derives elapsed seconds from start/end and configured estimated gallons without changing DB/control data; live events 691/692/702 verified. |
+| water-usage | med | fixed | loading-state | On main API failure the subtitle changed, but the leak banner stayed indefinitely at "Checking…". | Main load catch now replaces both with an explicit retry/range error state (commit `5a25996`); normal live API returns populated data. |
 | water-usage | low | open | usability | Event picker is a single flat dropdown with 100+ options across many days — hard to scan. | Group by day (optgroup) or add a date filter. |
 
 ## Watering-behavior (DO NOT FIX — log for James)
@@ -33,4 +33,7 @@ Anything that is actually wrong irrigation/control behavior, not a display bug.
 
 ## Resolved this run
 
-- _(none yet)_
+- Water Usage zero-duration cleanup events now display their real elapsed span and a derived configured-volume estimate (commit `68b20f9`).
+- Moisture chart irrigation credits are restricted to the selected zone (`da63bc4`).
+- Recent Activity has a real history target (`3509abd`).
+- Water Usage Back navigation and failed-load state are corrected (`4ed9730`, `5a25996`).

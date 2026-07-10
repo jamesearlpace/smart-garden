@@ -2218,3 +2218,18 @@ Changes:
 Validation: Python compile, inline JavaScript parse, diff checks, guarded backups/deploys, `/login` smoke tests, authenticated API checks, and post-deploy SHA256 parity passed. The intermittent browser-observed 502 remains open because service logs and all first-party endpoints were clean and no browser Network/console runtime was available to identify the third-party resource.
 
 State: Every actionable high/medium audit item is fixed; the unidentifiable intermittent 502 is explicitly skipped/open. No irrigation engine, valve, MAD, runtime, precipitation, schedule-generation, or watering-parameter code was changed.
+
+## 2026-07-10 - Codex given its own browser + an outer-loop orchestrator
+
+Context: The UX audit worked (Copilot supplied browser "eyes" -> UX-AUDIT.md -> Codex fixed 7 high/med, deployed). But it ran short: Codex CLI has NO browser, so it couldn't self-generate the visual backlog, and the bounded prompt told it to stop. Goal: let Codex SEE the site itself and run for hours, maximizing the Codex subscription.
+
+Changes:
+- **Codex browser via Playwright MCP.** `codex mcp add playwright -- cmd /c npx -y @playwright/mcp@latest --headless --isolated --storage-state <path>`. `--isolated` is REQUIRED or `--storage-state` is ignored (lands on Login). Chromium installed via `npx playwright install chromium`. Verified: Codex loads the authenticated Dashboard itself.
+- **Auth.** Site is Google-OAuth gated (no LAN bypass; dashboard.py check_auth). Minted a valid 30-day `session` cookie (`email|ts|HMAC(SESSION_SECRET)`) with `server-prod/tools/mint_session_state.py` (runs on server, reads SESSION_SECRET from the service /proc environ). Stored as a Playwright storage-state at `.mcp-auth/storage-state.json` (GITIGNORED - it's a real login credential; expires ~2026-08-09). Validated via curl (200 with cookie, 302 without).
+- **Outer-loop orchestrator** in `orchestrator/`: `run-codex-loop.ps1` calls `codex exec` repeatedly (FRESH session each iteration = no compaction rot), each iteration re-reads UX-AUDIT.md, audits+fixes a bounded chunk via its own browser, and returns a JSON verdict (`--output-schema verdict-schema.json`). Loop stops on `work_remaining=false` or MaxIterations/MaxMinutes caps. Per-iteration verdicts + `loop-log.md` are gitignored. Full docs: `orchestrator/README.md`.
+
+Decisions:
+- Fresh `codex exec` per iteration (not `resume`) specifically to dodge the 83M-token compaction rot seen in the long interactive session.
+- Success is measured by INDEPENDENT verification, not Codex's self-report: verdicts valid, `git log` commits match claimed fixes, one sampled fix confirmed live, `git diff` touches zero watering-logic (else abort), honest done-signal. (Guards against the false-done mistake-ledger pattern.)
+
+State: Wiring proven end-to-end (Codex drove the browser, returned a title). Orchestrator built + parse-validated + dry-run OK. Repo memory: `smart-garden-codex-browser.md`. Next: 3-iteration proving run, verify against the success checklist, then scale the cap for a long unattended run.

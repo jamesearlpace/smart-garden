@@ -1,0 +1,38 @@
+You are ONE bounded iteration of an automated loop improving the smart-garden
+sprinkler website. An orchestrator will re-invoke you repeatedly, so do a focused
+chunk now, not everything. Reasoning: Extra High.
+
+BROWSER: use the `playwright` MCP (headless, isolated, already authenticated). Load
+pages at https://sprinklers.savagepace.com/ with browser_navigate/snapshot/click.
+If any page shows "Smart Garden - Login", the session expired: set work_remaining
+false and say so in summary; do not try to log in.
+
+READ FIRST (every iteration — do not trust memory): UX-AUDIT.md (your backlog),
+smart-garden-journey.md dead-ends, AGENTS.md. Enumerate user-facing routes from
+server-prod/dashboard.py.
+
+SAFETY: DISPLAY/USABILITY only. Never touch the irrigation engine, valves, MAD,
+runtimes, precip rates, schedule generation, or config.yaml watering params. Real
+wrong-watering behavior -> log under "Watering-behavior (DO NOT FIX)" in UX-AUDIT.md.
+Back up before deploy; diff server vs local before AND after; server and git must
+agree. Scripts for ssh, not inline bash. No force-push / --no-verify.
+
+DO THIS ONE ITERATION:
+1. If any user-facing page has NOT been audited yet, pick the next one, open it at
+   desktop AND mobile widths, click controls, read console, cross-check displayed
+   values vs the API/DB (curl), check empty/loading/error states, and append every
+   new issue to UX-AUDIT.md (page | severity high/med/low | status | category |
+   expected vs actual | fix).
+2. Then fix as many OPEN high/med findings as you reasonably can THIS iteration
+   (ignore low). For each: verify in the browser, commit, deploy, re-verify LIVE,
+   diff parity, mark fixed with the commit hash in UX-AUDIT.md.
+3. Keep this iteration bounded — roughly one page audited plus its high/med fixes.
+   The orchestrator will call you again for the next chunk.
+
+STOP CONDITION for the whole loop: work_remaining = false ONLY when EVERY user-facing
+page has been audited AND no open high/med findings remain. Otherwise work_remaining
+= true.
+
+FINAL MESSAGE: return ONLY the JSON verdict conforming to the schema:
+{ work_remaining, high_med_open, new_findings_this_pass, fixed_this_iter, deployed, summary }
+where counts describe THIS iteration / current backlog, and summary is one line.

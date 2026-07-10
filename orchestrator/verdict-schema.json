@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "work_remaining": { "type": "boolean" },
+    "high_med_open": { "type": "integer" },
+    "new_findings_this_pass": { "type": "integer" },
+    "fixed_this_iter": { "type": "integer" },
+    "deployed": { "type": "boolean" },
+    "summary": { "type": "string" }
+  },
+  "required": ["work_remaining", "high_med_open", "new_findings_this_pass", "fixed_this_iter", "deployed", "summary"],
+  "additionalProperties": false
+}

@@ -971,9 +971,17 @@ def create_app(config, engine, weather, billing):
     def api_forecast_vs_actual():
         """Forecast vs actual comparison data."""
         days = query_int("days", 30, min_value=1, max_value=365)
+        manual_zone_ids = {
+            i for i, zone in enumerate(config.get("zones", []))
+            if not zone.get("auto_mode", True)
+        }
+        comparisons = [
+            row for row in db.get_forecast_vs_actual(days)
+            if row["zone_id"] not in manual_zone_ids
+        ]
         return jsonify({
-            "comparisons": db.get_forecast_vs_actual(days),
-            "accuracy": db.get_forecast_accuracy_summary(days),
+            "comparisons": comparisons,
+            "accuracy": db.get_forecast_accuracy_summary(days, manual_zone_ids),
             "days": days,
         })
 

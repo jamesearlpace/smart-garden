@@ -1657,9 +1657,12 @@ def get_forecast_vs_actual(days: int = 30) -> list[dict]:
     return result
 
 
-def get_forecast_accuracy_summary(days: int = 30) -> dict:
+def get_forecast_accuracy_summary(days: int = 30,
+                                  excluded_zone_ids: set[int] | None = None) -> dict:
     """Aggregate accuracy stats over the last N days."""
     rows = get_forecast_vs_actual(days)
+    if excluded_zone_ids:
+        rows = [r for r in rows if r["zone_id"] not in excluded_zone_ids]
     rows = [r for r in rows if r.get("scored")]
     total = len(rows)
     if total == 0:

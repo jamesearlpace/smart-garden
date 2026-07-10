@@ -2301,3 +2301,15 @@ Decisions: CSP remains Report-Only because strict enforcement requires a site-wi
 State: Five guarded deployments used timestamped remote backups, service restarts, `/login` smoke checks, and post-deploy SHA256 parity. Authenticated Playwright verified mobile Audit/CNN reflow, camera error states, 27 meaningful test-frame alternatives, named actions, and Focus failure gating. Curl verified 25 audited tables, 57 true last-24h watering rows, and live security headers. Two medium broader campaigns remain open: strict CSP migration and intermittent tunnel/service 502 RCA.
 
 Next: Director should schedule the CSP extraction campaign and only open the infrastructure RCA when the simultaneous CSS/API 502 can be recaptured with proxy/service telemetry.
+
+## 2026-07-10 - Serial UX fixer: Calibration accessibility and recovery
+
+Context: The new parallel round identified missing keyboard focus, labels, contextual control names, destructive-action protection, chart/status alternatives, mobile reflow, contrast, and API-failure recovery on `/calibrate`.
+
+Changes: Commit `9af367d` adds visible focus, sensor/reading-specific accessible names, confirmation for deleting a saved battery point, live status semantics, a named battery chart, darker secondary text, shrinkable mobile navigation, semantic sensor headings, and explicit Retry/error states that keep Live Mode disabled until calibration data loads.
+
+Decisions: `dashboard.py` was edited only because Calibration is an embedded HTML response in that file. The change is display/usability-only: no irrigation balance, schedule generation, runtime, precipitation, MAD, configuration, or valve decision code changed.
+
+State: Deployed after a timestamped remote backup. Python compilation and authenticated curl checks for all three Calibration APIs passed; `/login` returned 200; server/local SHA-256 matched. Live browser verification found zero unlabeled inputs or repeated accessible button names, four sensor headings, two live regions, a named canvas, visible focus CSS, and no 390px overflow.
+
+Next: The remaining high/medium backlog is the broader strict-CSP migration, Camera Archive performance work, authentication-boundary semantics, and the intermittent tunnel/service 502 RCA.

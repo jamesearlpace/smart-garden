@@ -85,7 +85,7 @@ The earlier open `moisture-sim` console/resource row is superseded by the captur
 | forecast-vs-actual | med | fixed (`a6ed348`) | retry/recovery | Failures lacked Retry and loaded state blocked recovery. | Accessible Retry resets the failed state. |
 | forecast-vs-actual | low | open | accessibility | Dynamic states and div tabs lack live/tab semantics. | Add live regions and proper tab behavior. |
 | cam/convergence | high | fixed (`05c4ce4`) | DOM injection / unsafe URLs / inline handler injection | API text, image URLs, and timestamps crossed HTML/attribute/handler contexts unsafely. | Text is escaped, image URLs are restricted to the same-origin archive endpoint, and API timestamps are captured by listeners rather than inline handler source. |
-| authenticated site | med | open | security headers | Pages/APIs lack standard defense-in-depth headers. | Add compatible headers; stage CSP around inline content. |
+| authenticated site | med | fixed (`8e9fc40`) | security headers | Pages/APIs previously lacked standard defense-in-depth headers. | Compatible headers and CSP Report-Only are live; strict CSP remains the separate broader campaign below. |
 | camera charts / water-usage | low | open | script supply chain | CDN scripts lack SRI and CSP restriction. | Self-host or pin with SRI. |
 | cam/archive | low | open | inline active content | Repeated inline onclick handlers expand CSP surface. | Replace with delegated listeners. |
 
@@ -135,3 +135,29 @@ All 32 raw findings in `orchestrator/findings-0.json` through `findings-5.json` 
 | cam/cnn-report | low | open | touch target size | Some tool/back links are under 44px. | Later polish pass. |
 
 Live verification used the authenticated isolated Playwright state plus curl. Browser checks confirmed audit 25 rows/no mobile overflow, announced regression/quality HTTP 500 states, 27 test images with non-empty alternatives and frame-specific actions, CNN report no overflow/blank headers, and disabled Focus actions with Refresh available. The two remaining medium findings are broader campaigns rather than watering/control changes.
+
+## 2026-07-10 serial-fixer merge — CSP, calibration, archive performance, authentication
+
+Reviewed all 35 raw findings in `orchestrator/findings-0.json` through `findings-5.json`. The shared missing favicon, existing CSP-readiness campaign, and unauthenticated API-response finding were deduplicated/refined; 32 findings were newly folded into the backlog. None was watering behavior.
+
+| Page | Severity | Status | Category | Expected vs Actual | Resolution / RCA |
+|------|----------|--------|----------|--------------------|------------------|
+| authenticated site | high | open — broader RCA | strict CSP migration | Report-Only still permits inline script/style, so telemetry cannot inventory the hundreds of inline dependencies that strict enforcement would break. | Director should schedule extraction by shared shell and page family, deploy a strict reporting candidate, then enforce after reports are clean. |
+| shared shell / mobile navigation | high | open — broader RCA | CSP inline assets | Shared application and camera navigation partials depend on inline CSS/JS. | Extract versioned shared assets as part of the CSP campaign. |
+| dashboard / forecast / map / moisture-sim / chart pages / camera family | high | open — broader RCA | page-family CSP blockers | Inline handlers, style attributes, inline controllers, and dynamic HTML prevent strict CSP; Focus additionally needs `blob:` images and Moisture Simulation needs an explicit same-origin weather strategy. | Migrate page families under the CSP campaign; avoid piecemeal policy enforcement that would disable display and manual UI. |
+| calibrate | high | fixed (`9af367d`) | keyboard focus visibility | Interactive controls had no visible keyboard focus state. | Added a high-contrast 3px `:focus-visible` indicator. |
+| calibrate | high | fixed (`9af367d`) | accessible labels | Battery and soil calibration inputs had placeholder-only names. | Added persistent programmatic labels, including sensor context. |
+| calibrate | high | fixed (`9af367d`) | repeated controls | Repeated Set Dry, Set Wet, Save, and delete actions did not identify their target. | Added sensor/reading-specific accessible names. |
+| calibrate | high | fixed (`9af367d`) | destructive action safety | Per-reading delete acted immediately and was ambiguously named. | Added exact-reading confirmation and unique names. |
+| calibrate | med | fixed (`9af367d`) | dynamic status | Polling and operation feedback had no live-region semantics. | Status/toast output is now exposed through restrained live regions. |
+| calibrate | med | fixed (`9af367d`) | chart alternative | Battery canvas had no accessible name or description. | Added a descriptive image role/name; the saved readings table remains the numeric alternative. |
+| calibrate | med | fixed (`9af367d`) | contrast | Secondary, advice, drift, corrected-voltage, and active navigation text failed AA. | Darkened shared secondary/mobile text tokens and retained dark advice variants. |
+| calibrate | med | fixed (`9af367d`) | zoom/reflow | At simulated 200% zoom the document and fixed mobile navigation widened to 718px. | Mobile navigation now uses five shrinkable grid tracks; main content remains fluid. |
+| calibrate | med | fixed (`9af367d`) | loading/error states | Failed calibration APIs left indefinite Loading and enabled Live Mode. | HTTP failures now render announced Retry states; Live Mode is success-gated. |
+| cam/archive | med | open | image efficiency | Initial view loaded about 35 full 800×600 images at roughly 35-way concurrency though rendered around 211×158. | Serve responsive thumbnails and tighten incremental loading. |
+| cam/archive | med | open | main-thread responsiveness | Cold sample captured a 192ms task overlapping initial thumbnail loading. | Profile/batch card construction and defer nonessential chart work. |
+| cam/archive | med | open | request efficiency | Initial view additionally decoded about 693KB from full dashboard and usage APIs. | Replace dashboard dependency with minimal nav status and trim/defer usage data. |
+| protected GET APIs | med | open | authentication response semantics | Unauthenticated JSON clients receive a 302 HTML-login redirect rather than JSON 401. | Central auth guard should distinguish API requests. |
+| protected pages | med | open | return-to-page navigation | Login redirects discard the original safe same-origin deep link. | Preserve and strictly validate a relative return target. |
+
+Low findings retained for later polish: camera capture latency variability; archive cache/performance baseline; route-specific authenticated CSP minimization; dashboard data-image removal; Calibration landmarks/table refinements; and Login loading/keyboard recovery.

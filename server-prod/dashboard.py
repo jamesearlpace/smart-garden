@@ -236,6 +236,17 @@ def create_app(config, engine, weather, billing):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy-Report-Only"] = (
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; "
+            "form-action 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' "
+            "https://accounts.google.com; frame-src https://accounts.google.com"
+        )
         return response
 
     @app.template_filter("currency")
@@ -255,7 +266,9 @@ def create_app(config, engine, weather, billing):
     import hashlib, hmac, time, json as auth_json, urllib.request, urllib.parse
 
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-    SESSION_SECRET = os.environ.get("SESSION_SECRET", "smartgarden2026default")
+    SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+    if len(SESSION_SECRET) < 32 or SESSION_SECRET == "smartgarden2026default":
+        raise RuntimeError("SESSION_SECRET must be configured with at least 32 characters")
     # Shared secret the ESP32-CAM sends as X-Cam-Token. Only enforced for
     # requests that arrive over the cloudflare tunnel (internet); direct LAN
     # posts from the cam don't need it (see cam_upload). Empty = not configured.
@@ -3908,7 +3921,7 @@ def create_app(config, engine, weather, billing):
         rows = conn.execute(
             "SELECT zone_id, start_ts, end_ts, duration_sec, trigger_reason, "
             "soil_before, soil_after "
-            "FROM watering_event WHERE start_ts >= datetime('now','localtime',?) "
+            "FROM watering_event WHERE start_ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
             "ORDER BY start_ts",
             (f"-{hours} hours",),
         ).fetchall()
@@ -9727,7 +9740,7 @@ def create_app(config, engine, weather, billing):
     # ── DB-table audit (catch silently-empty / silently-stale tables) ──
     # (name, ts_col, ts_is_date, max_age_hours_or_None, label)
     AUDIT_TABLE_SPECS = [
-        ("sensor_log",        "ts",          False, None, "DISABLED — all soil_* gates off in config.yaml"),
+        ("sensor_log",        "ts",          False, None, "Logging active; observe-only — soil control gates disabled"),
         ("weather_log",       "ts",          False, 1,    "Weather observations"),
         ("watering_event",    "start_ts",    False, 168,  "Watering events (sparse — days between OK)"),
         ("skip_event",        "ts",          False, 25,   "Per-zone skip decisions (deduped per zone per day)"),
@@ -9740,6 +9753,18 @@ def create_app(config, engine, weather, billing):
         ("sensor_fault",      "detected_ts", False, None, "Active sensor fault flags (rare events)"),
         ("server_health_log", "ts",          False, 1,    "Pi disk/cpu/db-size"),
         ("forecast_snapshot", "ts",          False, 25,   "Daily forecast snapshot"),
+        ("flow_sample",       "ts",          False, 1,    "Whole-house flow samples"),
+        ("flow_event",        "start_ts",    False, 168,  "Flow anomaly records (sparse)"),
+        ("meter_snapshot",    "ts",          False, 48,   "Daily meter snapshots"),
+        ("zone_flow_est",     "last_updated",False, 168,  "Learned per-zone flow estimates"),
+        ("rain_event",        "ts",          False, None, "Observe-only rain classifications (sparse)"),
+        ("zone_feedback",     "updated_ts",  False, None, "Legacy zone feedback (sparse)"),
+        ("zone_observation",  "recorded_ts", False, None, "Human field observations (sparse)"),
+        ("calibration_log",   "ts",          False, None, "Sensor calibration captures (sparse)"),
+        ("cam_telemetry",     "ts",          False, 1,    "Meter-camera telemetry"),
+        ("oracle_spend",      "ts",          False, 48,   "AI oracle spend ledger"),
+        ("cnn_daily",         "date",        True,  48,   "Daily CNN metrics"),
+        ("cnn_eval",          "ts",          False, 168,  "CNN/oracle comparisons"),
     ]
 
     def _audit_one(conn, name, ts_col, is_date, max_age_h, label):
@@ -9760,7 +9785,7 @@ def create_app(config, engine, weather, billing):
                 else:
                     rows_24h = conn.execute(
                         f"SELECT COUNT(*) FROM {name} "
-                        f"WHERE {ts_col} >= datetime('now','localtime','-1 day')"
+                        f"WHERE {ts_col} >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime','-1 day')"
                     ).fetchone()[0]
             except Exception as e:
                 log.warning("audit(%s): MAX/COUNT failed: %s", name, e)
@@ -9779,7 +9804,9 @@ def create_app(config, engine, weather, billing):
                     age_hours = (datetime.now() - datetime.strptime(last_ts[:19], "%Y-%m-%dT%H:%M:%S")).total_seconds() / 3600
             except Exception as e:
                 log.debug("audit(%s): timestamp parse failed for %r: %s", name, last_ts, e)
-        if row_count == 0:
+        if name == "billing_cycle":
+            status = "DISABLED"
+        elif row_count == 0:
             status = "EMPTY"
         elif max_age_h is not None and age_hours is not None and age_hours > max_age_h:
             status = "STALE"
@@ -9805,6 +9832,7 @@ def create_app(config, engine, weather, billing):
             "stale": sum(1 for r in tables if r["status"] == "STALE"),
             "empty": sum(1 for r in tables if r["status"] == "EMPTY"),
             "error": sum(1 for r in tables if r["status"] == "ERROR"),
+            "disabled": sum(1 for r in tables if r["status"] == "DISABLED"),
         }
         return jsonify({
             "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -9827,7 +9855,8 @@ h1{margin:0 0 4px 0;font-size:20px;}
 .pill.stale{background:#3e2e16;color:#f0b429;}
 .pill.empty{background:#3e1a1a;color:#ff7b72;}
 .pill.error{background:#3e1a1a;color:#ff7b72;}
-table{border-collapse:collapse;width:100%;font-size:13px;background:#161b22;border-radius:8px;overflow:hidden;}
+.table-scroll{max-width:100%;overflow-x:auto;border-radius:8px;}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:13px;background:#161b22;}
 th{background:#21262d;text-align:left;padding:10px 12px;font-weight:600;color:#7d8590;}
 td{padding:10px 12px;border-top:1px solid #21262d;vertical-align:top;}
 .status{font-weight:600;padding:2px 8px;border-radius:4px;font-size:11px;text-transform:uppercase;}
@@ -9835,6 +9864,7 @@ td{padding:10px 12px;border-top:1px solid #21262d;vertical-align:top;}
 .status.stale{background:#3e2e16;color:#f0b429;}
 .status.empty{background:#3e1a1a;color:#ff7b72;}
 .status.error{background:#3e1a1a;color:#ff7b72;}
+.status.disabled{background:#21262d;color:#a5b4c3;}
 .label{color:#7d8590;font-size:11px;}
 .num{text-align:right;font-variant-numeric:tabular-nums;}
 button{background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;}
@@ -9843,24 +9873,31 @@ a{color:#58a6ff;}
 </style></head>
 <body>
 <h1>Smart Garden — DB Audit</h1>
-<div class="sub" id="meta">Loading…</div>
+<div class="sub" id="meta" role="status" aria-live="polite">Loading…</div>
 <div class="summary" id="summary"></div>
-<button onclick="load()">Refresh</button>
+<button id="refresh" type="button">Refresh</button>
 <p class="sub" style="margin-top:18px;">Catches silently-empty tables (no writer wired up) and silently-stale tables (writer broken). Bugs #4 (daily_summary) and #5 (skip_event) would have appeared here as EMPTY the day they shipped.</p>
-<table id="t"><thead><tr>
+<div class="table-scroll" role="region" aria-label="Database table health" tabindex="0"><table id="t"><thead><tr>
 <th>Table</th><th>Status</th><th class="num">Rows</th><th class="num">Last 24h</th>
 <th>Last write</th><th class="num">Age (h)</th><th class="num">Max age</th>
-</tr></thead><tbody></tbody></table>
+</tr></thead><tbody></tbody></table></div>
 <script>
 async function load(){
+  const meta = document.getElementById('meta');
+  const refresh = document.getElementById('refresh');
+  meta.textContent = 'Loading audit data…'; refresh.disabled = true;
+  try {
   const r = await fetch('/api/audit');
+  if (!r.ok) throw new Error(r.status === 401 ? 'Your session expired. Reload to sign in.' : 'Audit request failed (HTTP '+r.status+').');
   const d = await r.json();
+  if (!d || !d.summary || !Array.isArray(d.tables)) throw new Error('Audit returned an invalid response.');
   document.getElementById('meta').textContent = 'Generated ' + d.generated_at;
   const s = d.summary;
   document.getElementById('summary').innerHTML =
     `<span class="pill ok">${s.ok} OK</span>` +
     `<span class="pill stale">${s.stale} STALE</span>` +
     `<span class="pill empty">${s.empty} EMPTY</span>` +
+    (s.disabled ? `<span class="pill">${s.disabled} DISABLED</span>` : '') +
     (s.error ? `<span class="pill error">${s.error} ERROR</span>` : '');
   const tb = document.querySelector('#t tbody');
   tb.innerHTML = '';
@@ -9877,7 +9914,14 @@ async function load(){
       `<td class="num">${fmt(t.max_age_hours)}</td>`;
     tb.appendChild(tr);
   }
+  if (!d.tables.length) tb.innerHTML = '<tr><td colspan="7">No audit table definitions are available.</td></tr>';
+  } catch (e) {
+    document.getElementById('summary').innerHTML = '';
+    document.querySelector('#t tbody').innerHTML = '<tr><td colspan="7">Audit data unavailable.</td></tr>';
+    meta.textContent = e.message || 'Could not load audit data.';
+  } finally { refresh.disabled = false; }
 }
+document.getElementById('refresh').addEventListener('click', load);
 load();
 </script>
 </body></html>"""

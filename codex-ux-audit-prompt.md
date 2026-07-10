@@ -2,8 +2,12 @@
 
 One-line reuse: **"Continue the smart-garden UX audit per codex-ux-audit-prompt.md."**
 
-Run at **Extra High** reasoning, in a **git worktree**, with **working browser access**
-(verify the browser can load a page in the first 5 minutes before committing to the run).
+Run at **Extra High** reasoning, in a **git worktree**. Codex now has its OWN browser
+via the Playwright MCP server (`playwright` — headless, isolated, pre-authenticated with
+a saved session cookie). Use the `browser_*` tools (navigate/snapshot/click) to see pages.
+The site is at https://sprinklers.savagepace.com/ (already logged in via storage-state).
+If you ever land on the Login page, the session cookie expired — tell James to re-run
+`mint_session_state.py` (see repo memory); do not try to log in yourself.
 
 ---
 
@@ -14,9 +18,11 @@ ROLE: Long autonomous session improving the smart-garden sprinkler website's bug
 and usability. Work in two phases. Do NOT ask me what to do next — generate your
 own work from the audit. Set reasoning effort to Extra High.
 
-FIRST, verify you actually have a working browser: open one page of the site and
-confirm you can see it and read its console. If you cannot drive a browser, STOP
-and tell me — do not fall back to code-only guessing.
+You have a browser: the `playwright` MCP server (headless, isolated, already
+authenticated). Use `browser_navigate` / `browser_snapshot` / `browser_click` etc.
+to load and inspect pages at https://sprinklers.savagepace.com/. If a page shows
+"Smart Garden - Login", the saved session expired — STOP and tell James to refresh
+it; do not attempt to log in.
 
 HARD SAFETY SCOPE (never cross):
 - DISPLAY / USABILITY only. Do NOT change watering behavior: no edits to valve

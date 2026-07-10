@@ -47,8 +47,11 @@ clean, revertible state.
 - **Display/usability only.** The prompt forbids touching the irrigation engine,
   valves, MAD, runtimes, precip rates, schedule generation, or `config.yaml` watering
   params. Real wrong-watering behavior is logged (not fixed).
-- `--sandbox workspace-write` lets Codex edit + deploy. It auto-commits and deploys to
-  the live server unsupervised — the caps + per-commit checkpoints bound the blast radius.
+- `--sandbox danger-full-access` is REQUIRED: the Playwright MCP browser (chromium)
+  needs out-of-workspace file + network access, which `workspace-write` cancels.
+  So the sandbox does NOT constrain Codex here — safety comes from the prompt's
+  display-only scope + caps + per-commit checkpoints. Fine for auditing your own app
+  on your own machine; do not point this loop at untrusted code.
 - Cookie in `../.mcp-auth/` expires ~30 days after minting; refresh with
   `mint_session_state.py` when Codex starts landing on the Login page.
 

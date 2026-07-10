@@ -59,7 +59,7 @@ for ($i = 1; $i -le $MaxIterations; $i++) {
   # ErrorActionPreference=Stop and abort the loop).
   $prevEAP = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  cmd /c "codex exec --skip-git-repo-check --sandbox workspace-write --output-schema `"$schema`" -o `"$outJson`" - < `"$promptTxt`" 2>&1" | Out-Null
+  cmd /c "codex exec --skip-git-repo-check --sandbox danger-full-access --output-schema `"$schema`" -o `"$outJson`" - < `"$promptTxt`" 2>&1" | Out-Null
   $ErrorActionPreference = $prevEAP
 
   if (-not (Test-Path $outJson)) {

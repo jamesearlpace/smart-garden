@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cam Device - Smart Garden</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--border:#e4e8ee;--text:#17212f;--text2:#64748b;--green:#16a34a;--amber:#d97706;--red:#dc2626;--blue:#2563eb}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;padding-bottom:62px}
+main{max-width:1050px;margin:0 auto;padding:18px}
+h1{font-size:1.35rem;margin:0 0 3px}
+.sub{font-size:.84rem;color:var(--text2);margin-bottom:16px}
+.nav{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 16px}
+.nav a{font-size:.78rem;font-weight:700;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text2);text-decoration:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px}
+.label{font-size:.68rem;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em}
+.num{font-size:1.5rem;font-weight:800;margin-top:3px}
+.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+th,td{padding:7px 8px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{color:var(--text2);font-size:.7rem;text-transform:uppercase;background:#f8fafc}
+.scroll{overflow:auto;max-height:440px}
+button{font:inherit;border:1px solid var(--border);background:#fff;border-radius:8px;padding:6px 11px;cursor:pointer}
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
+</head>
+<body>
+{% include '_meternav.html' %}
+<main>
+  <div style="display:flex;justify-content:space-between;gap:12px;align-items:start">
+    <div>
+      <h1>Cam Device</h1>
+      <div class="sub">ESP32-CAM upload health, WiFi, archive status, and recent telemetry.</div>
+    </div>
+    <button id="refresh" type="button">Refresh</button>
+  </div>
+  <div class="nav">
+    <a href="/cam">Cam Tools</a>
+    <a href="/water-usage">Water Usage</a>
+    <a href="/cam/focus">Focus</a>
+    <a href="/">Dashboard</a>
+  </div>
+
+  <div id="cards" class="grid"></div>
+
+  <div class="card">
+    <div class="label">Recent telemetry</div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Time</th><th>RSSI</th><th>Gap</th><th>Transfer</th><th>Uptime</th><th>Reconnects</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="6">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}
+function fmtTime(s){try{return new Date(s).toLocaleString()}catch(e){return s||'--'}}
+function num(v,d){return v==null?'--':Number(v).toFixed(d)}
+function card(label,value,detail,cls){return '<div class="card"><div class="label">'+esc(label)+'</div><div class="num '+(cls||'')+'">'+esc(value)+'</div><div class="sub" style="margin:4px 0 0">'+esc(detail||'')+'</div></div>'}
+function load(){
+  Promise.all([
+    fetch('/api/cam/status').then(function(r){if(!r.ok)throw new Error('Camera status unavailable ('+r.status+')');return r.json()}),
+    fetch('/api/cam-telemetry?hours=24').then(function(r){if(!r.ok)throw new Error('Telemetry unavailable ('+r.status+')');return r.json()})
+  ]).then(function(all){
+    var s=all[0]||{}, t=all[1]||{};
+    var wifi=s.wifi||{}, ocr=s.ocr||{}, arch=s.archive||{}, acc=s.accepted_meter||{};
+    var age='';
+    if(s.timestamp){ age=Math.round((Date.now()-new Date(s.timestamp).getTime())/1000)+'s since upload'; }
+    document.getElementById('cards').innerHTML=[
+      card('Camera upload', s.has_image?'Online':'No image', age, s.has_image?'ok':'bad'),
+      card('WiFi RSSI', wifi.rssi!=null?wifi.rssi+' dBm':'Unknown', wifi.rssi_available?'reported by cam':'not in upload', wifi.rssi!=null && wifi.rssi<-75?'warn':''),
+      card('OCR queue', (ocr.queue_depth||0)+' / '+(ocr.queue_max||0), 'processed '+(ocr.processed||0)+' frames; last '+(ocr.last_ms||0)+' ms', (ocr.queue_depth||0)>30?'warn':'ok'),
+      card('Accepted meter', acc.committed_cf!=null?Number(acc.committed_cf).toFixed(3)+' ft3':'--', (acc.ts||'')+' '+(acc.method||''), acc.committed_cf!=null?'ok':'warn'),
+      card('Archive', (arch.files||0)+' files', num(arch.gb,2)+' GB of '+num(arch.cap_gb,2)+' GB', arch.enabled?'ok':'warn'),
+      card('Reconnects', wifi.reconnects==null?'--':wifi.reconnects, 'device uptime '+(wifi.uptime_sec?Math.round(wifi.uptime_sec/3600)+' h':'--'), '')
+    ].join('');
+    var series=t.series||{};
+    var rows=Array.isArray(series.frames)?series.frames:
+      (Array.isArray(t.rows)?t.rows:Array.isArray(t.telemetry)?t.telemetry:Array.isArray(t.samples)?t.samples:[]);
+    document.getElementById('rows').innerHTML=rows.slice(-200).reverse().map(function(r){
+      return '<tr><td>'+fmtTime(r.ts||r.timestamp)+'</td><td>'+esc(r.rssi==null?'--':r.rssi)+'</td><td>'+esc(r.gap_s==null?'--':num(r.gap_s,1)+'s')+'</td><td>'+esc(r.transfer_s==null?'--':num(r.transfer_s,2)+'s')+'</td><td>'+esc(r.uptime_sec==null?'--':Math.round(r.uptime_sec/3600)+'h')+'</td><td>'+esc(r.reconnects==null?'--':r.reconnects)+'</td></tr>';
+    }).join('') || '<tr><td colspan="6">No telemetry rows returned.</td></tr>';
+  }).catch(function(e){
+    document.getElementById('cards').innerHTML=card('Load failed', e.message||e, 'Check /api/cam/status and /api/cam-telemetry', 'bad');
+    document.getElementById('rows').innerHTML='<tr><td colspan="6">Telemetry could not be loaded. Use Refresh to retry.</td></tr>';
+  });
+}
+document.getElementById('refresh').addEventListener('click',load);
+load();
+setInterval(load,15000);
+</script>
+{% include '_mobilenav.html' %}
+</body>
+</html>

@@ -10,7 +10,7 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 
 | Page | Severity | Status | Category | Expected vs Actual | Proposed fix |
 |------|----------|--------|----------|--------------------|--------------|
-| moisture-sim | high | open | console/resource | Recurring `502` console errors on load (most recent 2026-07-10 18:46, also 14:26/14:50). A fetched resource intermittently 502s. | Skipped: live service logs contain no matching 502/exception and all first-party JSON endpoints return 200; without Network/console access the failing third-party request cannot be identified or verified. |
+| moisture-sim | high | open | console/resource | Recurring `502` console errors were previously observed on load (2026-07-10 14:26/14:50/18:46), but the failure is not currently reproducible. | RCA/broader intermittent dependency issue: 12 instrumented live reloads produced zero failed responses and zero console errors; every first-party endpoint and all four jsDelivr chart dependencies returned 200. No display change is justified without a captured failing URL. |
 | moisture-sim | high | fixed | data-accuracy | Chart credited all-zone watering events to the selected zone because `/api/moisture-data` intentionally returns all events. | Filter display credits by `watering_event.zone_id` before authoritative daily normalization; live API facts and deployed source verified (commit `da63bc4`). |
 | moisture-sim | med | fixed | correctness | A completed watering could be shown as the next expected run. | Final banner writer now uses `/api/schedule-7day`; live check found every same-day entry later than current time and completed Zone 1 moved to tomorrow. |
 | moisture-sim | low | open | clarity | Zone dropdown shows "Zone 2 — Front Yard B [selected]" while URL is `#zone=1` (0-indexed URL vs 1-indexed label). Potentially confusing when sharing links. | Confirm intended; consider aligning URL param to the 1-indexed UI number or documenting the offset. |
@@ -24,6 +24,7 @@ Phase 1 = audit only (fill this table, no code changes). Phase 2 = fix high/med.
 | forecast | med | fixed | data-display | Same-day fractional predictions (`0.5d`, `0.8d`) displayed as `1d` beside today's date. | Values under one day now display as `Today`; API values `0.5` and `0.8` verified live (commit `30e42eb`). |
 | forecast | med | fixed | clarity | The 24-hour window `00:00 – 14:00` was labeled `AM`, producing the invalid `14:00 AM`. | Now labeled `Watering window: 00:00 – 14:00` with no invalid suffix; verified live (commit `30e42eb`). |
 | forecast | low | open | console/resource | Browser console reports a 404 for `/favicon.ico` on page load. | Add a site favicon or explicit favicon link. |
+| forecast-vs-actual | high | fixed | data-accuracy | Accuracy Summary reported 98.1% (265/270 correct), counting manual-mode and non-comparable `no_event` rows as correct. | Only completed automatic decisions are scored; current manual zones and unscored rows are omitted from the comparison UI. Live API/UI, compile, smoke, and parity checks passed (commits `cf9dd8f`, `4962309`). |
 | sensor-history | med | fixed | status-feedback | Desktop sidebar stayed at `Connecting...` indefinitely although the page loaded all four sensor APIs successfully and refreshes every 60 seconds. | Successful refresh now reports `Updated just now` (commit `cde26c9`). |
 | sensor-history | low | open | console/resource | Browser console reports a 404 for `/favicon.ico` on page load. | Covered by the existing site-wide favicon finding; add a site favicon or explicit favicon link. |
 
@@ -38,6 +39,7 @@ Anything that is actually wrong irrigation/control behavior, not a display bug.
 
 ## Resolved this run
 
+- Forecast-vs-actual accuracy now excludes current manual zones and no-event rows from scoring and display (`cf9dd8f`, `4962309`).
 - Water Usage zero-duration cleanup events now display their real elapsed span and a derived configured-volume estimate (commit `68b20f9`).
 - Moisture chart irrigation credits are restricted to the selected zone (`da63bc4`).
 - Recent Activity has a real history target (`3509abd`).

@@ -2233,3 +2233,15 @@ Decisions:
 - Success is measured by INDEPENDENT verification, not Codex's self-report: verdicts valid, `git log` commits match claimed fixes, one sampled fix confirmed live, `git diff` touches zero watering-logic (else abort), honest done-signal. (Guards against the false-done mistake-ledger pattern.)
 
 State: Wiring proven end-to-end (Codex drove the browser, returned a title). Orchestrator built + parse-validated + dry-run OK. Repo memory: `smart-garden-codex-browser.md`. Next: 3-iteration proving run, verify against the success checklist, then scale the cap for a long unattended run.
+
+## 2026-07-10 - Serial UX fixer: forecast accuracy scoring
+
+Context: Forecast-vs-actual scored manual-zone snapshots and uneventful days as correct predictions, inflating the displayed 30-day accuracy to 98.1% across 270 rows.
+
+Changes: Added an explicit `scored` reporting flag, limited the denominator to completed automatic decisions, excluded currently manual zones from the API comparison, and hid unscored rows from the timeline and zone filter. Commits: `cf9dd8f`, `4962309`.
+
+Decisions: Historical rows remain in the database; this changes reporting only. No forecast generation, schedule, irrigation, runtime, MAD, precipitation, valve, or watering configuration behavior changed.
+
+State: Deployed and live-verified. The API reports 236 scored automatic decisions, no no-event row is scored, the manual Garden zone is absent, compilation and `/login` smoke pass, and server/local hashes match. The intermittent moisture-page 502 remains open as a broader dependency RCA: 12 instrumented reloads captured no failures and every first-party/API/jsDelivr request returned 200.
+
+Next: Capture the exact failing URL if the intermittent 502 recurs; do not change first-party display code without that evidence.

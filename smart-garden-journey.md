@@ -2355,6 +2355,18 @@ State: Compiles passed. Both checkpoints were deployed with backups. Browser and
 
 Next: The existing camera identity contract, strict-CSP migration, and zero-downtime deployment findings remain director-level RCA campaigns.
 
+## 2026-07-10 — Serial UX pass: calibration truth states and bounded usage reporting
+
+Context: Six parallel auditors supplied 36 display/usability findings covering camera provenance, service availability, CSP readiness, shared navigation, calibration/audit reporting, and water usage.
+
+Changes: Fixed Water Usage mobile overflow and GET Retry (`8871e04`), audit fail-closed reporting (`f408c64`), calibration history failure handling (`febdd5e`), invalid short-interval drift advice (`86ca12b`), seven-day reporting bounds (`6c03322`), and shared mobile-sheet focus containment (`ca7076a`).
+
+Decisions: Camera identity/provenance, strict CSP, origin saturation, calibration revision provenance, and sensor identity/freshness need broader coordinated RCAs. `dashboard.py` edits are read-only display/reporting paths only; watering balance, schedule, runtime, valves, and configuration were untouched.
+
+State: Six checkpoints deployed with timestamped remote backups and post-deploy SHA-256 parity. Authenticated Playwright confirmed Water Usage reflows to 390px and includes Retry. Public `/login` recovered to 200 after restart handoffs.
+
+Next: Director campaigns should prioritize Forecast/Map XSS-safe DOM construction, camera serializer identity/provenance, and service saturation telemetry; then finish sensor/calibration provenance and shared camera navigation.
+
 ## 2026-07-10 - Serial UX fixer: camera review resilience
 
 Context: Six parallel audits produced 35 findings. Twenty-four new page/issue items were merged after deduplication; none concerned watering behavior.

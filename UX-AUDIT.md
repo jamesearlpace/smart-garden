@@ -254,3 +254,26 @@ Reviewed all 35 raw findings in `orchestrator/findings-0.json` through `findings
 
 All four deployed page families returned authenticated HTTP 200 after restart. The test-set API returned 992 total held-out frames and a deterministic one-row sample with `captured_at`, `frame_id`, and `provenance`. Python compilation, live `/login`, and SHA-256 server/local parity passed. The requested in-app Playwright runtime was not exposed by tool discovery, so browser-DOM automation could not be rerun; authenticated live HTML/API smoke checks were used instead. `dashboard.py` was edited only in the read-only benchmark-report serializer and does not participate in irrigation balance, control, or schedule generation.
 | cam/quality ↔ cam/regression | med | fixed (`ef8fa37`) | cross-page traceability | Quality recent rows expose only a timestamp and values, while regression uses durable bank filenames; shared-frame membership cannot be checked deterministically. | New evaluations persist and return the oracle-bank filename; the Quality table displays it and labels pre-migration rows `legacy — unavailable`. Live API returned `frame_file` on all 30 rows and the browser rendered the new Frame column. `cnn_metrics.py` and `dashboard.py` changes are reporting-only and do not affect irrigation. |
+
+## 2026-07-10 serial-fixer merge — provenance, availability, calibration, and shared navigation
+
+Reviewed all 36 raw findings in `orchestrator/findings-0.json` through `findings-5.json`. Thirty page/issue findings were newly folded into the backlog; six camera-identity, strict-CSP, availability, mobile-layout, and error-recovery reports were deduplicated into existing campaigns. No finding was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| camera reading / archive / quality APIs | high/med | open — broader RCA | durable identity, provenance, timestamps, serializer consistency | Extend the existing camera data-contract campaign. A template-only patch would misstate accepted-lock/model-output provenance and overlap current camera pipeline work. |
+| origin / service / health | high/med | open — broader RCA | worker starvation, intermittent 5xx, monitoring and telemetry | The auditors reproduced queue saturation and watchdog restarts. This is infrastructure, not display code; schedule a bounded-query/worker/telemetry RCA. |
+| authenticated pages | high/med | open — broader RCA | strict CSP, API-to-HTML sinks, inline styles, blob/weather origins | Staged Report-Only CSP cannot be enforced until page-family DOM construction and inline presentation are migrated. Forecast/Map stored-XSS sinks are high priority in that campaign. |
+| shared mobile More sheet | med | fixed (`ca7076a`) | modal semantics / focus containment | Added `aria-modal`, background inerting, forward/reverse focus trapping, Escape closure, and focus restoration. |
+| shared camera tool strip / Focus / Cam Device | med | open — overlapping work | target size, skip links, current page | `_meternav.html` and camera templates contain unrelated in-progress user changes; preserve them for the shared camera-navigation campaign. |
+| calibrate | high | fixed (`febdd5e`) | partial history failure shown as empty | History now requires HTTP/schema success and shows a distinct unavailable state instead of `no history`. |
+| calibrate | high | open — broader RCA | active calibration provenance divergence | Config/history disagreement and same-second test writes require a committed-revision/source contract; do not infer which calibration is authoritative in display code. |
+| calibrate | med | fixed (`86ca12b`) | invalid drift interval | Captures less than 12 hours apart are labeled too close for drift analysis; zero is no longer rendered as missing or used for advice. |
+| calibrate / sensor APIs | med | open — broader RCA | sample freshness and sensor identity | Add sensor-index timestamps/staleness to a common read-only serializer; `/api/sensors` must stop presenting irrigation-zone IDs as sensor IDs. |
+| audit | high | fixed (`f408c64`) | parser/query failures reported OK | MAX/count and timestamp parse failures now return `ERROR` with the failed reason. |
+| audit | med | open | timezone semantics | Reporting timestamps still need explicit offsets and date-only rows need calendar-date labeling. |
+| water usage | high | fixed (`6c03322`) | unbounded reporting range | Rolling requests above seven days now fail quickly with JSON 400 before ledger synchronization. `dashboard.py` change is display/reporting-only. |
+| water usage | med | fixed (`8871e04`) | mobile layout | Range controls collapse to one shrinkable column; live 390px document width is 390px. |
+| water usage | med | fixed (`8871e04`) | error recovery | Failed GETs expose an explicit GET-only Retry action that repeats the selected query. |
+
+Backend file edited: `server-prod/dashboard.py`, only for audit/calibration/water-usage reporting and client markup. No irrigation balance, schedule, runtime, precipitation, valve, MAD, or configuration logic changed.

@@ -530,3 +530,21 @@ Read all 36 findings in `orchestrator/_work/round-10/findings-0.json` through `f
 | calibration / sensor history | high/med | open - broader RCA | immutable revision, durable identity, drift validity, sample provenance, and freshness | Mutable endpoints and index-only history cannot prove which calibration or physical sensor produced historical percentages. | Existing calibration/sensor data-contract campaign; requires schema/provenance migration, not a speculative display-only patch. |
 
 Backend file edited: `server-prod/dashboard.py`, solely to share the existing read-only audit payload between JSON and server-rendered display. It does not compute water balance/credit, decide valve operation, or generate schedules. Deployment used timestamped remote backups, `/login` smoke testing, authenticated `/audit` verification, and SHA-256 server/local parity. The requested browser MCP/Node runtime was not exposed in this session, so no browser-interception claims are made; live verification used authenticated curl against rendered HTML.
+
+## 2026-07-10 round-11 serial-fixer merge
+
+Read all 28 findings in `orchestrator/_work/round-11/findings-0.json` through `findings-5.json`; 22 are high/medium. No watering-behavior finding was reported. Costs findings deduplicate into the authenticated page-family CSP campaign, and sensor findings deduplicate into the versioned calibration/sample serializer campaign.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| cam/convergence | high | fixed (`d1a4f05`) | endpoint timeout / coverage aggregation | The read-only coverage count is driven from the smaller audit table, avoiding a correlated audit scan for every archive frame. |
+| api/cam/convergence | high | fixed (`d1a4f05`) | strict query contract | Exactly one `hours` is required; unsupported values return JSON 400 before database work. |
+| cam/convergence | med | fixed (`d1a4f05`) | incomplete/null schema truthfulness | Missing summaries fail closed; absent agreement stays unknown; invalid trend rows are excluded safely. |
+| costs / authenticated shell | high/med | open - broader RCA | strict CSP, semantic fallback, safe rendering, stale truth | Existing page-family CSP extraction and server-rendered fallback campaign. |
+| cam/regression API/UI | high/med | open - broader RCA | bounded pagination and inference | Requires a coordinated paginated API/client contract plus cached/bounded inference. |
+| cam/cnn-report | high/med | open - broader RCA | metric definitions and provenance | The API does not define a complete outcome partition or confidence-threshold provenance; use a shared typed contract rather than invented labels. |
+| calibration / sensor history | high/med | open - broader RCA | identity, revision and observation provenance | Existing versioned serializer campaign; legacy index-only samples cannot be truthfully re-attributed. |
+
+Backend files edited: `dashboard.py` and `meter_archive.py`, solely for strict validation and a read-only displayed coverage aggregation. Neither computes water balance/credit, decides valve operation, or generates schedules.
+
+Deployment used timestamped backups of all three live files. Authenticated live API verification completed in 76 ms versus the reported 98 seconds; invalid input returned JSON 400 in 1.4 ms. Public `/login` returned 200, the service was active, and local/server SHA-256 parity passed. The browser MCP/Node runtime was not exposed, so the raw auditor's authenticated browser evidence was retained and no fresh browser-DOM claim is made.

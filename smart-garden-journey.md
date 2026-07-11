@@ -2529,3 +2529,11 @@ Context: Merged all 36 round-10 auditor findings under the display-only safety b
 Changes: Audit page now server-renders its complete read-only table and uses same-origin external CSS/JS (`493f762`), so it has a truthful no-script baseline and is compatible with nonce-free strict CSP. Deployed with backups, authenticated live verification, `/login` smoke, and SHA-256 parity.
 
 Decisions/State/Next: Manual-zone schedule contradictions remain watering-behavior DO NOT FIX items. Remaining high/medium reports deduplicate into the existing coordinated moisture snapshot, dashboard authority, reporting-time, camera detail/provenance, calibration authority, and site-wide CSP campaigns. Active unrelated changes in `database.py` and camera templates were preserved.
+
+## 2026-07-10 - Round-11 convergence reporting
+
+Context: Read and merged all 28 round-11 findings; none concerned watering behavior.
+
+Changes: Convergence query validation rejects unsupported requests before database work, its displayed coverage aggregation avoids the correlated scan, and incomplete/null trend payloads fail closed.
+
+Decisions/State/Next: `dashboard.py` and `meter_archive.py` are read-only reporting changes; no watering/control logic changed. Commit `d1a4f05` was deployed with backups; authenticated convergence completed in 76 ms, invalid input returned 400 in 1.4 ms, `/login` returned 200, and SHA-256 parity passed. Costs CSP, regression inference pagination, CNN metric provenance, and sensor identity/revision remain coordinated campaigns.

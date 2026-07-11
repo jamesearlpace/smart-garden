@@ -2298,8 +2298,16 @@ def create_app(config, engine, weather, billing):
                     edt.isoformat(timespec="seconds"),
                     max(1, int(round(win_s / 60.0))), win_s, "absolute", None)
 
+        raw_minutes = request.args.get("minutes")
+        if raw_minutes is not None:
+            try:
+                requested_minutes = int(raw_minutes)
+            except (TypeError, ValueError):
+                return None, None, 0, 0, "relative", "minutes must be an integer"
+            if requested_minutes < 1 or requested_minutes > 10080:
+                return None, None, 0, 0, "relative", "rolling range must be between 1 minute and 7 days"
         minutes = query_int("minutes", default_minutes, min_value=1,
-                            max_value=129600)
+                            max_value=10080)
         edt = _dt.now()
         sdt = edt - timedelta(minutes=minutes)
         return (sdt.isoformat(timespec="seconds"),

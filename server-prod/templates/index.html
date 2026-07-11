@@ -4026,7 +4026,13 @@ function renderMap(d) {
     dot.style.left = h.x+'%'; dot.style.top = h.y+'%';
     dot.style.background = MAP_COLORS[h.z]||'#888';
     dot.style.opacity = vis ? '1' : '0.2';
-    dot.innerHTML = '<span class="m-num">'+(idx+1)+'</span><span class="m-tip">#'+(idx+1)+' '+name+'</span>';
+    var number = document.createElement('span');
+    number.className = 'm-num';
+    number.textContent = idx + 1;
+    var tip = document.createElement('span');
+    tip.className = 'm-tip';
+    tip.textContent = '#' + (idx + 1) + ' ' + name;
+    dot.replaceChildren(number, tip);
     dot.onclick = function(){mapHighlight = mapHighlight===h.z ? null : h.z; renderMap(window._lastDash);};
     wrap.appendChild(dot);
   });

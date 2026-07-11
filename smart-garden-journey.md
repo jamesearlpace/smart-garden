@@ -2639,3 +2639,15 @@ Decisions: Calibration identity/revisions, forecast lineage, audit query/perform
 State: Six findings are fully fixed and live; Flow error-envelope display hardening is live but the combined API finding remains open. Each checkpoint used a timestamped backup, restart, `/login` smoke, authenticated API/page verification, and SHA-256 parity.
 
 Next: Land the clean Flow API status change with the coordinated backend work, then implement the versioned calibration/sample and canonical reporting contracts. Do not change Grapes behavior in a UX pass.
+
+## 2026-07-11 - Round-21 typed Flow failure contract
+
+Context: Read and reconciled all 21 current raw findings. Three status/error-contract refinements were new; the remainder deduplicated into existing CNN, calibration, audit, canonical reporting, and infrastructure campaigns. No finding was watering behavior.
+
+Changes: Flow reporting failures now return HTTP 503 with a typed `FLOW_UNAVAILABLE` envelope (`1a08bbc`). The already-hardened page rejects the response, clears stale operational claims, and offers Retry. Added the OCR-audit and camera job-status failure contracts to the backlog as broader authority campaigns.
+
+Decisions: `dashboard.py` changed only the read-only Flow display API error response. No irrigation balance, credit, schedule generation, runtime, valve, MAD, precipitation, or watering configuration changed. Calibration provenance, bounded Audit aggregation, public liveness/schedule telemetry, canonical meter reporting, and camera job authority remain coordinated RCAs.
+
+State: Python compile passed. The live file was backed up, deployed, restarted, authenticated-curl checked, `/login` smoked, and SHA-256 matched local. An initial PowerShell text-pipe diff mangled UTF-8 in the staged deployment; the timestamped backup was immediately restored before a binary-safe SCP deployment, and the service recovered with parity verified. The in-app browser runtime was unavailable.
+
+Next: Implement the three typed failure contracts with their meter/job authority campaigns, then the versioned calibration and bounded Audit snapshot contracts.

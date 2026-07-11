@@ -145,6 +145,7 @@ function fmtLabel(l){
 var STATUS_SET={manual:1,verified:1,promoted:1,corrected:1,review:1,rejected:1,banked:1,flagged:1,repaired:1,confirmed:1};
 function safeStatus(v){v=String(v||'');return STATUS_SET[v]?v:'review';}
 var ALL = [], filter = 'all', CAPTURES = 100, PROPAGATED = false, SORT = 'newest';
+var LOAD_SEQ = 0;
 var VISIBLE_LIMIT = 100;
 var DATA_TRUSTED = false;
 var WRITE_IDS = ['btn-propagate','btn-reprocess','btn-retrain'];
@@ -307,6 +308,7 @@ function wireActions(){
 }
 
 function loadLabels(){
+  var loadSeq=++LOAD_SEQ;
   setControlsReady(false);
   var sub=document.getElementById('sub');
   sub.removeAttribute('role'); sub.textContent='Loading…';
@@ -317,6 +319,7 @@ function loadLabels(){
     if(!r.ok) throw new Error('HTTP '+r.status);
     return r.json();
   }).then(function(d){
+  if(loadSeq!==LOAD_SEQ) return;
   if(!validEnvelope(d)) throw new Error('invalid envelope');
   var rejected=0, duplicates=0, seen=Object.create(null), valid=[];
   d.items.forEach(function(i){
@@ -372,7 +375,7 @@ function loadLabels(){
   });
   render();
   }).catch(function(){
-    showLoadError('Could not load labels.');
+    if(loadSeq===LOAD_SEQ) showLoadError('Could not load labels.');
   });
 }
 

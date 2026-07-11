@@ -12,7 +12,7 @@
   .mtn-bar::-webkit-scrollbar { height:0; }
   .mtn-link { flex:0 0 auto; display:inline-flex; align-items:center; gap:5px;
     padding:6px 10px; border-radius:8px; text-decoration:none; white-space:nowrap;
-    color:#d7e8d9; font-size:13px; font-weight:500; }
+    color:#d7e8d9; font-size:13px; font-weight:500; min-height:44px; box-sizing:border-box; }
   .mtn-link:hover { background:rgba(255,255,255,.1); color:#fff; }
   .mtn-link.active { background:#fff; color:#0f3d17; font-weight:700; }
   .mtn-link .mtn-ic { font-size:15px; line-height:1; }
@@ -22,6 +22,7 @@
 <nav class="mtn-bar" id="mtnBar" aria-label="Meter tools">
   <a class="mtn-link" href="/" data-path="/"><span class="mtn-ic">🏠</span>Dashboard</a>
   <a class="mtn-link" href="/cam" data-path="/cam"><span class="mtn-ic">🗂️</span>All Tools</a>
+  <a class="mtn-link" href="/cam-device" data-path="/cam-device"><span class="mtn-ic">CAM</span>Device</a>
   <span class="mtn-sep"></span>
   <a class="mtn-link" href="/water-usage" data-path="/water-usage"><span class="mtn-ic">💧</span>Usage</a>
   <a class="mtn-link" href="/cam/convergence" data-path="/cam/convergence"><span class="mtn-ic">📈</span>Convergence</a>
@@ -38,10 +39,15 @@
 <script>
 (function(){
   var path = window.location.pathname.replace(/\/$/, '') || '/';
+  if (path.indexOf('/cam/reading/') === 0) path = '/water-usage';
   document.querySelectorAll('#mtnBar .mtn-link').forEach(function(a){
     var p = (a.getAttribute('data-path') || '').replace(/\/$/, '') || '/';
-    if (p === path) { a.classList.add('active');
-      a.scrollIntoView({inline:'center', block:'nearest'}); }
+    if (p === path) {
+      a.classList.add('active');
+      a.setAttribute('aria-current', 'page');
+      a.addEventListener('click', function(event) { event.preventDefault(); });
+      a.scrollIntoView({inline:'center', block:'nearest'});
+    }
   });
 })();
 </script>

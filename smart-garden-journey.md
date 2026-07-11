@@ -2522,3 +2522,10 @@ Decisions: Moisture atomic snapshots, Dashboard generation/command authority, Ca
 State: Three guarded template deployments used timestamped backups, `/login` smoke checks, and server/local SHA-256 parity. Authenticated live Playwright measured exact document containment at 195px and 98px effective viewports. Thirty-two non-watering high/medium raw findings remain grouped into five broader/overlapping campaigns.
 
 Next: Land the isolated read-only telemetry cutoff from a clean database patch, then run the atomic snapshot, Dashboard authority, camera-detail, and calibration-authority campaigns.
+## 2026-07-10 - Round-10 UX serial fixer
+
+Context: Merged all 36 round-10 auditor findings under the display-only safety boundary.
+
+Changes: Audit page now server-renders its complete read-only table and uses same-origin external CSS/JS (`493f762`), so it has a truthful no-script baseline and is compatible with nonce-free strict CSP. Deployed with backups, authenticated live verification, `/login` smoke, and SHA-256 parity.
+
+Decisions/State/Next: Manual-zone schedule contradictions remain watering-behavior DO NOT FIX items. Remaining high/medium reports deduplicate into the existing coordinated moisture snapshot, dashboard authority, reporting-time, camera detail/provenance, calibration authority, and site-wide CSP campaigns. Active unrelated changes in `database.py` and camera templates were preserved.

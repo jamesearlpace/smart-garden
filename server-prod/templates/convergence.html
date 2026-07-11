@@ -14,7 +14,7 @@
   header { background:var(--green); color:#fff; padding:14px 18px; }
   header h1 { margin:0; font-size:18px; }
   header .sub { font-size:12px; opacity:.85; margin-top:2px; }
-  main { padding:16px; max-width:1100px; margin:0 auto; }
+  main { padding:16px; max-width:1100px; margin:0 auto; min-width:0; overflow:hidden; }
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
           gap:10px; margin-bottom:16px; }
   .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px;
@@ -28,7 +28,7 @@
   .card h2 { margin:0 0 10px; font-size:15px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   button { background:var(--green); color:#fff; border:none; border-radius:8px;
-           padding:9px 14px; font-size:14px; cursor:pointer; }
+           padding:9px 14px; min-height:44px; font-size:14px; cursor:pointer; }
   button.secondary { background:#fff; color:var(--green); border:1px solid var(--green); }
   button:disabled { opacity:.5; cursor:default; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -59,6 +59,8 @@
   .vcard input { width:130px; font-family:ui-monospace,monospace; padding:5px;
                  border:1px solid var(--line); border-radius:6px; }
   a.back { color:#fff; text-decoration:none; font-size:13px; opacity:.9; }
+  .mtn-link{min-height:44px}
+  a.back{display:inline-flex;align-items:center;min-height:44px}.chart-wrap{max-width:100%;min-width:0;overflow:hidden}.chart-wrap canvas{display:block;max-width:100%!important}.status-line{font-weight:650;margin:0 0 10px}.data-scroll{overflow:auto;max-width:100%}.sr-table{font-size:12px;margin-top:10px}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
@@ -70,12 +72,14 @@
   <div class="sub">Is the meter history trustworthy — and can we prove it?</div>
 </header>
 <main>
+  <div class="status-line" id="overallStatus" role="status" aria-live="polite">Loading trust status&hellip;</div>
   <div class="kpis" id="kpis"></div>
 
   <div class="card">
     <h2>Audit coverage &amp; backlog over time</h2>
-    <canvas id="trend" height="90"></canvas>
-    <div class="note" id="trendNote">Loading trend…</div>
+    <div class="chart-wrap"><canvas id="trend" height="90" role="img" aria-label="Audit coverage and backlog trend"></canvas></div>
+    <div class="note" id="trendNote" role="status" aria-live="polite">Loading trend…</div>
+    <div class="data-scroll"><table class="sr-table" id="trendTable" hidden><caption>Audit coverage and backlog trend data, Pacific local time</caption><thead><tr><th scope="col">Observed time</th><th scope="col">Perfectable rows remaining</th><th scope="col">Perfect percent</th></tr></thead><tbody></tbody></table></div>
   </div>
 
   <div class="card">
@@ -84,10 +88,11 @@
       from the original image, with no hint. Exact match required.</div>
     <div class="row" style="margin:10px 0;">
       <button id="auditBtn" onclick="runAudit()">Run blind audit (8)</button>
-      <span id="auditStatus" class="note"></span>
+      <span id="auditStatus" class="note" role="status" aria-live="polite"></span>
     </div>
-    <table id="auditTable" style="display:none;">
-      <thead><tr><th>Time</th><th>Stored</th><th>Blind re-read</th><th>Verdict</th><th>Conf</th></tr></thead>
+    <table id="auditTable" style="display:none;" aria-label="Blind audit results">
+      <caption>Blind AI re-read comparison, Pacific local time; readings in cubic feet</caption>
+      <thead><tr><th>Observed time</th><th>Stored reading (ft³)</th><th>Blind re-read (ft³)</th><th>Verdict</th><th>Model confidence</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -105,6 +110,7 @@
 
 <script>
 let trendChart = null;
+let loadController = null;
 
 function fmt(n){ return (n===null||n===undefined)?'—':n; }
 function cf(v){ return (v===null||v===undefined)?'—':(v/1000).toFixed(3); }
@@ -148,11 +154,22 @@ function ctxCard(label, ctx){
 }
 
 async function loadAll(){
-  const r = await fetch('/api/cam/convergence?hours=24');
-  const d = await r.json();
-  if(!d.ok) return;
-  renderKpis(d);
-  renderTrend(d.history);
+  if(loadController) loadController.abort();
+  loadController=new AbortController(); const timer=setTimeout(()=>loadController.abort(),15000);
+  const status=document.getElementById('overallStatus'); status.textContent='Loading trust status…';
+  try{
+    const r=await fetch('/api/cam/convergence?hours=24',{signal:loadController.signal});
+    if(!r.ok) throw new Error(r.status===401?'Session expired. Reload to sign in.':'Convergence data unavailable (HTTP '+r.status+').');
+    const d=await r.json();
+    if(!d||d.ok!==true||!Array.isArray(d.history)) throw new Error('Convergence data has an invalid format.');
+    renderKpis(d); renderTrend(d.history);
+  }catch(e){
+    if(trendChart){trendChart.destroy();trendChart=null;}
+    document.getElementById('kpis').textContent=''; document.getElementById('trendTable').hidden=true;
+    document.getElementById('trendNote').textContent='Trend unavailable.';
+    status.innerHTML='<span role="alert">'+esc(e&&e.name==='AbortError'?'Convergence data timed out.':(e.message||'Convergence data unavailable.'))+'</span> <button type="button" id="retryLoad">Retry</button>';
+    document.getElementById('retryLoad').addEventListener('click',loadAll);
+  }finally{clearTimeout(timer);}
 }
 
 function renderKpis(d){
@@ -177,23 +194,27 @@ function renderKpis(d){
     `<div class="kpi"><div class="label">${esc(c[0])}</div>
      <div class="val ${c[2]?'':'small'}" style="${c[2]?'color:var(--bad)':''}">${esc(c[1])}</div></div>`
   ).join('');
+  const disagreements=Number(blind.disagreed||0)+Number(human.disagreed||0);
+  document.getElementById('overallStatus').textContent=disagreements?'Warning: '+disagreements+' disagreement'+(disagreements===1?'':'s')+' detected across blind and human checks.':'No disagreements detected in completed blind and human checks.';
 }
 
 function renderTrend(hist){
   const note = document.getElementById('trendNote');
-  if(!hist||hist.length<2){ note.textContent='Not enough trend data yet (collects every ~2 min).'; return; }
+  const table=document.getElementById('trendTable'), body=table.querySelector('tbody'); body.textContent='';
+  if(!hist||hist.length<2){ table.hidden=true; note.textContent='Not enough trend data yet (collects every ~2 min).'; return; }
   const labels = hist.map(h=>h.ts.slice(11,16));
   const rem = hist.map(h=>h.perfectable_remaining);
   const pct = hist.map(h=>h.perfect_pct);
   note.textContent = `${hist.length} points · ${hist[0].ts.slice(5,16)} → ${hist[hist.length-1].ts.slice(5,16)}`;
+  hist.forEach(function(h){const tr=document.createElement('tr');[h.ts,h.perfectable_remaining,h.perfect_pct==null?'':h.perfect_pct+'%'].forEach(function(v){const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});body.appendChild(tr);}); table.hidden=false;
   if(trendChart) trendChart.destroy();
   trendChart = new Chart(document.getElementById('trend'), {
     type:'line',
     data:{ labels, datasets:[
-      { label:'Perfectable remaining', data:rem, borderColor:'#c62828',
-        backgroundColor:'rgba(198,40,40,.08)', fill:true, yAxisID:'y', tension:.25, pointRadius:0 },
+      { label:'Perfectable remaining', data:rem, borderColor:'#c62828', borderDash:[8,4],
+        backgroundColor:'rgba(198,40,40,.08)', fill:true, yAxisID:'y', tension:.25, pointRadius:2 },
       { label:'Perfect %', data:pct, borderColor:'#2e7d32', yAxisID:'y1',
-        tension:.25, pointRadius:0 },
+        tension:.25, pointRadius:3, pointStyle:'triangle' },
     ]},
     options:{ responsive:true, interaction:{mode:'index',intersect:false},
       scales:{ y:{ position:'left', title:{display:true,text:'rows left'} },
@@ -282,6 +303,7 @@ async function verdict(i, ts, agree){
 }
 
 loadAll();
+document.querySelectorAll('.mtn-link[data-path="/cam/convergence"]').forEach(function(link){link.setAttribute('aria-current','page');link.scrollIntoView({block:'nearest',inline:'center'});link.addEventListener('click',function(e){e.preventDefault();});});
 setInterval(loadAll, 60000);
 </script>
 {% include '_mobilenav.html' %}

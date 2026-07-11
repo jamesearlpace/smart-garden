@@ -4558,8 +4558,20 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/sensor-gaps")
     def api_sensor_gaps():
         """Find gaps in sensor readings exceeding expected poll interval."""
-        zone_id = query_int("zone", 0, min_value=0, max_value=len(config["zones"]) - 1)
-        hours = query_int("hours", 24, min_value=1, max_value=87600)
+        allowed = {"zone", "hours"}
+        if set(request.args) - allowed:
+            return jsonify({"error": "unknown query parameter"}), 400
+        if any(len(request.args.getlist(name)) != 1 for name in allowed):
+            return jsonify({"error": "zone and hours must be supplied exactly once"}), 400
+        try:
+            zone_id = int(request.args["zone"])
+            hours = int(request.args["hours"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "zone and hours must be integers"}), 400
+        if zone_id not in range(len(config["zones"])):
+            return jsonify({"error": "unknown zone"}), 400
+        if hours < 1 or hours > 2160:
+            return jsonify({"error": "hours must be between 1 and 2160"}), 400
         return jsonify(db.get_sensor_gaps(zone_id, hours))
 
     @app.route("/api/valve-health")

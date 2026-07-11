@@ -423,3 +423,21 @@ Read all 35 findings in `orchestrator/_work/round-04/findings-0.json` through `f
 | Health dashboard | med | partially fixed (`4a6c8f5`); broader RCA remains | verdict, freshness, uptime, loading, incidents | Application-process and ESP32 uptime are named separately with young-process precision, and the healthy banner is scoped to ESP32 reboot state. Freshness, layer attribution, chart failure states, and incident grouping require the common health/availability contract. |
 
 Low-only malformed-response wording, loading skeleton, convergence empty-state polish, corrupted Regression glyph, and favicon reports remain outside this pass.
+
+## 2026-07-10 serial-fixer merge - round 05 health windows, forecast truth, and camera landmarks
+
+Read all 48 findings in `orchestrator/_work/round-05/findings-0.json` through `findings-5.json`. Ten distinct page/issue refinements were added after deduplication; the camera identity, calibration/sensor authority, reporting-timezone, and availability findings refine existing broader campaigns. The Grapes automatic-watering report deduplicates into Watering-behavior (DO NOT FIX) and was not changed.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| health history APIs | high/med | fixed (`f05a1b3`) | T-separated rolling cutoffs | Connectivity, system health, server health, and sensor-flatline reporting now use canonical T-separated cutoffs in every raw/downsample branch. Live one-hour results fell from the reported all-day sets to 20, 126, and 7 rows. `database.py` changed only read-only reporting queries. |
+| forecast | med | fixed (`ef47987`) | authoritative dates and fail-safe loading | Forecast now resolves dates from `/api/schedule-7day`, validates both GETs, has a 15-second deadline, announced loading, unknown rather than invented balance values, and an alert with GET-only Retry. |
+| camera Regression / Quality / Labels / Archive | med | fixed (`08fc3e9`) | missing main landmark | Each page now exposes one stable `main` landmark. |
+| shared camera tool strip | high/med | open - overlapping work | completeness, current item, same-URL activation, target size | `_meternav.html` contains pre-existing uncommitted user work. The complete shared correction was not committed or deployed because doing so would absorb unrelated changes; schedule this with the existing shared-navigation campaign. |
+| moisture-sim | med | open - broader RCA | schedule failure and all-zone payload fan-out | Failure truthfulness and batching span the large shared controller and a new compact read-only endpoint. Coordinate them without changing the schedule generator or client prediction model. |
+| Health dashboard / availability | high/med | open - broader RCA | layer attribution, probe history, stale/error chart states | Requires bounded edge/origin/worker telemetry plus a common availability envelope; generic process success cannot establish tunnel or worker health. |
+| camera identity / provenance | high/med | open - broader RCA | immutable frame and accepted-state contract | Still requires durable frame/inference IDs and append-only acceptance history; a display patch cannot invent the missing joins. |
+| calibration / sensor reporting | high/med | open - broader RCA | active revision, physical identity, sample freshness | Still requires a common revision and observation envelope across config, calibration history, and sensor samples. |
+| usage/history/cost reporting | high/med | open - broader RCA | offset-aware instants and calendar coverage | Remains the common ZoneInfo-aware half-open reporting contract; isolated changes could reinterpret naive historical values. |
+
+All deployed files were copied from committed HEAD after timestamped remote backups. Python compilation, service restart, public `/login`, authenticated live page/API checks, and post-deploy SHA-256 parity passed. The required in-app browser runtime was not exposed by tool discovery, so the auditors' authenticated browser evidence was retained and live authenticated HTTP checks were used. The failed first deploy attempt copied no files because its staging paths were wrong; the service restart succeeded, the helper was corrected in `57b95db`, and the verified deployment then completed.

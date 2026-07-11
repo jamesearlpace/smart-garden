@@ -2391,6 +2391,18 @@ State: Compiled, backed up remotely, deployed, restarted, and verified with zero
 
 Next: Director should schedule the remaining reporting-timezone, calibration/sensor serializer, camera identity, shared-navigation, and infrastructure campaigns.
 
+## 2026-07-10 - Serial UX round 05
+
+Context: Forty-eight raw findings covered health windows, camera identity/navigation, calibration authority, reporting ranges, and forecast resilience. The Grapes auto-mode discrepancy was quarantined as watering behavior.
+
+Changes: Fixed T-separated health/connectivity/server-history cutoffs (`f05a1b3`), added main landmarks to four camera pages (`08fc3e9`), and made Forecast use the authoritative schedule with validated bounded loading and Retry (`ef47987`).
+
+Decisions: `database.py` changed only read-only reporting queries. No irrigation balance, credit, schedule generation, runtime, valve, MAD, precipitation, or watering configuration code changed. Shared camera navigation was left open because `_meternav.html` contains unrelated uncommitted work.
+
+State: The committed snapshot was deployed with timestamped backups. Compile, restart, `/login`, authenticated API/page checks, and remote/HEAD SHA-256 parity passed. One-hour live histories now return 20 health, 126 connectivity, and 7 server samples.
+
+Next: Coordinate shared camera navigation, moisture batching/failure states, camera identity, calibration/sample provenance, reporting-timezone, and availability telemetry as broader campaigns.
+
 ## 2026-07-10 - Serial UX follow-up: rolling history and safe dashboard errors
 
 Context: The latest 37 raw findings were already merged. The actionable one-hour reporting bug and dashboard sensor-test HTML sink were isolated from the broader camera, calibration, timezone, CSP, navigation, and saturation campaigns.

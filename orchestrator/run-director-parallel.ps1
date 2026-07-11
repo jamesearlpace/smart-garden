@@ -73,8 +73,12 @@ for ($round = 1; $round -le $MaxRounds; $round++) {
   }
   Write-Host "=== ROUND $round ===" -ForegroundColor Cyan
 
+  # per-round work dir (unique names -> no cross-round file locks even if an audit orphaned)
+  $roundWork = Join-Path $orch ("_work\round-{0:D2}" -f $round)
+  New-Item -ItemType Directory -Force -Path $roundWork | Out-Null
+
   # 1. DIRECTOR
-  $dirOut = Join-Path $orch "director-out.json"
+  $dirOut = Join-Path $roundWork "director-out.json"
   Remove-Item $dirOut -ErrorAction SilentlyContinue
   $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   cmd /c "codex exec --skip-git-repo-check --sandbox danger-full-access --output-schema `"$dirSchema`" -o `"$dirOut`" - < `"$dirPrompt`" 2>&1" | Out-Null
@@ -85,14 +89,13 @@ for ($round = 1; $round -le $MaxRounds; $round++) {
   $campaigns = @($plan.campaigns) | Select-Object -First $MaxParallel
   if ($campaigns.Count -eq 0) { Add-Content $log "- round ${round}: no campaigns - stopping."; break }
 
-  # 2. PARALLEL AUDIT (read-only background jobs)
-  Get-ChildItem (Join-Path $orch "findings-*.json") -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+  # 2. PARALLEL AUDIT (read-only background jobs; per-round dir avoids file locks)
   $jobs = @()
   for ($i = 0; $i -lt $campaigns.Count; $i++) {
     $c  = $campaigns[$i]
-    $pf = Join-Path $orch ("campaign-{0}.txt" -f $i)
+    $pf = Join-Path $roundWork ("campaign-{0}.txt" -f $i)
     (New-AuditPrompt $c.angle $c.target $c.campaign_prompt) | Set-Content $pf -Encoding ascii
-    $ff = Join-Path $orch ("findings-{0}.json" -f $i)
+    $ff = Join-Path $roundWork ("findings-{0}.json" -f $i)
     $jobs += Start-Job -ScriptBlock {
       param($repo, $schema, $ff, $pf)
       Set-Location $repo
@@ -102,14 +105,15 @@ for ($round = 1; $round -le $MaxRounds; $round++) {
   }
   Wait-Job $jobs -Timeout $WorkerTimeoutSec | Out-Null
   $jobs | ForEach-Object { if ($_.State -eq 'Running') { Stop-Job $_ -ErrorAction SilentlyContinue }; Receive-Job $_ -ErrorAction SilentlyContinue | Out-Null; Remove-Job $_ -Force -ErrorAction SilentlyContinue }
-  $foundCount = @(Get-ChildItem (Join-Path $orch "findings-*.json") -ErrorAction SilentlyContinue).Count
+  $foundCount = @(Get-ChildItem (Join-Path $roundWork "findings-*.json") -ErrorAction SilentlyContinue).Count
   Write-Host "  audit complete: $foundCount findings files"
 
-  # 3. SERIAL FIX (merges findings + fixes high/med one at a time)
-  $fixOut = Join-Path $orch "fix-out.json"
-  Remove-Item $fixOut -ErrorAction SilentlyContinue
+  # 3. SERIAL FIX (merges this round's findings + fixes high/med one at a time)
+  $fixOut = Join-Path $roundWork "fix-out.json"
+  $fixInput = Join-Path $roundWork "fix-input.txt"
+  ("This round's raw auditor findings are the JSON files in: $roundWork (findings-*.json). Read ALL of them.`n`n" + (Get-Content $fixPrompt -Raw)) | Set-Content $fixInput -Encoding ascii
   $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  cmd /c "codex exec --skip-git-repo-check --sandbox danger-full-access --output-schema `"$fixSchema`" -o `"$fixOut`" - < `"$fixPrompt`" 2>&1" | Out-Null
+  cmd /c "codex exec --skip-git-repo-check --sandbox danger-full-access --output-schema `"$fixSchema`" -o `"$fixOut`" - < `"$fixInput`" 2>&1" | Out-Null
   $ErrorActionPreference = $prevEAP
   $fx = if (Test-Path $fixOut) { try { Get-Content $fixOut -Raw | ConvertFrom-Json } catch { $null } } else { $null }
 
@@ -128,8 +132,8 @@ for ($round = 1; $round -le $MaxRounds; $round++) {
   $rd = Join-Path $orch ("runs\{0}\round-{1:D2}" -f $runStamp, $round)
   New-Item -ItemType Directory -Force -Path $rd | Out-Null
   if (Test-Path $dirOut) { Copy-Item $dirOut (Join-Path $rd "director-campaigns.json") -ErrorAction SilentlyContinue }
-  Get-ChildItem (Join-Path $orch "findings-*.json") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
-  Get-ChildItem (Join-Path $orch "campaign-*.txt") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
+  Get-ChildItem (Join-Path $roundWork "findings-*.json") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
+  Get-ChildItem (Join-Path $roundWork "campaign-*.txt") -ErrorAction SilentlyContinue | Copy-Item -Destination $rd -ErrorAction SilentlyContinue
   if (Test-Path $fixOut) { Copy-Item $fixOut (Join-Path $rd "fix-verdict.json") -ErrorAction SilentlyContinue }
   $sum = @("# Round $round - $stamp", "", "## Director campaigns (angles + the exact prompts it generated)")
   for ($k = 0; $k -lt $campaigns.Count; $k++) {

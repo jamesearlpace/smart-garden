@@ -3,7 +3,8 @@ You have the `playwright` MCP browser (headless, isolated, already authenticated
 ALONE (no other agent writes files right now), so it is safe to edit/commit/deploy.
 
 INPUTS (read all, every time):
-- ALL orchestrator/findings-*.json -> raw findings from this round's parallel auditors.
+- This round's raw auditor findings: the findings-*.json files in the directory named at
+  the very top of this message. Read ALL of them.
 - UX-AUDIT.md -> the running backlog.
 - smart-garden-journey.md dead-ends; AGENTS.md.
 

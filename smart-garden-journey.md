@@ -2498,3 +2498,15 @@ Decisions: No backend Python or watering/control code was committed. The T-separ
 State: Three template checkpoints were backed up and deployed. Public `/login` and SHA-256 parity passed. The required in-app browser runtime was unavailable, so the authenticated raw-auditor browser evidence was retained and no browser rerun is claimed.
 
 Next: Land the clean read-only Cam Device cutoff, then run the Moisture snapshot, shared camera-navigation, and Map failure-contract campaigns.
+
+## 2026-07-10 - Serial UX fixer: round 07 stale-state safety
+
+Context: Read and merged all 31 round-07 findings; none was watering behavior.
+
+Changes: Map validates the full dashboard response and fails closed with retained last-update provenance, disabled controls/markers, and Retry (`184aebd`). The camera hub reflows at 195px, exposes focus, and links Device (`4344d01`). Shared camera navigation now has 44px targets, Device discovery, one `aria-current` destination, reading-detail ownership, and suppressed same-URL reloads (`cf20110`).
+
+Decisions: Calibration authority, strict CSP, timestamp contracts, dashboard generation state, page-local reading detail, and telemetry bounds remain coordinated campaigns. Dirty backend/camera files were not absorbed. No Python or watering/control code changed.
+
+State: Three checkpoints deployed after backups. Live authenticated Playwright, `/login`, restart recovery, and SHA-256 parity passed.
+
+Next: Land the isolated read-only telemetry cutoff and finish the page-local camera reading recovery/landmark work.

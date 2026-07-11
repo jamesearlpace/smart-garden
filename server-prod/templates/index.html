@@ -2274,7 +2274,11 @@ function finishSensorTest() {
 function showSensorTestError(msg) {
   var s = el('sensor-test-status');
   s.style.display = 'block';
-  s.innerHTML = '<span style="color:var(--red)">⚠ ' + msg + '</span>';
+  s.textContent = '';
+  var warning = document.createElement('span');
+  warning.style.color = 'var(--red)';
+  warning.textContent = '⚠ ' + String(msg || 'Sensor test failed');
+  s.appendChild(warning);
 }
 
 function pollSensorLive() {

@@ -7961,6 +7961,7 @@ def create_app(config, engine, weather, billing):
         reviews the handful that matter, not all ~130."""
         import hashlib as _hl
         n = query_int("n", 200, min_value=1, max_value=500)
+        offset = query_int("offset", 0, min_value=0, max_value=1000000)
         flag = request.args.get("flag")
         manual = _load_manual()
         candidates = []
@@ -7992,7 +7993,9 @@ def create_app(config, engine, weather, billing):
                         "corrected": bool(mv.get("action") == "correct")})
         candidates.sort(key=lambda r: r["file"])
         total_count = len(candidates)
-        out = candidates[:n]
+        for rank, candidate in enumerate(candidates, start=1):
+            candidate["candidate_rank"] = rank
+        out = candidates[offset:offset + n]
         if flag:
             for it in out:
                 try:
@@ -8012,9 +8015,15 @@ def create_app(config, engine, weather, billing):
                     it["disagree"] = bool(it["cnn"] and it["cnn"] != it["label"])
         out.sort(key=lambda r: (not r.get("disagree", False), r["file"]))
         n_dis = sum(1 for r in out if r.get("disagree"))
+        next_offset = offset + len(out)
         return jsonify({"frames": out, "count": len(out),
                         "total_count": total_count,
-                        "limit": n, "has_more": total_count > len(out),
+                        "limit": n, "offset": offset,
+                        "next_offset": (next_offset
+                                        if next_offset < total_count else None),
+                        "has_more": next_offset < total_count,
+                        "subset_order": "file ascending",
+                        "ordering_version": 1,
                         "disagree": n_dis, "flagged": bool(flag)})
 
     @app.route("/api/cam/test-set/remove", methods=["POST"])

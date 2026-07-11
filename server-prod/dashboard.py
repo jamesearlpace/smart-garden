@@ -634,6 +634,7 @@ def create_app(config, engine, weather, billing):
             rows = conn.execute(
                 "SELECT zone_id, MIN(start_ts) AS first_start, "
                 "SUM(CASE WHEN duration_sec > 60 THEN duration_sec ELSE 0 END) AS total_sec, "
+                "SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) AS display_sec, "
                 "MAX(CASE WHEN end_ts IS NULL THEN start_ts ELSE NULL END) AS open_start "
                 "FROM watering_event "
                 "WHERE date(start_ts) = ? "
@@ -648,6 +649,7 @@ def create_app(config, engine, weather, billing):
                 today_events[zid] = {
                     "first_start": r["first_start"],
                     "total_sec": float(r["total_sec"] or 0),
+                    "display_sec": float(r["display_sec"] or 0),
                     "open_start": r["open_start"],
                 }
 
@@ -731,11 +733,13 @@ def create_app(config, engine, weather, billing):
                         zid, et0, decision_et_fraction,
                         float(ev.get("total_sec", 0)) / 60.0)
                     elapsed_min = max(0, int(round((now - actual_start).total_seconds() / 60.0)))
-                    total_min = max(1, int(round(ev.get("total_sec", 0) / 60.0)))
+                    display_sec = max(0, int(round(ev.get("display_sec", 0))))
+                    total_min = round(display_sec / 60.0, 1)
                     running = zid in active_zones and bool(open_start)
                     day_sched[str(zid)] = {
                         "start": actual_start.strftime("%H:%M"),
                         "minutes": run if running else total_min,
+                        "seconds": display_sec,
                         "past": True,
                         "ended": not running,
                         "running": running,
@@ -782,7 +786,7 @@ def create_app(config, engine, weather, billing):
                     slot_start = max(slot_start, evening_start_dt)
                     if slot_start > evening_end_dt:
                         continue
-                slot_end = t + timedelta(minutes=run)
+                slot_end = slot_start + timedelta(minutes=run)
                 slot_has_started = slot_start < now
                 slot_has_ended = slot_end <= now
                 day_sched[str(zid)] = {

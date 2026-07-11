@@ -72,8 +72,11 @@ th{color:var(--text2);font-weight:600}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function pct(n){return n==null?'—':n.toFixed(1)+'%';}
 
-fetch('/api/cam/cnn-report').then(function(r){return r.json();}).then(function(d){
-  if (d.error){ document.getElementById('sub').textContent='Error: '+d.error; return; }
+function reportError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="reportRetry">Retry</button>';document.getElementById('reportRetry').addEventListener('click',loadReport);}
+function loadReport(){
+var s=document.getElementById('sub');s.setAttribute('role','status');s.setAttribute('aria-live','polite');s.textContent='Loading report...';
+fetch('/api/cam/cnn-report').then(function(r){if(!r.ok)throw new Error('Could not load report (HTTP '+r.status+').');return r.json();}).then(function(d){
+  if (!d||typeof d!=='object'||d.error){throw new Error(d&&d.error?d.error:'Report data has an invalid format.');}
   var bv = d.by_version||[], daily=d.daily||[], recent=d.recent||[], st=d.stats||{};
 
   // overall accuracy (all versions)
@@ -122,7 +125,9 @@ fetch('/api/cam/cnn-report').then(function(r){return r.json();}).then(function(d
       + '<td>'+m+'</td><td>'+(r.cnn_min_conf!=null?r.cnn_min_conf:'—')+'</td>'
       + '<td class="mono">'+esc(r.model_version||'')+'</td></tr>';
   }).join('') : '<tr><td colspan="6" class="muted">no checks yet</td></tr>';
-}).catch(function(e){ document.getElementById('sub').textContent='Could not load report.'; });
+}).catch(function(e){reportError(e.message||'Could not load report.');});
+}
+loadReport();
 
 function kpi(v,l,cls){ return '<div class="kpi"><div class="v '+(cls||'')+'">'+v+'</div><div class="l">'+l+'</div></div>'; }
 </script>

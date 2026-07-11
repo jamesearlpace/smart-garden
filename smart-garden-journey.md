@@ -2580,3 +2580,15 @@ Decisions: The remaining 38 non-watering high/medium reports refine the existing
 State: Both template checkpoints were deployed independently after timestamped backups. Authenticated live Playwright verified a forced HTTP 500 leaves zero stale cards/count and that the normal 83-card result still renders. Public `/login` returned 200 and remote/local SHA-256 parity passed.
 
 Next: Land the six coordinated contracts without changing schedule generation, irrigation balance, valves, runtimes, MAD, precipitation rates, or watering configuration.
+
+## 2026-07-11 - Round-16 audit convergence
+
+Context: Read and merged all 45 round-16 auditor findings; 35 were non-watering high/medium and seven high findings were explicitly marked as watering behavior.
+
+Changes: Added the round-16 deduplication and campaign mapping to `UX-AUDIT.md`; no product code changed.
+
+Decisions: All non-watering high/medium reports refine the existing atomic moisture, dashboard provenance, reporting-time, persisted benchmark, typed CNN-metric, or durable camera-detail campaigns. The Grapes automatic-mode contradiction and dashboard/Map command-authority and stale-command risks remain Watering-behavior DO NOT FIX. Dirty backend and camera work was preserved.
+
+State: Zero distinct new findings, zero fixes, and no deployment. Thirty-five non-watering high/medium raw findings remain represented by six coordinated RCA campaigns. No backend Python or watering/control code changed.
+
+Next: Schedule the six coordinated contracts under their broader RCA campaigns; handle command-authority and Grapes behavior only through the watering-control change process.

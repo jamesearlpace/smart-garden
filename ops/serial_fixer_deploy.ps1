@@ -2,7 +2,7 @@ param([ValidateSet('diff','deploy','verify')] [string]$Action)
 $ErrorActionPreference = 'Stop'
 $remote = 'acer'
 $base = '/home/jamesearlpace/smart-garden-server'
-$files = @('database.py', 'dashboard.py', 'templates/forecast_merged.html')
+$files = @('dashboard.py', 'templates/login.html', 'templates/sensor_history.html', 'templates/cam_archive.html')
 
 if ($Action -eq 'diff') {
     $tmp = Join-Path $env:TEMP 'smart-garden-serial-fixer-remote'
@@ -20,11 +20,11 @@ if ($Action -eq 'diff') {
 
 if ($Action -eq 'deploy') {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/database.py' '$base/dashboard.py' '$base/templates/forecast_merged.html' '$base/backups/serial-fixer-$stamp/'"
+    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/dashboard.py' '$base/templates/login.html' '$base/templates/sensor_history.html' '$base/templates/cam_archive.html' '$base/backups/serial-fixer-$stamp/'"
     foreach ($file in $files) {
         scp (Join-Path 'server-prod' $file) "${remote}:$base/$file"
     }
-    ssh $remote "cd '$base' && .venv/bin/python -m py_compile database.py dashboard.py && sudo systemctl restart smart-garden-server"
+    ssh $remote "cd '$base' && .venv/bin/python -m py_compile dashboard.py && sudo systemctl restart smart-garden-server"
     exit
 }
 

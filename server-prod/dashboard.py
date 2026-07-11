@@ -346,13 +346,28 @@ def create_app(config, engine, weather, billing):
             if email and email in _load_allowed_emails():
                 return None
         # Not authenticated — redirect to login
-        if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
+        if request.path.startswith("/api/") or request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
             return jsonify({"error": "Not authenticated"}), 401
-        return redirect("/login")
+        next_path = request.full_path.rstrip("?")
+        return redirect("/login?" + urllib.parse.urlencode({"next": next_path}))
+
+    def safe_next_path(value):
+        """Return a same-origin relative post-login path, or the dashboard."""
+        value = (value or "/").strip()
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.scheme or parsed.netloc or not parsed.path.startswith("/")
+                or parsed.path.startswith("//") or "\\" in value
+                or any(ord(ch) < 32 for ch in value)):
+            return "/"
+        return urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
 
     @app.route("/login")
     def login_page():
-        return render_template("login.html")
+        next_path = safe_next_path(request.args.get("next"))
+        resp = make_response(render_template("login.html", next_path=next_path))
+        resp.set_cookie("login_next", next_path, max_age=600, httponly=True,
+                        samesite="Strict", secure=True)
+        return resp
 
     @app.route("/auth/config")
     def auth_config():
@@ -383,18 +398,18 @@ def create_app(config, engine, weather, billing):
                 return jsonify({"ok": False, "error": "Not authorized"}), 403
             return redirect("/login?error=not_authorized")
 
+        supplied_next = data.get("next") if wants_json else request.form.get("next")
+        next_path = safe_next_path(supplied_next or request.cookies.get("login_next"))
         if wants_json:
-            resp = make_response(jsonify({"ok": True, "email": email}))
+            resp = make_response(jsonify({"ok": True, "email": email, "next": next_path}))
         else:
-            next_path = (request.form.get("next") or "/").strip()
-            if not next_path.startswith("/"):
-                next_path = "/"
             resp = make_response(redirect(next_path))
 
         token = _make_session_token(email)
         # SameSite=Strict: cookie is never sent on cross-site requests. App is
         # bookmarked / typed directly, so Strict is fine and blocks CSRF.
         resp.set_cookie("session", token, max_age=SESSION_MAX_AGE, httponly=True, samesite="Strict", secure=True)
+        resp.delete_cookie("login_next")
         return resp
 
     @app.route("/auth/logout")
@@ -4104,14 +4119,28 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/sensor-history")
     def api_sensor_history():
         """Soil or DHT22 history for drill-down charts."""
-        sensor_type = request.args.get("type", "soil")
-        hours = query_int("hours", 24, min_value=1, max_value=87600)
+        if any(len(request.args.getlist(name)) != 1 for name in ("type", "hours")):
+            return jsonify({"error": "type and hours must be supplied exactly once"}), 400
+        sensor_type = request.args.get("type")
+        try:
+            hours = int(request.args.get("hours", ""))
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid hours"}), 400
+        if sensor_type not in ("soil", "dht22") or hours not in (24, 168, 720, 2160):
+            return jsonify({"error": "unsupported sensor type or range"}), 400
         if sensor_type == "soil":
-            idx = query_int("index", 0, min_value=0, max_value=len(config["zones"]) - 1)
+            if len(request.args.getlist("index")) != 1:
+                return jsonify({"error": "index must be supplied exactly once"}), 400
+            try:
+                idx = int(request.args.get("index", ""))
+            except (TypeError, ValueError):
+                return jsonify({"error": "invalid sensor index"}), 400
+            if idx not in range(4):
+                return jsonify({"error": "unknown sensor index"}), 400
             conn = db.get_conn()
             rows = conn.execute(
                 "SELECT soil_pct, soil_raw, ts FROM sensor_log WHERE zone_id = ? "
-                "AND ts >= datetime('now','localtime',?) ORDER BY ts",
+                "AND ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) ORDER BY ts",
                 (idx, f"-{hours} hours"),
             ).fetchall()
             conn.close()
@@ -4120,12 +4149,11 @@ def create_app(config, engine, weather, billing):
             conn = db.get_conn()
             rows = conn.execute(
                 "SELECT ts, temp_f, humidity FROM weather_log "
-                "WHERE source='dht22' AND ts >= datetime('now','localtime',?) ORDER BY ts",
+                "WHERE source='dht22' AND ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) ORDER BY ts",
                 (f"-{hours} hours",),
             ).fetchall()
             conn.close()
             return jsonify([{"ts": r["ts"], "temp_f": r["temp_f"], "humidity": r["humidity"]} for r in rows])
-        return jsonify([])
 
     @app.route("/api/dashboard")
     def api_dashboard():

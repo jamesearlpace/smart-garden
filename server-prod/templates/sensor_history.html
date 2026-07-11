@@ -77,8 +77,8 @@ h1 { font-size: 1.4rem; margin-bottom: 4px; }
 .sr-status { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); }
 
 /* sensor summary cards */
-.sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
-.sensor-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: #fff; }
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 10px; min-width: 0; }
+.sensor-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: #fff; min-width: 0; max-width: 100%; }
 .sensor-card .nm { font-weight: 700; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
 .sensor-card .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .sensor-card .big { font-size: 1.7rem; font-weight: 800; margin: 6px 0 2px; letter-spacing: -.01em; }
@@ -223,11 +223,16 @@ function renderChart(cals, allSeries) {
   var note = document.getElementById('metaNote');
   var summaries = [];
   for (var si = 0; si < NUM_SENSORS; si++) {
+    if (!isVisible(si)) continue;
     var ss = allSeries[si] || [];
     var vals = ss.map(function(p){ return state.mode === 'pct' ? p.pct : p.raw; }).filter(function(v){ return v != null; });
     if (vals.length) summaries.push((cals[si] && cals[si].name || ('Sensor ' + si)) + ': latest ' + vals[vals.length-1] + ', minimum ' + Math.min.apply(null, vals) + ', maximum ' + Math.max.apply(null, vals) + ', ' + vals.length + ' samples');
   }
-  document.getElementById('chartSummary').textContent = summaries.length ? summaries.join('. ') + '.' : 'No sensor data in this window.';
+  var selectedCount = 0;
+  for (var vi = 0; vi < NUM_SENSORS; vi++) if (isVisible(vi)) selectedCount++;
+  document.getElementById('chartSummary').textContent = !selectedCount
+    ? 'No sensors are selected.'
+    : (summaries.length ? summaries.join('. ') + '.' : 'No sensor data in this window.');
   if (!datasets.length) {
     var anyVisible = false;
     for (var k = 0; k < NUM_SENSORS; k++) { if (isVisible(k)) anyVisible = true; }
@@ -301,12 +306,20 @@ function renderChips(cals) {
 
 function load() {
   document.getElementById('refreshStatus').textContent = 'Loading sensor history';
-  var calReq = fetch('/api/calibration').then(function(r){ return r.json(); }).catch(function(){ return {sensors: []}; });
+  document.getElementById('sensorGrid').setAttribute('aria-busy', 'true');
+  function checkedJson(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+  function validSeries(value) {
+    return Array.isArray(value) && value.every(function(p) {
+      return p && Number.isFinite(Number(p.raw)) &&
+        (p.pct == null || Number.isFinite(Number(p.pct))) && !Number.isNaN(Date.parse(p.ts));
+    });
+  }
+  var calReq = fetch('/api/calibration').then(checkedJson);
   var seriesReqs = [];
   for (var i = 0; i < NUM_SENSORS; i++) {
     seriesReqs.push(
       fetch('/api/sensor-history?type=soil&index=' + i + '&hours=' + state.hours)
-        .then(function(r){ return r.json(); }).catch(function(){ return []; })
+        .then(checkedJson).then(function(rows) { if (!validSeries(rows)) throw new Error('Invalid sensor history'); return rows; })
     );
   }
   Promise.all([calReq].concat(seriesReqs)).then(function(res) {
@@ -325,6 +338,15 @@ function load() {
     if (sidebarStatus) sidebarStatus.textContent = 'Updated just now';
     if (sidebarDot) sidebarDot.classList.add('connected');
     document.getElementById('refreshStatus').textContent = 'Sensor history updated';
+  }).catch(function() {
+    var grid = document.getElementById('sensorGrid');
+    grid.innerHTML = '<div class="loading" role="alert">Sensor history is unavailable. <button type="button" id="retryHistory">Retry</button></div>';
+    document.getElementById('chartSummary').textContent = 'Sensor history could not be loaded.';
+    document.getElementById('refreshStatus').textContent = 'Sensor history failed to load';
+    var retry = document.getElementById('retryHistory');
+    if (retry) retry.addEventListener('click', load);
+  }).finally(function() {
+    document.getElementById('sensorGrid').setAttribute('aria-busy', 'false');
   });
 }
 

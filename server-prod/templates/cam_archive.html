@@ -112,9 +112,23 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <script>
 var RANGES = [[3,'3m'],[5,'5m'],[15,'15m'],[30,'30m'],[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
-var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 120;
+var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 12;
 var includeProp = false;
 var barC = null, lineC = null, loading = false, exhausted = false;
+var imageObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(function(entries) {
+  entries.forEach(function(entry) {
+    if (!entry.isIntersecting) return;
+    var img = entry.target;
+    imageObserver.unobserve(img);
+    img.src = img.dataset.src;
+  });
+}, {rootMargin: '400px 0px'}) : null;
+
+function armImages(root) {
+  root.querySelectorAll('img[data-src]').forEach(function(img) {
+    if (imageObserver) imageObserver.observe(img); else img.src = img.dataset.src;
+  });
+}
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -208,7 +222,7 @@ function cellHTML(it){
             : '<span class="badge b-lock">lock</span>';
   var rev = it.reviewed ? ' <span class="badge b-rev">✓</span>' : '';
   return '<div class="cell" data-ts="'+esc(it.ts)+'">'
-    + '<img loading="lazy" src="/api/cam/archive/img?file='+encodeURIComponent(it.filename)+'" '
+    + '<img loading="lazy" data-src="/api/cam/archive/img?file='+encodeURIComponent(it.filename)+'" '
     +   'onclick="window.open(this.src)">'
     + '<div class="body">'
     +   '<div class="t">'+esc(tlabel(it.ts))+'</div>'
@@ -284,7 +298,7 @@ function loadList(reset){
   var url = '/api/cam/archive?minutes='+minutes+'&limit='+LIMIT+'&offset='+offset
           + '&order='+order + (unrev?'&unreviewed=1':'')
           + (includeProp ? '&include_propagated=1' : '');
-  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+  fetch(url).then(function(r){ if (!r.ok) throw new Error('HTTP '+r.status); return r.json(); }).then(function(d){
     loading = false;
     var items = d.items||[];
     var count = Number(d.count||0), countTotal = Number(d.count_total||count);
@@ -295,6 +309,7 @@ function loadList(reset){
       + (!includeProp && hidden>0 ? (' · ' + hidden + ' inferred hidden') : '');
     var grid = document.getElementById('grid');
     grid.insertAdjacentHTML('beforeend', items.map(cellHTML).join(''));
+    armImages(grid);
     offset += items.length;
     exhausted = items.length < LIMIT;
     document.getElementById('moreBtn').style.display = exhausted ? 'none' : 'block';
@@ -305,7 +320,17 @@ function loadList(reset){
       'Archive holds <b>'+esc((finite(b.total)||0).toLocaleString())+'</b> images'
       + (b.min ? ' · oldest '+esc(tlabel(b.min)) : '')
       + (b.max ? ' · newest '+esc(tlabel(b.max)) : '');
-  }).catch(function(){ loading=false; document.getElementById('listMsg').textContent='failed'; });
+    document.getElementById('btnSmartDry').disabled = false;
+    document.getElementById('btnSmartApply').disabled = false;
+  }).catch(function(){
+    loading=false;
+    document.getElementById('btnSmartDry').disabled = true;
+    document.getElementById('btnSmartApply').disabled = true;
+    document.getElementById('moreBtn').style.display = 'none';
+    var msg = document.getElementById('listMsg');
+    msg.innerHTML = 'Image history failed to load. <button type="button" id="retryArchive">Retry</button>';
+    document.getElementById('retryArchive').addEventListener('click', function(){ loadList(true); });
+  });
 }
 
 function smartReprocess(dryRun){

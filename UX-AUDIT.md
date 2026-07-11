@@ -46,6 +46,9 @@ Anything that is actually wrong irrigation/control behavior, not a display bug.
 | moisture-sim | "Depth Per Cycle 0.06\"" vs target 0.5–0.75" — cycles apply ~10x too little (chronic under-watering). | Irrigation output (runtime × precip rate), not display. Under active tuning — do not change from a UX pass. |
 | water-usage / schedule | Many watering events fire 10:15 AM–12:05 PM (Zone 1 running at 12:05 PM) despite the 00:00–10:00 turf window. | Watering-window enforcement / recovery behavior = irrigation engine, not display. Verify with James before touching. |
 
+| dashboard / schedule / history | Grapes (zone 8) is currently reported `auto_mode:true`, appears in the automatic seven-day schedule, and has a completed engine-triggered `soil_dry` event despite the documented manual-only invariant. | Configuration/control/schedule behavior from `findings-4.json`; logged only. No watering code or configuration changed. |
+| dashboard / schedule | Front-yard and backyard sync-group members are returned with independent sequential start times and runtimes instead of watering together. | Schedule/control behavior from `findings-4.json`; logged only. No watering code or configuration changed. |
+
 ## Resolved this run
 
 - Forecast-vs-actual accuracy now excludes current manual zones and no-event rows from scoring and display (`cf9dd8f`, `4962309`).

@@ -17,6 +17,7 @@
         .hint { color: #94a3b8; font-size: 0.8rem; margin-top: 10px; display: none; }
         .error { color: #ef4444; font-size: 0.85rem; margin-top: 12px; display: none; }
     </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
     <div class="card">
@@ -52,6 +53,7 @@
 
         function initGoogle(clientId) {
             if (gisInitialized || !clientId) return;
+            const nextPath = {{ next_path|tojson }};
             const loginUri = `${window.location.origin}/auth/google`;
             if (window.google && google.accounts && clientId) {
                 google.accounts.id.initialize({
@@ -102,10 +104,10 @@
             fetch('/auth/google', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ credential: response.credential })
+                body: JSON.stringify({ credential: response.credential, next: nextPath })
             }).then(r => r.json()).then(data => {
                 if (data.ok) {
-                    window.location.href = '/';
+                    window.location.href = data.next || '/';
                 } else {
                     showError(data.error || 'Not authorized');
                 }

@@ -43,7 +43,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 <div class="note">"Fell back to oracle" = frames the CNN couldn't read, so the paid GPT-4o read them instead. High fallback + low accuracy = the CNN isn't carrying its weight yet; the oracle is.</div>
 
 <h2>Recent reads (CNN vs ground truth)</h2>
-<table id="recent"><thead><tr><th>Time</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table>
+<table id="recent"><thead><tr><th>Time</th><th>Frame</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table>
 
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
@@ -54,13 +54,13 @@ function qualityError(message){
   var b=document.getElementById('banner'); b.className='banner down';
   b.setAttribute('role','alert'); b.innerHTML=esc(message)+' <button type="button" id="qualityRetry">Retry</button>';
   document.querySelector('#daily tbody').innerHTML='<tr><td colspan="5">Quality data unavailable.</td></tr>';
-  document.querySelector('#recent tbody').innerHTML='<tr><td colspan="5">Recent checks unavailable.</td></tr>';
+  document.querySelector('#recent tbody').innerHTML='<tr><td colspan="6">Recent checks unavailable.</td></tr>';
   document.getElementById('qualityRetry').addEventListener('click',loadQuality);
 }
 function loadQuality(){
  var banner=document.getElementById('banner'); banner.className='banner up'; banner.setAttribute('role','status'); banner.textContent='Loading quality data…';
  document.querySelector('#daily tbody').innerHTML='<tr><td colspan="5">Loading…</td></tr>';
- document.querySelector('#recent tbody').innerHTML='<tr><td colspan="5">Loading…</td></tr>';
+ document.querySelector('#recent tbody').innerHTML='<tr><td colspan="6">Loading…</td></tr>';
  fetch('/api/cam/quality').then(function(r){if(!r.ok) throw new Error(r.status===401?'Your session expired. Reload to sign in.':'Could not load quality data (HTTP '+r.status+').'); return r.json();}).then(function(d){
   if(!d || typeof d!=='object' || !Array.isArray(d.daily) || !Array.isArray(d.recent) || !d.oracle) throw new Error('Quality data has an invalid format.');
   var o = d.oracle||{};
@@ -89,9 +89,10 @@ function loadQuality(){
   document.querySelector('#recent tbody').innerHTML = rc.length ? rc.map(function(x){
     var ok=x.correct===1;
     return '<tr><td>'+esc((x.ts||'').slice(11,19))+'</td>'
+      +'<td class="mono">'+esc(x.frame_file||'legacy — unavailable')+'</td>'
       +'<td class="'+(ok?'ok':'miss')+'">'+(ok?'&#10003;':'&#10007;')+'</td>'
       +'<td class="mono">'+fmt9(x.cnn)+'</td><td class="mono">'+fmt9(x.oracle)+'</td><td>'+esc(x.version||'')+'</td></tr>';
-  }).join('') : '<tr><td colspan="5">No data yet.</td></tr>';
+  }).join('') : '<tr><td colspan="6">No data yet.</td></tr>';
  }).catch(function(e){ qualityError(e.message||'Could not load quality data.'); });
 }
 loadQuality();

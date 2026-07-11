@@ -38,6 +38,9 @@ def ensure_schema():
             ")"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS ix_cnn_eval_ts ON cnn_eval(ts)")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(cnn_eval)")}
+        if "frame_file" not in columns:
+            conn.execute("ALTER TABLE cnn_eval ADD COLUMN frame_file TEXT")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS cnn_daily ("
             "  date TEXT PRIMARY KEY,"            # YYYY-MM-DD local
@@ -55,7 +58,8 @@ def ensure_schema():
         conn.close()
 
 
-def log_eval(cnn_value, cnn_min_conf, oracle_value, model_version, reader):
+def log_eval(cnn_value, cnn_min_conf, oracle_value, model_version, reader,
+             frame_file=None):
     """Record one oracle verification = one CNN accuracy sample."""
     if not oracle_value:
         return
@@ -69,9 +73,9 @@ def log_eval(cnn_value, cnn_min_conf, oracle_value, model_version, reader):
     try:
         conn.execute(
             "INSERT INTO cnn_eval (ts, model_version, cnn_value, cnn_min_conf, "
-            "oracle_value, cnn_correct, reader) VALUES (?,?,?,?,?,?,?)",
+            "oracle_value, cnn_correct, reader, frame_file) VALUES (?,?,?,?,?,?,?,?)",
             (now.isoformat(), model_version, cnn_value, cnn_min_conf,
-             str(oracle_value), correct, reader))
+             str(oracle_value), correct, reader, frame_file))
         # roll into daily
         conn.execute(
             "INSERT INTO cnn_daily (date, evals, cnn_correct, model_version) "

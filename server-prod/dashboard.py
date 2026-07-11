@@ -6534,7 +6534,7 @@ def create_app(config, engine, weather, billing):
                 cnn_metrics.log_eval(
                     cnn_digits, _oracle_state.get("last_cnn_conf"),
                     label, _oracle_state.get("cnn_version", "v1"),
-                    cam_ocr_stats.get("reader"))
+                    cam_ocr_stats.get("reader"), stem + ".jpg")
             except Exception:
                 pass
         except Exception as e:
@@ -8265,10 +8265,11 @@ def create_app(config, engine, weather, billing):
                     "oracle_calls": orc or 0, "version": ver})
             for r in conn.execute(
                     "SELECT ts, cnn_value, oracle_value, cnn_correct, "
-                    "model_version FROM cnn_eval ORDER BY id DESC LIMIT 30"):
-                ts, cv, ov, cc, ver = r
+                    "model_version, frame_file FROM cnn_eval ORDER BY id DESC LIMIT 30"):
+                ts, cv, ov, cc, ver, frame_file = r
                 out["recent"].append({"ts": ts, "cnn": cv, "oracle": ov,
-                                       "correct": cc, "version": ver})
+                                       "correct": cc, "version": ver,
+                                       "frame_file": frame_file})
             conn.close()
         except Exception as e:
             out["metrics_error"] = str(e)

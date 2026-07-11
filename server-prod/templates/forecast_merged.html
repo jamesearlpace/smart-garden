@@ -162,8 +162,8 @@ a { color: var(--blue); text-decoration: none; }
 <div class="sub">Watering predictions and accuracy tracking</div>
 
 <div class="tabs" role="tablist" aria-label="Forecast views">
-  <button type="button" class="tab active" id="forecast-tab" role="tab" aria-selected="true" aria-controls="tab-forecast" data-tab="forecast">Forecast</button>
-  <button type="button" class="tab" id="comparison-tab" role="tab" aria-selected="false" aria-controls="tab-comparison" data-tab="comparison">Forecast vs Actual</button>
+  <button type="button" class="tab active" id="forecast-tab" role="tab" tabindex="0" aria-selected="true" aria-controls="tab-forecast" data-tab="forecast">Forecast</button>
+  <button type="button" class="tab" id="comparison-tab" role="tab" tabindex="-1" aria-selected="false" aria-controls="tab-comparison" data-tab="comparison">Forecast vs Actual</button>
 </div>
 
 <!-- ═══ TAB 1: Forecast ═══ -->
@@ -194,7 +194,7 @@ a { color: var(--blue); text-decoration: none; }
   </div>
   <p class="comparison-note" id="comparison-explanation">Accuracy includes only completed, scored automatic-mode decisions. Manual zones and incomplete decisions are excluded.</p>
   <div id="comparison-status" class="sr-status" role="status" aria-live="polite"></div>
-  <div id="comparison-content" aria-describedby="comparison-explanation"><div class="loading">Loading...</div></div>
+  <div id="comparison-content" aria-describedby="comparison-explanation" aria-busy="false"><div class="loading" role="status">Loading...</div></div>
 </div>
 
 </main><!-- /.main -->
@@ -231,6 +231,7 @@ function switchTab(id) {
     const selected = tab.dataset.tab === id;
     tab.classList.toggle('active', selected);
     tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+    tab.tabIndex = selected ? 0 : -1;
   });
   localStorage.setItem('sg-forecast-tab', id);
   if (id === 'comparison' && !compLoaded) loadComparison();
@@ -365,7 +366,8 @@ let compLoaded = false;
 async function loadComparison() {
   const days = document.getElementById('dayRange').value;
   const box = document.getElementById('comparison-content');
-  box.innerHTML = '<div class="card">Updating comparison…</div>';
+  box.setAttribute('aria-busy','true');
+  box.innerHTML = '<div class="card" role="status" aria-live="polite">Updating comparison…</div>';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60000);
   try {
@@ -382,6 +384,7 @@ async function loadComparison() {
     box.innerHTML = '<div class="card" role="alert">' + esc(msg) + ' <button type="button" onclick="loadComparison()">Retry</button></div>';
   } finally {
     clearTimeout(timer);
+    box.setAttribute('aria-busy','false');
   }
 }
 
@@ -400,7 +403,9 @@ function normalizeComparison(payload) {
     c.outcome=outcomes.indexOf(c.outcome)>=0?c.outcome:'other';
     return c;
   });
-  return {comparisons:rows, invalid_count:payload.comparisons.length-rows.length};
+  const invalidCount=payload.comparisons.length-rows.length;
+  if(invalidCount) throw new Error('Comparison data contained '+invalidCount+' invalid row'+(invalidCount===1?'':'s')+'.');
+  return {comparisons:rows, invalid_count:0};
 }
 
 function accuracyFrom(rows){
@@ -460,7 +465,7 @@ function renderComparison(accuracy, comparisons) {
     html += '</div></div>';
   }
   if (!comparisons || comparisons.length === 0) {
-    html += '<div class="card empty"><div class="icon">📊</div><div>No forecast data yet.</div>';
+    html += '<div class="card empty" role="status" aria-live="polite"><div class="icon">📊</div><div>No forecast data yet.</div>';
     const hasRows = rawData && rawData.comparisons.length;
     html += '<div style="color:var(--text2);font-size:.85rem;margin-top:8px">' +
       (hasRows ? 'No scored rows match these filters.' : 'Forecasts are captured daily at 3:55 AM.') + '</div>';
@@ -527,6 +532,14 @@ function outcomeLabel(o) {
 
 document.querySelectorAll('.tab').forEach(function(tab) {
   tab.addEventListener('click', function() { switchTab(tab.dataset.tab); });
+  tab.addEventListener('keydown', function(e) {
+    var tabs=Array.from(document.querySelectorAll('.tab')), i=tabs.indexOf(tab), next=null;
+    if(e.key==='ArrowRight') next=(i+1)%tabs.length;
+    else if(e.key==='ArrowLeft') next=(i-1+tabs.length)%tabs.length;
+    else if(e.key==='Home') next=0;
+    else if(e.key==='End') next=tabs.length-1;
+    if(next!==null){e.preventDefault();switchTab(tabs[next].dataset.tab);tabs[next].focus();}
+  });
 });
 document.getElementById('dayRange').addEventListener('change', loadComparison);
 document.getElementById('zoneFilter').addEventListener('change', applyFilter);

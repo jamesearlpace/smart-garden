@@ -548,3 +548,19 @@ Read all 28 findings in `orchestrator/_work/round-11/findings-0.json` through `f
 Backend files edited: `dashboard.py` and `meter_archive.py`, solely for strict validation and a read-only displayed coverage aggregation. Neither computes water balance/credit, decides valve operation, or generates schedules.
 
 Deployment used timestamped backups of all three live files. Authenticated live API verification completed in 76 ms versus the reported 98 seconds; invalid input returned JSON 400 in 1.4 ms. Public `/login` returned 200, the service was active, and local/server SHA-256 parity passed. The browser MCP/Node runtime was not exposed, so the raw auditor's authenticated browser evidence was retained and no fresh browser-DOM claim is made.
+
+## 2026-07-10 round-12 serial-fixer merge
+
+Read all 32 findings in `orchestrator/_work/round-12/findings-0.json` through `findings-5.json`; 22 are high/medium. No watering-behavior finding was reported. The moisture, dashboard authority, camera telemetry, camera reading detail, Costs/CSP, and calibration/sensor reports refine existing coordinated campaigns. One distinct forecast request-ownership refinement was added and fixed.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| forecast | med | open | overlapping request ownership | Use one module-level controller plus a render sequence so superseded loads cannot mutate the page. |
+| moisture-sim | high/med | open - broader RCA | atomic generation, duplicate initialization, malformed partial state, invented defaults | Existing atomic all-zone display snapshot campaign. A safe fix requires one read-only generation-bearing server envelope and one client owner; do not change schedule generation or the watering predictor. |
+| dashboard / Map | high/med | open - broader RCA | poll ordering, fail-closed command authority, schema validation and freshness | Existing shared validated-generation/authority campaign. Dashboard controls must disable before and during uncertain polls; partial or contradictory payloads cannot become authoritative. |
+| cam-device telemetry and reporting history | high/med | open - overlapping reporting fix | T-separated range, strict time contract, totals/freshness and retention | Existing read-only reporting campaign. `database.py` contains substantial unrelated active work, so the shared ZoneInfo-aware half-open migration must be landed as a coordinated clean patch. |
+| camera reading detail | high/med | open - overlapping work | held-value provenance, archive recovery, typed failures, schema/image/CNN recovery and zoom | Existing coordinated serializer/detail-page campaign in dirty camera files. Archive-backed IDs must not collapse to live-buffer 404, and held locks must never appear as per-frame reads. |
+| costs / authenticated shell | high/med | open - broader RCA | strict CSP, semantic fallback and stale refresh truth | Existing staged page-family CSP extraction/server-rendered fallback campaign. Enforcing CSP before shared/page scripts and styles are externalized would break authenticated pages. |
+| calibration / sensor history | high/med | open - broader RCA | immutable revision, physical identity, observation provenance, valid drift, freshness and legacy coverage | Existing versioned calibration/sample data-contract campaign. Current index-only history cannot truthfully reconstruct legacy sensor identity or calibration authority; unknown provenance must not be invented in the UI. |
+
+No watering engine, balance/credit, schedule generator, valve, runtime, precipitation, MAD, or watering configuration code was changed.

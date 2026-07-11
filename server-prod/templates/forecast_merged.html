@@ -116,6 +116,7 @@ a { color: var(--blue); text-decoration: none; }
 .zone-col { width: 140px; flex-shrink: 0; }
 .zone-col .name { font-weight: 600; font-size: .9rem; }
 .forecast-col, .actual-col { flex: 1; min-width: 0; }
+.forecast-col .detail, .actual-col .detail { overflow-wrap: anywhere; }
 .col-header { font-size: .65rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); margin-bottom: 4px; }
 .forecast-col .detail { color: var(--purple); font-size: .85rem; }
 .actual-col .detail { font-size: .85rem; }
@@ -148,6 +149,16 @@ a { color: var(--blue); text-decoration: none; }
   .zone-col { width: auto; }
   .outcome-col { width: auto; text-align: left; }
   .accuracy-banner { flex-direction: column; }
+}
+@media (max-width: 260px) {
+  .main { padding: 8px 8px 80px; min-width: 0; }
+  .tabs { flex-direction: column; align-items: stretch; }
+  .tab { width: 100%; min-width: 0; padding-inline: 8px; text-align: left; }
+  .controls, .control, .controls select, .controls button { width: 100%; min-width: 0; max-width: 100%; }
+  .acc-stat { min-width: 0; padding-inline: 6px; }
+  .event-row, .forecast-col, .actual-col { min-width: 0; max-width: 100%; }
+  .mobile-nav-inner { justify-content: flex-start; overflow-x: auto; max-width: 100%; }
+  .mob-nav-item { flex: 0 0 44px; min-width: 0; padding-inline: 2px; overflow-wrap: anywhere; }
 }
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">

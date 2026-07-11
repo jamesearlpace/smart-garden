@@ -60,6 +60,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 </head>
 <body>
 {% include '_meternav.html' %}
+<main id="main-content">
 <a href="/#cam" style="font-size:.85rem">&larr; Back to dashboard</a>
 <h1>🗂️ Meter Archive &amp; History</h1>
 <div class="sub" id="sub">Loading…</div>
@@ -110,6 +111,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
   <div class="empty" id="empty" style="display:none">No archived images in this window yet. The archive saves an image every ~5s while water flows (1/min when idle) — check back soon.</div>
 </div>
 
+</main>
 <script>
 var RANGES = [[3,'3m'],[5,'5m'],[15,'15m'],[30,'30m'],[60,'1h'],[360,'6h'],[1440,'24h'],[4320,'3d'],[10080,'7d'],[43200,'30d']];
 var minutes = 1440, order = 'desc', unrev = false, offset = 0, LIMIT = 12;

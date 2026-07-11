@@ -35,6 +35,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 </head>
 <body>
 {% include '_meternav.html' %}
+<main id="main-content">
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
 <h1>&#128202; Live quality &amp; oracle health</h1>
 <div class="sub">The honest number: how often the CNN reads the meter right on its own, graded by the GPT-4o oracle. And whether the oracle (your safety net) is alive.</div>
@@ -47,6 +48,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 
 <h2>Recent reads (CNN vs ground truth)</h2>
 <div class="table-scroll" role="region" aria-label="Recent CNN and ground-truth reads table" tabindex="0"><table id="recent"><thead><tr><th>Time</th><th>Frame</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table></div>
+</main>
 
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}

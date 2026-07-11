@@ -40,6 +40,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 </head>
 <body>
 {% include '_meternav.html' %}
+<main id="main-content">
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
 <h1>&#9875; Regression set</h1>
 <div class="sub" id="sub">Loading the permanent regression frames&hellip;</div>
@@ -53,6 +54,7 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="score" id="score"></div>
 <div class="grid" id="grid"></div>
 <div class="pager" id="pager" hidden><button type="button" id="prev">Previous</button><span id="pageStatus" role="status" aria-live="polite"></span><button type="button" id="next">Next</button></div>
+</main>
 
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){

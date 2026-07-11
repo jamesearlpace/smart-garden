@@ -9920,9 +9920,7 @@ def create_app(config, engine, weather, billing):
             "error": query_error,
         }
 
-    @app.route("/api/audit")
-    def api_audit():
-        """Runtime DB-table health audit — row counts, last writes, staleness flags."""
+    def _audit_payload():
         conn = db.get_conn()
         try:
             tables = [_audit_one(conn, *spec) for spec in AUDIT_TABLE_SPECS]
@@ -9935,15 +9933,22 @@ def create_app(config, engine, weather, billing):
             "error": sum(1 for r in tables if r["status"] == "ERROR"),
             "disabled": sum(1 for r in tables if r["status"] == "DISABLED"),
         }
-        return jsonify({
+        return {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "summary": summary,
             "tables": tables,
-        })
+        }
+
+    @app.route("/api/audit")
+    def api_audit():
+        """Runtime DB-table health audit — row counts, last writes, staleness flags."""
+        return jsonify(_audit_payload())
 
     @app.route("/audit")
     def audit_page():
-        """Self-contained HTML view of /api/audit — no template file needed."""
+        """Server-rendered audit with strict-CSP-compatible enhancement."""
+        return render_template("audit.html", audit=_audit_payload())
+        """Legacy inline view retained below temporarily; unreachable."""
         html = """<!doctype html>
 <html><head><meta charset="utf-8"><title>Smart Garden — System Audit</title>
 <style>

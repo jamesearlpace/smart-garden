@@ -1180,6 +1180,17 @@ document.getElementById('modal').onclick = function(e){ if(e.target===this) this
         + num((a.meter&&a.meter.net_gal)+' gal','Physical meter net')
         + '</div>';
       var cx=a.context||{};
+      var physical=Number(a.meter&&a.meter.net_gal);
+      var chart=Number(a.chart_total_gal);
+      var carry=Number(cx.lingering_gal);
+      if(isFinite(physical) && isFinite(chart) && Math.abs(chart-physical) >= 0.01){
+        var delta=chart-physical;
+        h+='<div class="auditcheck"><span class="ck" style="color:#d97706">âˆ†</span><span><b>Reconciliation</b> â€” '
+          +esc(physical.toFixed(2))+' gal physical movement + '+esc(delta.toFixed(2))
+          +' gal boundary/carry adjustment = '+esc(chart.toFixed(2))+' gal chart total.'
+          +(isFinite(carry) ? ' API carry context: '+esc(carry.toFixed(2))+' gal.' : '')
+          +' The API does not report its acceptance tolerance or adjustment timestamps.</span></div>';
+      }
       if(cx.catchup_count||cx.reanchor_count){
         h+='<div style="font-size:.8rem;color:var(--text2);margin-bottom:10px">'
           + (cx.catchup_count?('Includes <b>'+cx.catchup_count+'</b> catch-up jump(s) from fast flow, counted as real water. '):'')

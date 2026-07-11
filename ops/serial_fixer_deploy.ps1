@@ -2,7 +2,7 @@ param([ValidateSet('diff','deploy','verify')] [string]$Action)
 $ErrorActionPreference = 'Stop'
 $remote = 'acer'
 $base = '/home/jamesearlpace/smart-garden-server'
-$files = @('templates/cam_labels.html')
+$files = @('dashboard.py')
 
 if ($Action -eq 'diff') {
     $tmp = Join-Path $env:TEMP 'smart-garden-serial-fixer-remote'
@@ -20,7 +20,7 @@ if ($Action -eq 'diff') {
 
 if ($Action -eq 'deploy') {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/templates/cam_labels.html' '$base/backups/serial-fixer-$stamp/'"
+    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/dashboard.py' '$base/backups/serial-fixer-$stamp/'"
     foreach ($file in $files) {
         scp (Join-Path 'server-prod' $file) "${remote}:$base/$file"
     }
@@ -35,4 +35,8 @@ foreach ($file in $files) {
 }
 $login = curl.exe -sS -o NUL -w '%{http_code}' https://sprinklers.savagepace.com/login
 if ($login -ne '200') { throw "Login smoke test returned $login" }
-Write-Output 'Parity and /login smoke test passed.'
+$cookieHeader = ssh $remote "cd '$base' && sudo bash tools/authcookie.sh --header"
+$auditJson = curl.exe -fsS -H $cookieHeader https://sprinklers.savagepace.com/api/audit
+$audit = $auditJson | ConvertFrom-Json
+if (-not $audit.tables -or $audit.tables.Count -ne 25) { throw 'Audit API verification failed.' }
+Write-Output "Parity, /login, and audit API passed ($($audit.tables.Count) tables; $($audit.summary.error) errors)."

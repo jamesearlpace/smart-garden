@@ -9833,7 +9833,16 @@ def create_app(config, engine, weather, billing):
         query_error = None
         if row_count > 0:
             try:
-                last_ts = conn.execute(f"SELECT MAX({ts_col}) FROM {name}").fetchone()[0]
+                invalid_ts = conn.execute(
+                    f"SELECT COUNT(*) FROM {name} "
+                    f"WHERE {ts_col} IS NULL OR julianday({ts_col}) IS NULL"
+                ).fetchone()[0]
+                if invalid_ts:
+                    raise ValueError(f"{invalid_ts} row(s) have an invalid {ts_col}")
+                last_ts = conn.execute(
+                    f"SELECT {ts_col} FROM {name} "
+                    f"ORDER BY julianday({ts_col}) DESC, rowid DESC LIMIT 1"
+                ).fetchone()[0]
                 if is_date:
                     rows_24h = conn.execute(
                         f"SELECT COUNT(*) FROM {name} "
@@ -9842,7 +9851,7 @@ def create_app(config, engine, weather, billing):
                 else:
                     rows_24h = conn.execute(
                         f"SELECT COUNT(*) FROM {name} "
-                        f"WHERE {ts_col} >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime','-1 day')"
+                        f"WHERE julianday({ts_col}) >= julianday('now','localtime','-1 day')"
                     ).fetchone()[0]
             except Exception as e:
                 log.warning("audit(%s): MAX/COUNT failed: %s", name, e)

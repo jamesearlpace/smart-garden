@@ -2378,3 +2378,15 @@ Decisions: `dashboard.py` changed only in the read-only benchmark serializer. Ca
 State: All checkpoints were backed up and deployed. Compile, public login smoke, authenticated live HTML/API checks, and SHA-256 parity passed. The live held-out total is 992. Browser MCP was not exposed by tool discovery, so authenticated HTTP verification substituted for the requested DOM rerun.
 
 Next: Run the director-level camera data-contract, service saturation/liveness, strict-CSP, and shared-navigation campaigns.
+
+## 2026-07-10 - Serial UX fixer: normalized audit timestamps
+
+Context: Reconciled the current 37 raw auditor findings against the existing backlog. The remaining actionable high audit defect was mixed timestamp text causing lexicographic MAX/range errors.
+
+Changes: Audit reporting orders and filters timestamps through SQLite `julianday()` and fails closed when any candidate timestamp is null or invalid (`48f541f`). The deployment helper now verifies the authenticated 25-table audit response in addition to parity and `/login`.
+
+Decisions: `dashboard.py` changed only in the read-only audit serializer/query. No irrigation balance, schedule generation, runtime, precipitation, valves, MAD, or watering configuration changed. Calibration/sensor authority, camera provenance, shared navigation, timestamp-contract migration, and service availability remain coordinated campaigns; overlapping uncommitted user work was preserved.
+
+State: Compiled, backed up remotely, deployed, restarted, and verified with zero audit query errors plus SHA-256 parity. Browser verification was unavailable because the in-app runtime was not exposed and the fallback Playwright dependency was absent.
+
+Next: Director should schedule the remaining reporting-timezone, calibration/sensor serializer, camera identity, shared-navigation, and infrastructure campaigns.

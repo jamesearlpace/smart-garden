@@ -277,3 +277,19 @@ Reviewed all 36 raw findings in `orchestrator/findings-0.json` through `findings
 | water usage | med | fixed (`8871e04`) | error recovery | Failed GETs expose an explicit GET-only Retry action that repeats the selected query. |
 
 Backend file edited: `server-prod/dashboard.py`, only for audit/calibration/water-usage reporting and client markup. No irrigation balance, schedule, runtime, precipitation, valve, MAD, or configuration logic changed.
+
+## 2026-07-10 serial-fixer reconciliation - timestamp-normalized audit reporting
+
+Re-read all 37 findings in the current `orchestrator/findings-*.json` files. Every item was already represented by the immediately preceding provenance/availability/calibration/navigation merge, so no duplicate rows were added. No finding was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| audit API / page | high | fixed (`48f541f`) | mixed timestamp formats hide newest records | Audit reporting now orders timestamp values by SQLite `julianday()`, filters rolling windows by normalized instants, and fails closed if any candidate timestamp is null or unparseable. This is a read-only display/report query change in `dashboard.py`; it cannot affect irrigation state or decisions. Live API returned all 25 audited tables with zero query errors. |
+| audit API / page | med | open - broader RCA | timezone, date-grain, and DST semantics | Explicit-offset serialization and separate calendar-date metrics require a coordinated reporting-contract migration across the affected APIs; retain as one reporting/timezone campaign. |
+| water usage and other reporting APIs | med | open - broader RCA | shared timestamp normalization | Migrate each read-only history query only after its stored timestamp semantics are inventoried; a blanket replacement could reinterpret naive local timestamps incorrectly around DST. |
+| calibration / sensor APIs | high/med | open - broader RCA | authority, calibrated-value divergence, freshness, identity | Requires a shared, versioned calibration/sample serializer. Do not infer authority from same-second history rows or patch one page to conceal cross-endpoint disagreement. |
+| camera identity / provenance | high/med | open - broader RCA | immutable identity and accepted-state attribution | Remains in the common camera data-contract campaign; template-only fixes would misstate accepted lock versus model output. |
+| shared camera navigation | med | open - overlapping work | current-page semantics, mobile targets, dialog isolation, same-URL activation | `_meternav.html`, Focus, and Cam Device contain unrelated in-progress user changes. Preserve them for the shared-navigation campaign rather than overwriting the active worktree. |
+| service / reporting availability | high/med | open - broader RCA | worker starvation, restart churn, telemetry, health boundary | Infrastructure and authentication-boundary campaign; not a display-only correction. |
+
+Browser re-verification could not run because the required in-app browser runtime was not exposed and the repository fallback lacked its Playwright dependency. Compile, guarded pre/post server diff, timestamped remote backup, service restart, `/login` smoke, authenticated `/api/audit`, and SHA-256 parity all passed. One current high finding was fixed; 31 current high/medium raw findings remain logged in broader or overlapping campaigns.

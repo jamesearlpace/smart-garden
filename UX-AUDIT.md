@@ -236,4 +236,21 @@ Reviewed all 35 raw findings in `orchestrator/findings-0.json` through `findings
 | authenticated camera pages | med | open - broader RCA | overbroad CSP sources | Google/data allowances are present on same-origin-only camera pages. | Tighten page-family directives only after inline controller/style extraction is complete. |
 | cam/review / test-audit / cnn-report | med | open - broader RCA | inline presentation blocks CSP | Runtime style mutation and style attributes require unsafe-inline. | Fold into the staged strict-CSP extraction campaign rather than piecemeal changes. |
 | cam/review / cnn-report | low | open | shared error-state consistency | Camera GET failures do not consistently expose alert and Retry behavior. | Covered by the high review and medium CNN Report fixes above. |
+
+### Resolved by the serial fixer
+
+| Page | Severity | Status | Category | Resolution |
+|------|----------|--------|----------|------------|
+| cam/review | high | fixed (`aca51e6`) | accessible mutation names | Cards are semantic articles with frame headings; correction inputs are labeled and Save names the target frame and consequence. |
+| cam/review | high | fixed (`aca51e6`) | failed GET shown as empty | HTTP/schema failures now enter an announced error with GET-only Retry; only a successful empty array says nothing is pending. |
+| cam/review | med | fixed (`aca51e6`) | bypass / main landmark | Added a first-focusable skip link and `main` queue landmark. |
+| cam/review | med | fixed (`aca51e6`) | image inspection equivalence | Each image is a keyboard-operable full-size link associated with its frame article. |
+| cam/review | med | fixed (`aca51e6`) | status announcements | Loading, per-card save feedback, results, and failures use persistent status/alert semantics. |
+| cam/cnn-report | med | fixed (`c0e03f7`) | error recovery | HTTP, schema, and API errors now show an announced GET-only Retry action. |
+| cam/quality | med | fixed (`e2d75d6`) | timestamp ambiguity | Recent rows display the complete API timestamp in a semantic `time` element rather than discarding date/offset context. |
+| cam/test-audit | high | fixed (`304a254`) | incomplete benchmark total | The reporting API now sorts the complete valid candidate set before slicing and returns `total_count`, `limit`, and `has_more`; the page explicitly labels its deterministic subset. |
+| cam/test-audit | med | fixed (`304a254`) | loading reliability | The recoverable client deadline is 60 seconds, above the observed 22-second successful response. Continued latency belongs to the saturation/caching RCA. |
+| cam/test-audit | med | fixed (`304a254`) | timestamp / provenance | The display-only API returns frame ID, ISO timestamp with offset, and source parsed from the permanent filename; cards show all three. |
+
+All four deployed page families returned authenticated HTTP 200 after restart. The test-set API returned 992 total held-out frames and a deterministic one-row sample with `captured_at`, `frame_id`, and `provenance`. Python compilation, live `/login`, and SHA-256 server/local parity passed. The requested in-app Playwright runtime was not exposed by tool discovery, so browser-DOM automation could not be rerun; authenticated live HTML/API smoke checks were used instead. `dashboard.py` was edited only in the read-only benchmark-report serializer and does not participate in irrigation balance, control, or schedule generation.
 | cam/quality ↔ cam/regression | med | fixed (`ef8fa37`) | cross-page traceability | Quality recent rows expose only a timestamp and values, while regression uses durable bank filenames; shared-frame membership cannot be checked deterministically. | New evaluations persist and return the oracle-bank filename; the Quality table displays it and labels pre-migration rows `legacy — unavailable`. Live API returned `frame_file` on all 30 rows and the browser rendered the new Frame column. `cnn_metrics.py` and `dashboard.py` changes are reporting-only and do not affect irrigation. |

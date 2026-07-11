@@ -2354,3 +2354,15 @@ Decisions: `cnn_metrics.py` and `dashboard.py` were changed only in the camera r
 State: Compiles passed. Both checkpoints were deployed with backups. Browser and authenticated API checks passed live; server/local hashes match.
 
 Next: The existing camera identity contract, strict-CSP migration, and zero-downtime deployment findings remain director-level RCA campaigns.
+
+## 2026-07-10 - Serial UX fixer: camera review resilience
+
+Context: Six parallel audits produced 35 findings. Twenty-four new page/issue items were merged after deduplication; none concerned watering behavior.
+
+Changes: Review queue controls are frame-labeled, grouped, keyboard-inspectable, announced, and recover from failed GETs (`aca51e6`). CNN Report has Retry (`c0e03f7`). Quality shows complete timestamps (`e2d75d6`). The benchmark API reports a deterministic subset and full total plus display-only timestamp/source provenance; its UI deadline is 60 seconds (`304a254`).
+
+Decisions: `dashboard.py` changed only in the read-only benchmark serializer. Camera identity, accepted-state semantics, CSP extraction, saturation/liveness, and shared navigation remain broader RCA items. No irrigation control, balance, runtime, valve, schedule generation, or watering configuration changed.
+
+State: All checkpoints were backed up and deployed. Compile, public login smoke, authenticated live HTML/API checks, and SHA-256 parity passed. The live held-out total is 992. Browser MCP was not exposed by tool discovery, so authenticated HTTP verification substituted for the requested DOM rerun.
+
+Next: Run the director-level camera data-contract, service saturation/liveness, strict-CSP, and shared-navigation campaigns.

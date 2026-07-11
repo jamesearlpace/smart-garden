@@ -168,7 +168,7 @@ a { color: var(--blue); text-decoration: none; }
 
 <!-- ═══ TAB 1: Forecast ═══ -->
 <div class="tab-panel active" id="tab-forecast" role="tabpanel" aria-labelledby="forecast-tab">
-  <div id="forecast-content"><div class="loading">Loading forecast...</div></div>
+  <div id="forecast-content" aria-busy="true"><div class="loading" role="status" aria-live="polite">Loading forecast...</div></div>
 </div>
 
 <!-- ═══ TAB 2: Forecast vs Actual ═══ -->
@@ -238,17 +238,36 @@ function switchTab(id) {
 
 /* ═══ TAB 1: Forecast ═══ */
 async function loadForecast() {
+  const box = document.getElementById('forecast-content');
+  box.setAttribute('aria-busy', 'true');
+  box.innerHTML = '<div class="card" role="status" aria-live="polite">Updating forecast\u2026</div>';
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, 15000);
   try {
-    const r = await fetch('/api/forecast');
+    const responses = await Promise.all([
+      fetch('/api/forecast', {signal: controller.signal, headers:{'X-Requested-With':'XMLHttpRequest'}}),
+      fetch('/api/schedule-7day', {signal: controller.signal, headers:{'X-Requested-With':'XMLHttpRequest'}})
+    ]);
+    const r = responses[0], sr = responses[1];
     if (r.status === 401) { window.location.href = '/login'; return; }
+    if (!r.ok) throw new Error('Forecast service returned HTTP ' + r.status + '.');
+    if (!sr.ok) throw new Error('Schedule service returned HTTP ' + sr.status + '.');
     const d = await r.json();
-    renderForecast(d);
+    const schedule = await sr.json();
+    if (!d || typeof d !== 'object' || !d.weather || !Array.isArray(d.zones)) throw new Error('Forecast data has an invalid format.');
+    if (!schedule || typeof schedule !== 'object' || !schedule.next_water) throw new Error('Schedule data has an invalid format.');
+    renderForecast(d, schedule);
   } catch(e) {
-    document.getElementById('forecast-content').innerHTML = '<div class="card">Error: ' + esc(e.message) + '</div>';
+    const message = e && e.name === 'AbortError' ? 'Forecast request timed out.' : (e.message || 'Forecast is unavailable.');
+    box.innerHTML = '<div class="card" role="alert">' + esc(message) + ' <button type="button" id="forecast-retry">Retry</button></div>';
+    document.getElementById('forecast-retry').addEventListener('click', loadForecast);
+  } finally {
+    clearTimeout(timer);
+    box.setAttribute('aria-busy', 'false');
   }
 }
 
-function renderForecast(d) {
+function renderForecast(d, schedule) {
   let html = '';
   const w = d.weather || {};
   html += '<div class="card"><h2>Current Conditions</h2><div class="weather">';
@@ -267,7 +286,8 @@ function renderForecast(d) {
     d.zones.forEach(z => {
       const zoneId = Number(z.id);
       if (!Number.isInteger(zoneId)) return;
-      const days = z.days_until_water;
+      const authoritative = schedule.next_water[String(zoneId)] || null;
+      const days = authoritative ? Number(authoritative.days_away) : null;
       let daysText, daysClass;
       // Manual-mode zones are never auto-watered by the engine — don't show a
       // predicted day (the balance can sit below MAD indefinitely on purpose).
@@ -278,16 +298,16 @@ function renderForecast(d) {
       else if (days <= 2) { daysText = days.toFixed(0) + 'd'; daysClass = 'soon'; }
       else { daysText = days.toFixed(0) + 'd'; daysClass = 'ok'; }
       const rawPct = Number(z.balance_pct);
-      const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : 0;
-      const barColor = pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--amber)' : 'var(--red)';
+      const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : null;
+      const barColor = pct === null ? 'var(--text2)' : pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--amber)' : 'var(--red)';
       html += '<div class="zone"><div>';
       html += '<div class="zone-name">' + esc(String(z.name || 'Unnamed zone')) + '</div>';
       html += '<div class="zone-detail">' + (z.type === 'drip' ? '💧 Drip' : '🌱 Sprinkler') +
               ' · ET: ' + (z.etc_mm ? z.etc_mm.toFixed(1) : '?') + 'mm/day</div>';
-      html += '<div class="bar-wrap"><div class="bar" style="width:' + pct + '%;background:' + barColor + '"></div></div>';
+      html += '<div class="bar-wrap"><div class="bar" style="width:' + (pct === null ? 0 : pct) + '%;background:' + barColor + '"></div></div>';
       html += '</div><div class="zone-forecast">';
       html += '<div class="days ' + daysClass + '">' + daysText + '</div>';
-      html += (!isManual && z.next_water_date) ? '<div class="next-date">' + z.next_water_date + '</div>' : '';
+      html += (!isManual && authoritative && authoritative.date_label) ? '<div class="next-date">' + esc(authoritative.date_label) + '</div>' : '';
       if (!isManual) {
         const bias = z.dry_bias_mm || 0;
         html += '<div class="dry-row">';

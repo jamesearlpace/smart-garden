@@ -1000,6 +1000,7 @@ body.compact-mode .history td {
       captureChip.textContent = 'Capture: ' + state.capture.replace('T', ' ').slice(0, 19);
       setFrameChip('good', 'Frame: new image analyzed');
       setFrameActionsAvailable(true);
+      renderLockState();
       state.score = scoreFromCurrentImage();
       renderScore();
       updateCoach();

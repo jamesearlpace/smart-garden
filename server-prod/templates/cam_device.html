@@ -87,6 +87,14 @@ function renderTelemetry(t){
     if(!t||typeof t!=='object'||!t.series||typeof t.series!=='object'||!Array.isArray(t.series.frames))throw new Error('Telemetry format invalid.');
     var series=t.series||{};
     var rows=series.frames;
+    rows.forEach(function(r){
+      var ts=r&&(r.ts||r.timestamp), rssi=Number(r&&r.rssi);
+      var nonnegative=['gap_s','transfer_s','uptime_sec','reconnects'];
+      if(!r||!ts||!Number.isFinite(new Date(ts).getTime())||
+         (r.rssi!=null&&(!Number.isFinite(rssi)||rssi < -120||rssi > 0))||
+         nonnegative.some(function(k){return r[k]!=null&&(!Number.isFinite(Number(r[k]))||Number(r[k])<0);}))
+        throw new Error('Telemetry contains invalid measurements.');
+    });
     document.getElementById('rows').innerHTML=rows.slice(-200).reverse().map(function(r){
       return '<tr><td>'+fmtTime(r.ts||r.timestamp)+'</td><td>'+esc(r.rssi==null?'--':r.rssi)+'</td><td>'+esc(r.gap_s==null?'--':num(r.gap_s,1)+'s')+'</td><td>'+esc(r.transfer_s==null?'--':num(r.transfer_s,2)+'s')+'</td><td>'+esc(r.uptime_sec==null?'--':Math.round(r.uptime_sec/3600)+'h')+'</td><td>'+esc(r.reconnects==null?'--':r.reconnects)+'</td></tr>';
     }).join('') || '<tr><td colspan="6">No telemetry rows returned.</td></tr>';

@@ -441,3 +441,24 @@ Read all 48 findings in `orchestrator/_work/round-05/findings-0.json` through `f
 | usage/history/cost reporting | high/med | open - broader RCA | offset-aware instants and calendar coverage | Remains the common ZoneInfo-aware half-open reporting contract; isolated changes could reinterpret naive historical values. |
 
 All deployed files were copied from committed HEAD after timestamped remote backups. Python compilation, service restart, public `/login`, authenticated live page/API checks, and post-deploy SHA-256 parity passed. The required in-app browser runtime was not exposed by tool discovery, so the auditors' authenticated browser evidence was retained and live authenticated HTTP checks were used. The failed first deploy attempt copied no files because its staging paths were wrong; the service restart succeeded, the helper was corrected in `57b95db`, and the verified deployment then completed.
+
+## 2026-07-10 serial-fixer merge - round 06 failure truth and camera navigation
+
+Read all 27 findings in `orchestrator/_work/round-06/findings-0.json` through `findings-4.json`. Ten distinct page/issue refinements were added after deduplication. Shared camera navigation and Moisture Simulation batching refine existing campaigns. The Grapes auto-watering/scoring report is the already-logged real watering-behavior defect and was not changed.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| dashboard | high | fixed (`984e26c`) | API-controlled activity detail injection | Both recent-activity HTML sinks escape `recent[].detail`; injected markup renders literally. Template-only display fix. |
+| cam-device | med | fixed (`219c8a7`) | invalid telemetry measurements | Rows now require valid timestamps, plausible RSSI, and finite non-negative gap/transfer/uptime/reconnect values; invalid payloads fail the panel closed. |
+| forecast comparison | med | fixed (`4b4ac58`) | loading/empty announcements and busy state | Loading and empty states are polite status messages and the comparison container exposes its busy state. |
+| forecast comparison | med | fixed (`4b4ac58`) | incomplete schema shown as empty | Any rejected comparison row now produces an explicit data error with the rejected-row count instead of a valid-empty claim. |
+| forecast | med | fixed (`4b4ac58`) | keyboard tab semantics | Tabs use roving tabindex and support Left/Right, Home, and End with focus, selection, and activation synchronized. |
+| forecast comparison | med | open | 200% zoom reflow | The auditor measured 428px content at a 390px viewport only at 200% zoom. Requires isolated browser geometry to identify the remaining 38px source; do not add speculative global clipping. |
+| cam-device API | med | open - overlapping reporting fix | one-hour telemetry cutoff | `cam_telemetry.ts` is T-separated while the read-only query generates a space-separated cutoff, returning ~22 hours. The four-query correction is isolated, but `database.py` contains substantial unrelated in-progress work; deploy it from a clean coordinated patch. |
+| moisture-sim | high/med | open - broader RCA | stale/invented schedule, duplicate waves, mixed generations, validation | Deduplicates into the existing atomic all-zone snapshot campaign. One compact read-only snapshot plus generation metadata, schema validation, bounded failure, and one initialization owner are required; do not alter the schedule generator or client watering model. |
+| shared camera navigation / reading detail | med | open - overlapping work | completeness, current state, landmarks, responsive discovery, targets | Deduplicates into the existing shared-navigation campaign. `_meternav.html`, `cam_hub.html`, and `cam_reading.html` contain active unrelated changes, so this pass did not absorb or deploy them. |
+| cam hub | med | open - overlapping work | card focus visibility | The one-line focus treatment belongs in dirty `cam_hub.html`; land it with the shared-navigation work rather than committing unrelated edits. |
+| map | med | open | polling failure retains interactive stale state | On refresh failure, disable or clearly label old markers/list as last-known data with timestamp and Retry. |
+| map | med | open | partial schema becomes authoritative false state | Validate required dashboard fields and render Unknown rather than inferring offline/planned from missing values. |
+
+No backend `.py` file was committed or deployed. Three template-only display checkpoints used timestamped live backups, service restarts, `/login` smoke tests, and local/server SHA-256 parity. The in-app browser runtime was not exposed; authenticated auditor Playwright reproductions were retained and no unavailable browser rerun is claimed.

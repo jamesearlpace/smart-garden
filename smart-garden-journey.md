@@ -2486,3 +2486,15 @@ Decisions: The immutable camera identity/provenance findings remain the existing
 State: All four template checkpoints were deployed after timestamped remote backups. JavaScript parsing, authenticated live page/API checks, public `/login`, and local/server SHA-256 parity passed. The required in-app browser runtime was not exposed, so no new browser-DOM automation is claimed. No backend `.py`, irrigation balance, schedule, runtime, precipitation, valve, MAD, or watering configuration code changed.
 
 Next: Implement the durable camera entity and the bounded health/availability reporting contract, then land the three history cutoff query changes without absorbing unrelated `database.py` work.
+
+## 2026-07-10 - Serial UX fixer: round 06 failure states
+
+Context: Round 06 supplied 27 findings. Ten distinct page/issue refinements were merged; the Grapes report deduplicated into the existing watering-behavior quarantine.
+
+Changes: Dashboard activity detail is escaped at both HTML sinks (`984e26c`); Cam Device rejects semantically invalid telemetry rows (`219c8a7`); Forecast comparison announces busy/empty states, rejects partial schemas, and implements complete keyboard tab behavior (`4b4ac58`).
+
+Decisions: No backend Python or watering/control code was committed. The T-separated Cam Device cutoff remains blocked by unrelated active `database.py` work. Moisture atomic batching, shared camera navigation, Map stale/schema handling, and Forecast high-zoom geometry remain open. Real Grapes automatic watering was not disguised with a display patch.
+
+State: Three template checkpoints were backed up and deployed. Public `/login` and SHA-256 parity passed. The required in-app browser runtime was unavailable, so the authenticated raw-auditor browser evidence was retained and no browser rerun is claimed.
+
+Next: Land the clean read-only Cam Device cutoff, then run the Moisture snapshot, shared camera-navigation, and Map failure-contract campaigns.

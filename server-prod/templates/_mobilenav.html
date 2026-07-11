@@ -79,7 +79,7 @@
 </nav>
 
 <div class="sg-sheet-backdrop" id="sgSheetBackdrop"></div>
-<div class="sg-sheet" id="sgSheet" role="dialog" aria-label="More navigation">
+<div class="sg-sheet" id="sgSheet" role="dialog" aria-modal="true" aria-label="More navigation">
   <div class="sg-sheet-handle"></div>
   <div class="sg-sheet-title">More</div>
   <div class="sg-sheet-grid">
@@ -103,12 +103,34 @@
   var sheet = document.getElementById('sgSheet');
   var backdrop = document.getElementById('sgSheetBackdrop');
   var moreBtn = document.getElementById('sgMoreBtn');
-  function openSheet()  { if (sheet && backdrop) { sheet.classList.add('open'); backdrop.classList.add('open'); sheet.removeAttribute('inert'); sheet.setAttribute('aria-hidden','false'); moreBtn.setAttribute('aria-expanded','true'); var a=sheet.querySelector('a,button'); if(a)a.focus(); } }
-  function closeSheet(restore) { if (sheet && backdrop) { sheet.classList.remove('open'); backdrop.classList.remove('open'); sheet.setAttribute('inert',''); sheet.setAttribute('aria-hidden','true'); moreBtn.setAttribute('aria-expanded','false'); if(restore)moreBtn.focus(); } }
+  var mobileNav = moreBtn ? moreBtn.closest('nav') : null;
+  var backgroundNodes = Array.prototype.filter.call(document.body.children, function(el){
+    return el !== sheet && el !== backdrop && el !== mobileNav && el.tagName !== 'SCRIPT';
+  });
+  function setBackgroundInert(on){
+    backgroundNodes.forEach(function(el){ if(on) el.setAttribute('inert',''); else el.removeAttribute('inert'); });
+    if(mobileNav) mobileNav.querySelectorAll('a').forEach(function(a){
+      if(on){ a.dataset.sgOldTabindex=a.getAttribute('tabindex')||''; a.setAttribute('tabindex','-1'); }
+      else if(a.dataset.sgOldTabindex==='') a.removeAttribute('tabindex');
+      else if(a.dataset.sgOldTabindex!==undefined) a.setAttribute('tabindex',a.dataset.sgOldTabindex);
+    });
+  }
+  function openSheet()  { if (sheet && backdrop) { sheet.classList.add('open'); backdrop.classList.add('open'); sheet.removeAttribute('inert'); sheet.setAttribute('aria-hidden','false'); moreBtn.setAttribute('aria-expanded','true'); setBackgroundInert(true); var a=sheet.querySelector('a,button'); if(a)a.focus(); } }
+  function closeSheet(restore) { if (sheet && backdrop) { sheet.classList.remove('open'); backdrop.classList.remove('open'); sheet.setAttribute('inert',''); sheet.setAttribute('aria-hidden','true'); moreBtn.setAttribute('aria-expanded','false'); setBackgroundInert(false); if(restore)moreBtn.focus(); } }
   if(sheet){sheet.setAttribute('inert','');sheet.setAttribute('aria-hidden','true');}
   if (moreBtn) moreBtn.addEventListener('click', function(e){ e.preventDefault(); sheet.classList.contains('open')?closeSheet(true):openSheet(); });
   if (backdrop) backdrop.addEventListener('click', closeSheet);
-  document.addEventListener('keydown', function(e){if(e.key==='Escape'&&sheet&&sheet.classList.contains('open'))closeSheet(true);});
+  document.addEventListener('keydown', function(e){
+    if(!sheet || !sheet.classList.contains('open')) return;
+    if(e.key==='Escape'){ closeSheet(true); return; }
+    if(e.key==='Tab'){
+      var focusable=sheet.querySelectorAll('a[href],button:not([disabled])');
+      if(!focusable.length) return;
+      var first=focusable[0], last=focusable[focusable.length-1];
+      if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+    }
+  });
 
   document.querySelectorAll('.sg-nav-item[data-panel], .sg-sheet-item[data-panel]').forEach(function(el) {
     el.addEventListener('click', function(e) {

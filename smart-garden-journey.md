@@ -2427,6 +2427,18 @@ State: Both fixes were committed and deployed independently after timestamped re
 
 Next: Run the coordinated reporting-timezone contract, strict-CSP extraction, and origin-saturation RCAs. Do not change the two logged watering behaviors in a UX pass.
 
+## 2026-07-10 - Serial UX fixer: round 03 safe rendering and mobile containment
+
+Context: Reconciled all 41 round-03 auditor findings. Camera/calibration provenance, reporting-timezone, strict-CSP, and service-liveness reports deduplicated into existing coordinated campaigns. Manual Grapes and sync-group execution remain watering behavior and were not changed.
+
+Changes: Dashboard yard-map names now render through DOM text nodes (`58ff0e8`); Map zone-list names escape at the HTML sink (`dc26f35`); Forecast comparison allows a normal 60-second display window (`b3bc749`); Camera Quality tables reflow inside labeled keyboard-scroll regions (`ed137b7`).
+
+Decisions: All code changes are template-only display/usability fixes. No backend `.py`, irrigation balance, schedule generation, runtime, precipitation, valve, MAD, database, or configuration path changed. Broader data-contract, timezone, CSP, and infrastructure work remains open as coordinated RCA campaigns rather than individual raw findings.
+
+State: Four guarded deployments used timestamped remote backups, `/login` smoke checks, and SHA-256 parity. Authenticated Playwright interception verified zero dashboard/Map injected nodes, a delayed 16.1-second comparison completed, and Camera Quality document width fell from 750px to 390px at a 390px viewport.
+
+Next: Director campaigns remain camera/calibration provenance, ZoneInfo-aware reporting, strict CSP extraction, and service saturation/liveness. Do not change the logged Grapes or sync-group watering behavior in a UX pass.
+
 ## 2026-07-10 - Serial UX fixer: benchmark pagination and CNN insights
 
 Context: Round 01 supplied 25 findings. Seven distinct refinements were newly merged; none concerned watering behavior.

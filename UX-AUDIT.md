@@ -389,10 +389,10 @@ Reviewed all 41 findings in `orchestrator/_work/round-03/findings-0.json` throug
 
 | Page / area | Severity | Status | Category | Resolution / RCA |
 |---|---|---|---|---|
-| dashboard | high | open | API-controlled zone-name DOM injection | Although most dashboard zone-name sinks already escape text, the embedded yard-map tooltip still inserts the raw name into `innerHTML`; intercepted inert markup created DOM nodes. Construct/escape that tooltip at the sink and regression-test the marker path. |
-| map | high | open | API-controlled zone-name DOM injection | The zone-list renderer inserts `z.name` into an HTML string; intercepted inert markup became a DOM node. Escape the text at the sink and verify the list with an intercepted marker payload. |
-| forecast-vs-actual | high | open | normal response exceeds client deadline | The 15-second abort can show a timeout even when the API completes successfully with 240 comparisons. Align the display deadline with observed normal completion while retaining the explicit Retry state. |
-| cam/quality | med | open | mobile table overflow | At 390px the wide quality tables expand the document to 750px. Contain each table in a labeled keyboard-scrollable region so page-level reflow remains 390px. |
+| dashboard | high | fixed (`58ff0e8`) | API-controlled zone-name DOM injection | The embedded yard-map tooltip now builds child spans and assigns the API name with `textContent`. Live interception changed four injected elements into four literal tooltip strings. |
+| map | high | fixed (`dc26f35`) | API-controlled zone-name DOM injection | The zone-list renderer escapes `z.name` at its HTML sink. Live interception changed the injected element into literal text. |
+| forecast-vs-actual | high | fixed (`b3bc749`) | normal response exceeds client deadline | The display deadline is now 60 seconds while retaining abort and Retry. A live intercepted 16.1-second response rendered all comparison content without timing out. |
+| cam/quality | med | fixed (`ed137b7`) | mobile table overflow | Both tables are contained in named, keyboard-focusable horizontal scroll regions. Live 390px verification measured document width 390px; table overflow remains inside 358px regions. |
 | camera identity / provenance | high/med | open - broader RCA | immutable identity, authority, accepted-state and migration contract | Eight reports refine the existing camera data-contract campaign. A template patch cannot create durable joins, model/version authority, correction revision, or recover irrecoverable legacy frame identity. |
 | calibration / sensor APIs | high/med | open - broader RCA | active revision authority, sensor identity and observation freshness | Five reports deduplicate into the versioned calibration/sample serializer campaign; current config, append-only history, and samples lack one common revision/identity contract. |
 | water usage / reconcile / costs / weather and history APIs | high/med | open - broader RCA | offset-aware instants, DST folds, half-open bounds, calendar buckets and coverage | Fifteen reports deduplicate into the common ZoneInfo-aware reporting-contract campaign. Isolated query/label changes could reinterpret naive historical timestamps. |
@@ -401,3 +401,5 @@ Reviewed all 41 findings in `orchestrator/_work/round-03/findings-0.json` throug
 | forecast / moisture-sim / flow / audit | med | open - broader RCA | shared date, timezone, coverage, and schedule presentation contracts | Cross-page date and coverage reports remain coordinated reporting work. The sync-group mismatch is already logged as watering behavior because the authoritative schedule itself reports independent execution. |
 
 Low-only loading-state polish remains outside this pass.
+
+All four display-only checkpoints were deployed separately after timestamped remote backups. JavaScript parsing, live authenticated Playwright reproduction/regression checks, `/login` smoke tests, and local/server SHA-256 parity passed. No backend `.py`, watering engine, schedule generator, configuration, database, or valve path was edited.

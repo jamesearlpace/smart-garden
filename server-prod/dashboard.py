@@ -10205,10 +10205,12 @@ function driftLine(idx){
     if(!e) return label + ': <span class="muted">no history</span>';
     if(e.delta === null || e.delta === undefined)
       return label + ': <span class="muted">1 capture (' + e.latest_raw + ')</span>';
+    if(e.days === null || e.days === undefined || Number(e.days) <= 0.5)
+      return label + ': <span class="muted">captures too close together for drift analysis</span>';
     var sign = e.delta > 0 ? '+' : '';
     var sev = Math.abs(e.delta) >= 300 ? 'color:#ef4444' : Math.abs(e.delta) >= 120 ? 'color:#b45309' : 'color:#16a34a';
     var rate = (e.drift_per_30d !== null && e.drift_per_30d !== undefined) ? ' (' + (e.drift_per_30d>0?'+':'') + e.drift_per_30d + '/mo)' : '';
-    return label + ': <span style="' + sev + '">' + sign + e.delta + ' over ' + (e.days||'?') + 'd' + rate + '</span>';
+    return label + ': <span style="' + sev + '">' + sign + e.delta + ' over ' + e.days + 'd' + rate + '</span>';
   }
   return '<div class="drift">📉 drift since last cal — ' + part('dry', dry) + ' · ' + part('wet', wet) + '</div>';
 }

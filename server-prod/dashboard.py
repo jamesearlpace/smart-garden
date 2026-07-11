@@ -10168,6 +10168,7 @@ function toast(msg, isErr){
 function fmt(v){ return (v===null||v===undefined) ? '—' : v; }
 
 var DRIFT = {};  // "idx|point" -> drift entry
+var DRIFT_UNAVAILABLE = false;
 
 async function load(){
   try{
@@ -10177,10 +10178,16 @@ async function load(){
     // Pull drift history in parallel (best-effort).
     try{
       var hr = await fetch('/api/calibration/history');
+      if(!hr.ok) throw new Error('Calibration history request failed');
       var hd = await hr.json();
+      if(!hd || !Array.isArray(hd.drift)) throw new Error('Calibration history response was invalid');
       DRIFT = {};
-      (hd.drift||[]).forEach(function(e){ DRIFT[e.sensor_idx + '|' + e.point] = e; });
-    }catch(e){}
+      hd.drift.forEach(function(e){ DRIFT[e.sensor_idx + '|' + e.point] = e; });
+      DRIFT_UNAVAILABLE = false;
+    }catch(e){
+      DRIFT = {};
+      DRIFT_UNAVAILABLE = true;
+    }
     render(d);
     document.getElementById('liveBtn').disabled = false;
   }catch(e){
@@ -10190,6 +10197,8 @@ async function load(){
 }
 
 function driftLine(idx){
+  if(DRIFT_UNAVAILABLE)
+    return '<div class="drift" role="status">Drift history unavailable — retry to check calibration history.</div>';
   var dry = DRIFT[idx + '|dry'];
   var wet = DRIFT[idx + '|wet'];
   function part(label, e){

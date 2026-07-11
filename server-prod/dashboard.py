@@ -9822,6 +9822,7 @@ def create_app(config, engine, weather, billing):
             return {"table": name, "label": label, "status": "ERROR", "error": str(e)}
         last_ts = None
         rows_24h = 0
+        query_error = None
         if row_count > 0:
             try:
                 last_ts = conn.execute(f"SELECT MAX({ts_col}) FROM {name}").fetchone()[0]
@@ -9837,6 +9838,7 @@ def create_app(config, engine, weather, billing):
                     ).fetchone()[0]
             except Exception as e:
                 log.warning("audit(%s): MAX/COUNT failed: %s", name, e)
+                query_error = f"timestamp/count query failed: {e}"
         age_hours = None
         if last_ts:
             try:
@@ -9851,9 +9853,12 @@ def create_app(config, engine, weather, billing):
                 else:
                     age_hours = (datetime.now() - datetime.strptime(last_ts[:19], "%Y-%m-%dT%H:%M:%S")).total_seconds() / 3600
             except Exception as e:
-                log.debug("audit(%s): timestamp parse failed for %r: %s", name, last_ts, e)
+                log.warning("audit(%s): timestamp parse failed for %r: %s", name, last_ts, e)
+                query_error = f"unsupported timestamp {last_ts!r}: {e}"
         if name == "billing_cycle":
             status = "DISABLED"
+        elif query_error:
+            status = "ERROR"
         elif row_count == 0:
             status = "EMPTY"
         elif max_age_h is not None and age_hours is not None and age_hours > max_age_h:
@@ -9865,6 +9870,7 @@ def create_app(config, engine, weather, billing):
             "last_write": last_ts,
             "age_hours": round(age_hours, 2) if age_hours is not None else None,
             "max_age_hours": max_age_h, "status": status,
+            "error": query_error,
         }
 
     @app.route("/api/audit")

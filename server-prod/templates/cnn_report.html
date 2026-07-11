@@ -40,7 +40,7 @@ th{color:var(--text2);font-weight:600}
 <main id="main-content">
 <a href="/#cam" style="font-size:.85rem">&larr; Back to Water Meter Cam</a>
 <h1>CNN Improvement Report</h1>
-<div class="sub" id="sub">Loading&hellip;</div>
+<div class="sub" id="sub" role="status" aria-live="polite">Loading report...</div>
 
 <div class="kpis" id="kpis"></div>
 
@@ -78,7 +78,7 @@ th{color:var(--text2);font-weight:600}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function pct(n){return n==null?'—':n.toFixed(1)+'%';}
 
-function reportError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="reportRetry">Retry</button>';document.getElementById('reportRetry').addEventListener('click',loadReport);}
+function reportError(message){var s=document.getElementById('sub');s.innerHTML=esc(message)+' <button type="button" id="reportRetry">Retry</button>';document.getElementById('reportRetry').addEventListener('click',loadReport);}
 function loadReport(){
 var s=document.getElementById('sub');s.setAttribute('role','status');s.setAttribute('aria-live','polite');s.textContent='Loading report...';
 fetch('/api/cam/cnn-report').then(function(r){if(!r.ok)throw new Error('Could not load report (HTTP '+r.status+').');return r.json();}).then(function(d){

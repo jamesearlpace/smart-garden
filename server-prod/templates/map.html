@@ -131,6 +131,9 @@
       background: rgba(15,23,42,.65); color: var(--text1);
       font: inherit; font-size: .72rem; padding: 0 6px;
     }
+    .zone-item.stale { opacity: .65; }
+    .zone-item.stale .zone-btn, .zone-item.stale .run-duration { pointer-events: none; }
+    .retry-btn { margin-left: 8px; min-height: 36px; }
 
     .vb-label {
       font-size: .7rem; color: var(--text2); margin: 14px 0 6px;
@@ -362,6 +365,43 @@ function updateZoneList() {
   });
 }
 
+function setSnapshotStale(message) {
+  el('esp-dot').className = 'status-dot offline';
+  el('esp-status').textContent = message;
+  document.querySelectorAll('.zone-item').forEach(function(item) {
+    item.classList.add('stale');
+  });
+  document.querySelectorAll('.zone-btn, .run-duration').forEach(function(control) {
+    control.disabled = true;
+  });
+  document.querySelectorAll('.head-dot').forEach(function(dot) {
+    dot.setAttribute('aria-disabled', 'true');
+    dot.removeAttribute('tabindex');
+  });
+  var retry = el('map-retry');
+  if (!retry) {
+    retry = document.createElement('button');
+    retry.id = 'map-retry';
+    retry.className = 'zone-btn retry-btn';
+    retry.type = 'button';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', poll);
+    el('esp-status').parentNode.appendChild(retry);
+  }
+}
+
+function validDashboard(d) {
+  return d && typeof d === 'object' && !Array.isArray(d) &&
+    Object.prototype.hasOwnProperty.call(d, 'esp32') &&
+    (d.esp32 === null || (typeof d.esp32 === 'object' && !Array.isArray(d.esp32))) &&
+    Array.isArray(d.zones) &&
+    Array.isArray(d.planned_zones) &&
+    d.zones.concat(d.planned_zones).every(function(z) {
+      return z && Number.isInteger(z.id) && typeof z.name === 'string' &&
+        typeof z.installed === 'boolean' && typeof z.watering === 'boolean';
+    });
+}
+
 function zoneItemHtml(z) {
   var isPlanned = !z.installed;
   var isWatering = z.watering;
@@ -422,22 +462,28 @@ function ctrlRun(zoneId, minutes) {
 // ── Poll for live data ──
 function poll() {
   fetch('/api/dashboard')
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
     .then(function(d) {
-      var online = !!d.esp32;
+      if (!validDashboard(d)) throw new Error('Invalid dashboard response');
+      var online = d.esp32 !== null;
       el('esp-dot').className = 'status-dot ' + (online ? 'online' : 'offline');
       el('esp-status').textContent = online ? 'ESP32 Online' : 'ESP32 Offline';
       el('esp-time').textContent = new Date().toLocaleTimeString();
 
-      ZONES = d.zones || [];
-      PLANNED = d.planned_zones || [];
+      ZONES = d.zones;
+      PLANNED = d.planned_zones;
       renderHeadDots();
       updateDotStatus();
       updateZoneList();
+      var retry = el('map-retry');
+      if (retry) retry.remove();
     })
     .catch(function() {
-      el('esp-dot').className = 'status-dot offline';
-      el('esp-status').textContent = 'Server error';
+      var last = el('esp-time').textContent;
+      setSnapshotStale(last ? 'Data unavailable - last updated ' + last : 'Data unavailable');
     });
 }
 

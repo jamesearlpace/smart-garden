@@ -388,12 +388,18 @@ function zoneItemHtml(z) {
   return '<div class="zone-item ' + cls + '" data-zone="' + z.id + '">' +
     '<div class="zone-dot" style="background:' + color + '"></div>' +
     '<div class="zone-label">' +
-      '<div class="zone-name">Zone ' + (z.id + 1) + ' - ' + z.name + '</div>' +
+      '<div class="zone-name">Zone ' + (z.id + 1) + ' - ' + escapeHtml(z.name) + '</div>' +
       '<div class="zone-sub">' + typeLabel + '</div>' +
       btnHtml +
     '</div>' +
     '<span class="zone-badge ' + badgeCls + '">' + badgeTxt + '</span>' +
   '</div>';
+}
+
+function escapeHtml(value) {
+  var span = document.createElement('span');
+  span.textContent = value == null ? '' : String(value);
+  return span.innerHTML;
 }
 
 // ── Valve control ──

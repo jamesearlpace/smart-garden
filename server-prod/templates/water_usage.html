@@ -39,7 +39,13 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .applybtn.secondary{background:#eef2f6;color:var(--text);border:1px solid var(--border)}
 .ctlmsg{grid-column:1/-1;font-size:.75rem;color:var(--text2);min-height:1em}
 .ctlmsg.err{color:#dc2626;font-weight:600}
-@media (max-width:760px){.controls{grid-template-columns:1fr 1fr}.applybtn{width:100%}}
+@media (max-width:760px){
+  .controls{grid-template-columns:minmax(0,1fr)}
+  .controls>*{min-width:0;max-width:100%}
+  .applybtn{width:100%;min-height:44px}
+  .toolnav{max-width:100%}
+  .toolnav a{min-height:44px;display:inline-flex;align-items:center}
+}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:.95rem;margin-bottom:2px}
 .card .hint{font-size:.78rem;color:var(--text2);margin-bottom:10px}
@@ -122,6 +128,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <div class="ratesummary" id="rateSummary" style="display:none"></div>
 
 <div id="banner" class="banner muted">Checking for a slow leak…</div>
+<div id="loadRecovery" class="auditrow" hidden>
+  <button id="retryLoad" class="auditbtn" type="button">Retry loading water usage</button>
+</div>
 
 <div class="bar" id="chips"></div>
 
@@ -1347,6 +1356,8 @@ function showAuditFrame(p){
 }
 
 function load(){
+  var recovery=document.getElementById('loadRecovery');
+  if(recovery) recovery.hidden=true;
   document.getElementById('chips').innerHTML = RANGES.map(function(r){
     return '<span class="chip'+(state.mode==='relative'&&r[0]===state.minutes?' on':'')+'" data-m="'+r[0]+'">'+r[1]+'</span>';
   }).join('');
@@ -1375,9 +1386,11 @@ function load(){
     }
     var rs=document.getElementById('rateSummary');
     if(rs) rs.style.display='none';
+    if(recovery) recovery.hidden=false;
   });
   loadAudit();
 }
+document.getElementById('retryLoad').onclick = load;
 document.getElementById('applyRange').onclick = function(){
   var s=document.getElementById('startInput').value;
   var e=document.getElementById('endInput').value;

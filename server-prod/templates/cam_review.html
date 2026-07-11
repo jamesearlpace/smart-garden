@@ -46,6 +46,8 @@ h1{font-size:1.35rem;margin-bottom:2px}
 </main>
 
 <script>
+var currentReviewLink=document.querySelector('#mtnBar a[data-path="/cam/review"]');
+if(currentReviewLink)currentReviewLink.setAttribute('aria-current','page');
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function dig(s){ return (String(s||'').match(/\d/g)||[]).join(''); }

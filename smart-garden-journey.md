@@ -2592,3 +2592,15 @@ Decisions: All non-watering high/medium reports refine the existing atomic moist
 State: Zero distinct new findings, zero fixes, and no deployment. Thirty-five non-watering high/medium raw findings remain represented by six coordinated RCA campaigns. No backend Python or watering/control code changed.
 
 Next: Schedule the six coordinated contracts under their broader RCA campaigns; handle command-authority and Grapes behavior only through the watering-control change process.
+
+## 2026-07-11 - Round-17 audit convergence
+
+Context: Read and merged all 46 round-17 auditor findings; 38 were non-watering high/medium and three high findings were explicitly marked as watering behavior.
+
+Changes: Added the round-17 deduplication and campaign mapping to `UX-AUDIT.md`; no product code changed.
+
+Decisions: All non-watering high/medium reports refine the existing atomic moisture, dashboard provenance, reporting-time, persisted benchmark, typed CNN-metric, or durable camera-detail campaigns. The Grapes automatic-mode contradiction and dashboard/Map command-authority failures remain Watering-behavior DO NOT FIX. Dirty backend and camera work was preserved.
+
+State: Zero distinct new findings, zero fixes, and no deployment. Thirty-eight non-watering high/medium raw findings remain represented by six coordinated RCA campaigns. No backend Python or watering/control code changed.
+
+Next: Schedule the six coordinated contracts under their broader RCA campaigns; handle command-authority and Grapes behavior only through the watering-control change process.

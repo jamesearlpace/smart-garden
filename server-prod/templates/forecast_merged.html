@@ -254,11 +254,16 @@ function switchTab(id) {
 }
 
 /* ═══ TAB 1: Forecast ═══ */
+let forecastController = null;
+let forecastSequence = 0;
 async function loadForecast() {
+  const sequence = ++forecastSequence;
+  if (forecastController) forecastController.abort();
+  forecastController = new AbortController();
+  const controller = forecastController;
   const box = document.getElementById('forecast-content');
   box.setAttribute('aria-busy', 'true');
   box.innerHTML = '<div class="card" role="status" aria-live="polite">Updating forecast\u2026</div>';
-  const controller = new AbortController();
   const timer = setTimeout(function() { controller.abort(); }, 15000);
   try {
     const responses = await Promise.all([
@@ -273,14 +278,19 @@ async function loadForecast() {
     const schedule = await sr.json();
     if (!d || typeof d !== 'object' || !d.weather || !Array.isArray(d.zones)) throw new Error('Forecast data has an invalid format.');
     if (!schedule || typeof schedule !== 'object' || !schedule.next_water) throw new Error('Schedule data has an invalid format.');
+    if (sequence !== forecastSequence) return;
     renderForecast(d, schedule);
   } catch(e) {
+    if (sequence !== forecastSequence) return;
     const message = e && e.name === 'AbortError' ? 'Forecast request timed out.' : (e.message || 'Forecast is unavailable.');
     box.innerHTML = '<div class="card" role="alert">' + esc(message) + ' <button type="button" id="forecast-retry">Retry</button></div>';
     document.getElementById('forecast-retry').addEventListener('click', loadForecast);
   } finally {
     clearTimeout(timer);
-    box.setAttribute('aria-busy', 'false');
+    if (sequence === forecastSequence) {
+      forecastController = null;
+      box.setAttribute('aria-busy', 'false');
+    }
   }
 }
 

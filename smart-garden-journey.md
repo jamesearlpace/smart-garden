@@ -2545,3 +2545,15 @@ Context: Read and merged all 32 round-12 findings; none concerned watering behav
 Changes: Forecast loads now have one page-level abort owner and a render sequence, so an older overlapping response cannot overwrite newer display state (`065491d`).
 
 Decisions/State/Next: This was template-only; no backend or watering/control code changed. Deployed after a timestamped backup with authenticated forecast/API checks, `/login` smoke, service-active verification, and server/local SHA-256 parity. Continue the six coordinated campaigns recorded in `UX-AUDIT.md`.
+
+## 2026-07-10 - Round-13 audit convergence
+
+Context: Read and merged all 41 round-13 auditor findings; 38 were high/medium and one repeated the Grapes automatic-schedule contradiction.
+
+Changes: Added the round-13 deduplication and RCA campaign mapping to `UX-AUDIT.md`; no product code changed.
+
+Decisions: All non-watering high/medium reports refine existing coordinated atomic-snapshot, reporting-time, camera-detail, strict-CSP, regression-inference, or CNN-provenance campaigns. The Grapes schedule output remains Watering-behavior DO NOT FIX. Dirty `database.py` and camera/CSP files were preserved.
+
+State: Zero new distinct findings, zero fixes, no deployment, and 38 raw high/medium findings remain represented by six open coordinated campaigns.
+
+Next: Land those campaigns as coordinated changes with their required data contracts; do not patch schedule/control output from a UX pass.

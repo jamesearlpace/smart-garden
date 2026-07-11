@@ -3135,7 +3135,7 @@ function render(d) {
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
       var isW = ev.type === 'water';
       mfHtml += '<div class="mini-feed-item"><span class="mini-feed-icon">'+(isW ? '💧' : '🧠')+'</span>' +
-        '<span class="mini-feed-text"><strong>'+zn+'</strong> — '+(isW ? 'Watered '+ev.detail : 'Skipped: '+ev.detail)+'</span>' +
+        '<span class="mini-feed-text"><strong>'+zn+'</strong> — '+(isW ? 'Watered '+esc(ev.detail) : 'Skipped: '+esc(ev.detail))+'</span>' +
         '<span class="mini-feed-time">'+time+'</span></div>';
     });
   }
@@ -3263,7 +3263,7 @@ function render(d) {
       var isW = ev.type === 'water';
       var zn = esc(ev.zone_label || ZONE_NAMES[ev.zone_id] || 'Zone ' + (ev.zone_id + 1));
       var time = ev.ts ? new Date(ev.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
-      var detail = isW ? 'Watered for '+ev.detail+(ev.gallons ? ' · '+ev.gallons+' gal' : '') : 'Skipped: '+ev.detail;
+      var detail = isW ? 'Watered for '+esc(ev.detail)+(ev.gallons ? ' · '+ev.gallons+' gal' : '') : 'Skipped: '+esc(ev.detail);
       var savedLine = !isW && ev.gallons_saved ? '<div class="act-saved">↗ '+ev.gallons_saved+' gal saved</div>' : '';
       actHtml += '<div class="activity-item"><div class="act-icon '+ev.type+'">'+(isW?'💧':'🧠')+'</div>' +
         '<div class="act-body"><div class="act-head"><span class="act-zone">'+zn+'</span><span class="act-time">'+time+'</span></div>' +

@@ -30,10 +30,12 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 .table-scroll{max-width:100%;overflow-x:auto;border-radius:10px}
 .table-scroll:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
 .table-scroll table{min-width:680px}
+.skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:8px;background:#fff;padding:8px;z-index:10}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
+<a class="skip" href="#main-content">Skip to camera quality</a>
 {% include '_meternav.html' %}
 <main id="main-content">
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>

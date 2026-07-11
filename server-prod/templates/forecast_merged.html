@@ -525,7 +525,7 @@ function renderRow(c) {
   } else html += '— No ET demand';
   html += '</div><div style="font-size:.75rem;color:var(--text2)">Balance: ' +
           (c.balance_mm !== null ? c.balance_mm.toFixed(1) : '?') + '/' +
-          (c.taw_mm !== null ? c.taw_mm.toFixed(1) : '?') + 'mm · ET: ' +
+          (c.taw_mm !== null ? c.taw_mm.toFixed(1) : '?') + 'mm · ETc: ' +
           (c.etc_mm !== null ? c.etc_mm.toFixed(1) : '?') + 'mm' +
           (c.rain_forecast_mm > 0 ? ' · Rain fcst: ' + c.rain_forecast_mm.toFixed(1) + 'mm' : '') + '</div></div>';
   html += '<div class="actual-col"><div class="col-header">Actual</div><div class="detail">';

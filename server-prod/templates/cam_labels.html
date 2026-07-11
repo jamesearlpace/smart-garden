@@ -110,14 +110,15 @@ h1{font-size:1.35rem;margin-bottom:2px}
 
 <div class="bar" id="chips"></div>
 <div class="tools">
-  <button class="tbtn" id="btn-recent">🆕 Review captures</button>
+  <button class="tbtn" id="btn-recent" disabled>🆕 Review captures</button>
   <button class="tbtn on" id="btn-sort">🕒 Sort: Newest</button>
-  <button class="tbtn" id="btn-propagate" style="color:#0d9488;border-color:#99f6e4">🔗 Propagate from my fixes</button>
-  <button class="tbtn ai" id="btn-reprocess">🤖 Re-read filtered with AI</button>
-  <button class="tbtn retrain" id="btn-retrain">♻️ Retrain now</button>
+  <button class="tbtn" id="btn-propagate" style="color:#0d9488;border-color:#99f6e4" disabled>🔗 Propagate from my fixes</button>
+  <button class="tbtn ai" id="btn-reprocess" disabled>🤖 Re-read filtered with AI</button>
+  <button class="tbtn retrain" id="btn-retrain" disabled>♻️ Retrain now</button>
   <span id="jobstatus"></span>
 </div>
 <div class="grid" id="grid"></div>
+<div id="pager"></div>
 
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -141,7 +142,34 @@ function fmtLabel(l){
 }
 var STATUS_SET={manual:1,verified:1,promoted:1,corrected:1,review:1,rejected:1,banked:1,flagged:1,repaired:1,confirmed:1};
 function safeStatus(v){v=String(v||'');return STATUS_SET[v]?v:'review';}
-var ALL = [], filter = 'all', CAPTURES = 500, PROPAGATED = false, SORT = 'newest';
+var ALL = [], filter = 'all', CAPTURES = 100, PROPAGATED = false, SORT = 'newest';
+var VISIBLE_LIMIT = 100;
+var DATA_TRUSTED = false;
+var WRITE_IDS = ['btn-propagate','btn-reprocess','btn-retrain'];
+function setControlsReady(ready){
+  DATA_TRUSTED = !!ready;
+  WRITE_IDS.forEach(function(id){document.getElementById(id).disabled=!DATA_TRUSTED;});
+  document.getElementById('btn-recent').disabled=!DATA_TRUSTED;
+}
+function finiteCount(v){return Number.isInteger(v)&&v>=0;}
+function validItem(i){
+  return !!i && typeof i==='object' && typeof i.file==='string' && i.file.length>0
+    && typeof i.label==='string' && typeof i.status==='string'
+    && (i.captured_ms==null || (typeof i.captured_ms==='number' && isFinite(i.captured_ms)));
+}
+function validEnvelope(d){
+  return !!d && typeof d==='object' && finiteCount(d.total)
+    && d.counts && typeof d.counts==='object' && Array.isArray(d.items)
+    && (d.proposed==null || finiteCount(d.proposed))
+    && (d.recent==null || finiteCount(d.recent));
+}
+function showLoadError(message){
+  ALL=[]; setControlsReady(false); render();
+  var sub=document.getElementById('sub');
+  sub.setAttribute('role','alert');
+  sub.innerHTML=esc(message)+' <button type="button" id="labels-retry">Retry</button>';
+  document.getElementById('labels-retry').onclick=loadLabels;
+}
 
 function filtered(){
   if (filter==='all') return ALL;
@@ -159,7 +187,8 @@ function sortItems(items){
 }
 
 function render(){
-  var items = sortItems(filtered());
+  var allItems = sortItems(filtered());
+  var items = allItems.slice(0,VISIBLE_LIMIT);
   document.getElementById('grid').innerHTML = items.map(function(i){
     var status=safeStatus(i.status);
     var prop = '';
@@ -183,13 +212,18 @@ function render(){
       + (i.detail ? '<div class="dt">'+esc(i.detail)+'</div>' : '')
       + (function(){ var t=fmtTime(i.captured_ms); return t ? '<div class="ts'+(t.fresh?' fresh':'')+'">\ud83d\udd52 '+esc(t.abs)+' \u00b7 '+esc(t.rel)+'</div>' : ''; })()
       + '<div class="acts">'
-      +   '<button class="fix" data-act="fix">Fix</button>'
-      +   '<button class="ok" data-act="ok">OK</button>'
-      +   '<button class="rej" data-act="rej">Reject</button>'
+      +   '<button class="fix" data-act="fix"'+(DATA_TRUSTED?'':' disabled')+'>Fix</button>'
+      +   '<button class="ok" data-act="ok"'+(DATA_TRUSTED?'':' disabled')+'>OK</button>'
+      +   '<button class="rej" data-act="rej"'+(DATA_TRUSTED?'':' disabled')+'>Reject</button>'
       + '</div>'
       + prop
       + '</div></div>';
   }).join('') || '<div class="muted">none in this filter</div>';
+  var pager=document.getElementById('pager');
+  if(allItems.length>items.length){
+    pager.innerHTML='<button type="button" id="show-more-labels">Show 100 more</button> <span class="muted">Showing '+items.length+' of '+allItems.length+'</span>';
+    document.getElementById('show-more-labels').onclick=function(){VISIBLE_LIMIT+=100;render();};
+  } else { pager.textContent=allItems.length ? 'Showing all '+allItems.length : ''; }
   wireActions();
 }
 
@@ -270,11 +304,27 @@ function wireActions(){
 }
 
 function loadLabels(){
+  setControlsReady(false);
+  var sub=document.getElementById('sub');
+  sub.removeAttribute('role'); sub.textContent='Loading…';
   var _qs = [];
   if (CAPTURES) _qs.push('captures=' + CAPTURES);
   if (PROPAGATED) _qs.push('propagated=1');
-  return fetch('/api/cam/labels' + (_qs.length ? ('?' + _qs.join('&')) : '')).then(function(r){return r.json();}).then(function(d){
-  ALL = d.items || [];
+  return fetch('/api/cam/labels' + (_qs.length ? ('?' + _qs.join('&')) : '')).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(function(d){
+  if(!validEnvelope(d)) throw new Error('invalid envelope');
+  var rejected=0, duplicates=0, seen=Object.create(null), valid=[];
+  d.items.forEach(function(i){
+    if(!validItem(i)){rejected++;return;}
+    var key=i.file+'|'+String(i.captured_ms||'');
+    if(seen[key]){duplicates++;return;}
+    seen[key]=1; valid.push(i);
+  });
+  ALL = valid;
+  var fullyTrusted=!rejected && !duplicates && ALL.length>0;
+  setControlsReady(fullyTrusted);
   var c = d.counts || {};
   var np = d.proposed || 0;
   var nr = d.recent || 0;
@@ -287,7 +337,10 @@ function loadLabels(){
     + '<span style="color:var(--amber)">'+(c.review||0)+' review</span>, '
     + '<span style="color:var(--red)">'+(c.rejected||0)+' rejected</span>'
     + (np ? ' · <span style="color:#0891b2">'+np+' \ud83e\udd16 AI proposals</span>' : '')
-    + (nr ? ' · <span style="color:#0f766e">'+nr+' captures loaded</span>' : '');
+    + (nr ? ' · <span style="color:#0f766e">'+nr+' captures loaded</span>' : '')
+    + (rejected ? ' · <strong>'+rejected+' malformed record(s) omitted; actions disabled</strong>' : '')
+    + (duplicates ? ' · <strong>'+duplicates+' duplicate record(s) omitted; actions disabled</strong>' : '')
+    + (!ALL.length ? ' · <strong>No labels found</strong>' : '');
   var order = [['all','All'],['recent','\ud83c\udd95 To review'],['banked','Captured'],
                ['proposed','\ud83e\udd16 Proposed'],['manual','Manual'],
                ['verified','Verified'],['promoted','Promoted'],
@@ -308,6 +361,7 @@ function loadLabels(){
   document.querySelectorAll('.chip').forEach(function(ch){
     ch.onclick = function(){
       filter = ch.getAttribute('data-s');
+      VISIBLE_LIMIT = 100;
       document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('on');});
       ch.classList.add('on');
       render();
@@ -315,7 +369,7 @@ function loadLabels(){
   });
   render();
   }).catch(function(){
-    document.getElementById('sub').textContent = 'Could not load labels.';
+    showLoadError('Could not load labels.');
   });
 }
 

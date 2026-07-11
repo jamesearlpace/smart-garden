@@ -2,7 +2,7 @@ param([ValidateSet('diff','deploy','verify')] [string]$Action)
 $ErrorActionPreference = 'Stop'
 $remote = 'acer'
 $base = '/home/jamesearlpace/smart-garden-server'
-$files = @('dashboard.py', 'templates/login.html', 'templates/sensor_history.html', 'templates/cam_archive.html', 'templates/_mobilenav.html')
+$files = @('templates/cam_labels.html')
 
 if ($Action -eq 'diff') {
     $tmp = Join-Path $env:TEMP 'smart-garden-serial-fixer-remote'
@@ -20,7 +20,7 @@ if ($Action -eq 'diff') {
 
 if ($Action -eq 'deploy') {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/dashboard.py' '$base/templates/login.html' '$base/templates/sensor_history.html' '$base/templates/cam_archive.html' '$base/templates/_mobilenav.html' '$base/backups/serial-fixer-$stamp/'"
+    ssh $remote "mkdir -p '$base/backups/serial-fixer-$stamp' && cp --parents '$base/templates/cam_labels.html' '$base/backups/serial-fixer-$stamp/'"
     foreach ($file in $files) {
         scp (Join-Path 'server-prod' $file) "${remote}:$base/$file"
     }

@@ -366,3 +366,19 @@ Reviewed all 25 findings in `orchestrator/_work/round-01/findings-0.json` throug
 | health / schedule telemetry | med | open - broader RCA | public liveness attribution and route-local latency telemetry | Two findings deduplicate into the service-saturation campaign. `/api/schedule-7day` latency is route-local in this capture, but queue/lock/cache timing is absent; public liveness also cannot distinguish auth from process health. This is infrastructure/observability work, not display code. |
 
 Low findings were retained without entering the fix queue: closed mobile-dialog tree isolation, benchmark-filter empty state, CNN/favicon console hygiene, calibration reproducibility/empty-state detail, and the site-wide favicon 404. Every deployment used a timestamped server backup, restart, public `/login` smoke test, and SHA-256 parity check.
+
+## 2026-07-10 serial-fixer merge - round 02 Focus, Costs, and camera identity
+
+Reviewed all 20 findings in `orchestrator/_work/round-02/findings-0.json` through `findings-5.json`. Seven page/issue findings were newly folded into the backlog; thirteen were deduplicated into the existing camera data-contract, shared-navigation, reporting-timezone, and low-priority Costs items. None was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| cam/focus | high | fixed (`0796e73`) | mobile clipping | The page, grid children, canvas, and long controls can shrink within the viewport. Live Playwright at 390px measured document width 390px and canvas right edge 384px. The horizontal Meter tools strip keeps Focus visible and now exposes a scrollbar cue. |
+| cam/focus | med | fixed (`0796e73`, `56212e9`) | target size and current page | Back, buttons, selects, and Meter tools links are at least 44px despite the later shared stylesheet; Focus exposes `aria-current="page"`. Live Playwright found no short controls and centered the 83px Focus destination at x=153. |
+| cam/focus | med | fixed (`0796e73`) | state announcements and canvas equivalence | Added a polite textual ROI/orientation/rotation/padding summary, a failure alert, canvas instructions, keyboard focus, and slider equivalence. Black rotation padding is explicitly distinguished from browser clipping. |
+| costs | med | fixed (`8ff744b`) | snapshot provenance | Daily bars and accessible values identify auto, bill, interpolated, and carried sources; gaps anywhere between real rows are described as interpolation. The disclosure uses authoritative `used_gal` and an existing all-zero series renders as data instead of missing history. |
+| costs | med | fixed (`8ff744b`) | cross-report reconciliation | The page names whole-house meter movement as bill-reconciliation authority and identifies `/api/billing` as a separate irrigation-planning estimate with the 150 ft³ indoor baseline. |
+| costs | med | fixed (`8ff744b`) | historical provenance | Every history row now distinguishes paid paper bills, completed derived cycles with their start/end sources, and the open-cycle live-meter projection. |
+| camera reading / archive / quality APIs | high/med | open - broader RCA | immutable identity, accepted-state provenance, durable detail, timestamps, model/confidence/correction attribution | Nine raw findings deduplicate into the camera data-contract campaign. The live RID is volatile, Archive and Quality use independent keys, and legacy quality rows have no frame attribution. A UI-only patch cannot truthfully create joins, accepted authority, capture times, model versions, or correction history. Existing uncommitted camera-pipeline work was preserved. |
+
+The incidental low Costs drift and zero-state defects were corrected by `8ff744b`; the low Focus padding/clipping explanation was corrected by `0796e73`. Deployments used timestamped remote backups, live `/login` smoke tests, authenticated API/browser checks, and post-deploy SHA-256 parity. No Python backend file was edited.

@@ -2438,3 +2438,15 @@ Decisions: `dashboard.py` changed only in the read-only camera benchmark seriali
 State: Eleven high/medium findings were fixed through timestamped-backup deployments. Public login smoke, Python compilation, authenticated API checks, Playwright desktop/mobile geometry, invalid-response interception, and server/local SHA-256 parity passed. Eleven high/medium findings remain open across the three coordinated campaigns.
 
 Next: Run the shared ZoneInfo reporting-contract migration, then the versioned calibration/sample serializer and service-observability campaigns.
+
+## 2026-07-10 - Serial UX fixer: round 02 Focus and Costs provenance
+
+Context: Round 02 supplied 20 findings across camera identity, Focus accessibility/responsiveness, and Costs provenance. None concerned watering behavior.
+
+Changes: Focus now contains its canvas/workflow at 390px, keeps the current tool visible, exposes 44px targets and current-page semantics, and provides canvas instructions plus live ROI/orientation/padding and failure text (`0796e73`, `56212e9`). Costs now uses API `used_gal`, labels daily and bill-history provenance, renders zero-use series, and explains why its whole-house projected bill does not reconcile with the separate irrigation-planning estimate (`8ff744b`).
+
+Decisions: Nine camera identity/provenance findings remain one coordinated data-contract RCA. Volatile RIDs, independent archive/quality keys, absent accepted-authority fields, and irrecoverable legacy attribution cannot be repaired honestly in display code. Existing uncommitted camera-pipeline and shared-navigation work was preserved. No Python backend or watering/control code changed.
+
+State: Three checkpoints deployed with timestamped backups. Public `/login`, authenticated Costs and Focus APIs/pages, 390px browser geometry, target sizes, semantics, and local/server SHA-256 parity passed.
+
+Next: Implement the durable camera frame/provenance entity and common serializers as a dedicated RCA campaign.

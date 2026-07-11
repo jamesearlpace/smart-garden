@@ -16,4 +16,13 @@ Live data reports Garden (DB zone 7 / display Zone 8) as manual and excludes it 
 
 Pre-deploy: `dashboard.py` compiled; extracted inline JavaScript passed `node --check`; zone-label guard and `git diff --check` passed. The allowed files were clean at baseline, so no pre-existing edits overlap this patch. No control code, config, or database data was changed.
 
-Deployment, live safety query timestamps/results, hashes, rollback files, and commit/push status are recorded below after deployment.
+Deployment completed once at approximately `2026-07-11 08:40 PDT`. Live rollback files:
+
+- `/home/jamesearlpace/smart-garden-server/dashboard.py.bak.schedule-viewer-20260711-084018`
+- `/home/jamesearlpace/smart-garden-server/templates/moisture_sim.html.bak.schedule-viewer-20260711-084018`
+
+The service was restarted once and remained active. Pre-restart baseline at `08:40:17 PDT`: maximum watering event ID `778`, open events `0`. Immediate post-restart query at `08:40:37 PDT`: open events `0`, events after ID `778` `0`, new events with `soil_before` from 45–55 `0`; authenticated `/api/status` returned `active_zones=[]`. Delayed recheck at `08:41:03 PDT` returned the same zero counts. The post-restart log showed Garden skipped because manual mode disables auto-watering and contained no error, traceback, or watering-start message.
+
+Live `/login`, authenticated `/moisture-sim`, and authenticated `/api/schedule-7day` returned `200`. The API represented the 24-second South event as `seconds=24`, `minutes=0.4`; manual Garden was absent from schedule columns. Local/live SHA-256 hashes matched: `dashboard.py` `0fe12665e35f24e32fadd73d45730aaff9eee07b96921c33e22373a178e1001c`; `moisture_sim.html` `6bb95530cf1393e3efb54d899a41439d1a53237efda1d34a8e0f1718d915ed1d`.
+
+Implementation commit `644152b` was pushed before deployment. This note's deployment evidence was committed separately after the live checks. No control code/config changed and no database write was performed.

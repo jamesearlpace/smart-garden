@@ -2462,3 +2462,15 @@ Decisions: Nine camera identity/provenance findings remain one coordinated data-
 State: Three checkpoints deployed with timestamped backups. Public `/login`, authenticated Costs and Focus APIs/pages, 390px browser geometry, target sizes, semantics, and local/server SHA-256 parity passed.
 
 Next: Implement the durable camera frame/provenance entity and common serializers as a dedicated RCA campaign.
+
+## 2026-07-10 - Serial UX fixer: round 04 camera tools and health
+
+Context: Read and merged all 35 round-04 auditor findings. The actionable display work covered Regression interaction, Convergence recovery/accessibility, Cam Device polling/failure isolation, and ambiguous Health uptime/verdict labels.
+
+Changes: `574c892` makes the active Regression link non-navigating, adds frame-specific action/image names, and adds filter/sort/paging. `df0db34` adds bounded Convergence loading with Retry, fail-closed output, chart/table equivalence, reflow containment, textual disagreement status, table semantics, current navigation, and 44px targets. `da1872b` independently classifies Cam Device panels, validates schema, reduces telemetry polling to one hour, prevents overlap, and pauses hidden tabs. `4a6c8f5` distinguishes application-process from ESP32 uptime and scopes the healthy banner to ESP32 reboot state.
+
+Decisions: The immutable camera identity/provenance findings remain the existing data-contract RCA. Listener/auth/worker/layer telemetry and incident accounting remain the health/infrastructure RCA. The three T-separated health-history cutoff fixes are display/report queries, but `database.py` contains unrelated uncommitted work; deploying the whole file would absorb that work, so the query fix remains explicitly blocked for a clean coordinated patch. No watering behavior was reported or changed.
+
+State: All four template checkpoints were deployed after timestamped remote backups. JavaScript parsing, authenticated live page/API checks, public `/login`, and local/server SHA-256 parity passed. The required in-app browser runtime was not exposed, so no new browser-DOM automation is claimed. No backend `.py`, irrigation balance, schedule, runtime, precipitation, valve, MAD, or watering configuration code changed.
+
+Next: Implement the durable camera entity and the bounded health/availability reporting contract, then land the three history cutoff query changes without absorbing unrelated `database.py` work.

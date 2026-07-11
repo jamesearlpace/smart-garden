@@ -208,7 +208,7 @@ def _commit_run_segment(zone_id, gpms, config):
              datetime.now().isoformat(timespec="seconds")))
         conn.commit()
         log.info("zone %s GPM est: run=%.2f ewma=%.2f median=%.2f (n_runs=%d)",
-                 zone_id, run_gpm, ewma, median_gpm, n_runs)
+                 zone_id + 1, run_gpm, ewma, median_gpm, n_runs)
     finally:
         conn.close()
 
@@ -373,7 +373,7 @@ def _classify(active, gpm, delta_cf, interval, config):
                 _commit_run_segment(_state.run_zone, _state.run_gpms, config)
             _state.run_zone, _state.run_gpms = z, []
         _state.run_gpms.append(gpm)
-        _last_state, _last_note = "zone", f"zone {z} @ {gpm:.2f} gpm"
+        _last_state, _last_note = "zone", f"zone {z + 1} @ {gpm:.2f} gpm"
         # A real zone run also means flow IS explained — close leak events.
         _close_open_event()
         return

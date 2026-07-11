@@ -549,7 +549,7 @@ function renderIntegrity(d){
     return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
       + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
       + '<span style="color:'+color+';font-weight:700">'+tag+'</span> &middot; '
-      + '<strong>'+esc(w.zone_label||('Zone '+w.zone_id))+'</strong> &middot; '
+      + '<strong>'+esc(w.zone_label||('Zone '+(Number(w.zone_id)+1)))+'</strong> &middot; '
       + esc(fullStamp(w.event_start)) + '<br>'
       + '<span style="color:var(--text2)">'+detail+'</span></div>';
   }).join('');
@@ -609,7 +609,7 @@ function renderPhaseTracker(d){
     return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
       + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
       + '<span style="color:'+color+';font-weight:700">'+label+'</span> &middot; '
-      + '<strong>'+esc(e.zone_label || ('Zone '+e.zone_id))+'</strong> &middot; '
+      + '<strong>'+esc(e.zone_label || ('Zone '+(Number(e.zone_id)+1)))+'</strong> &middot; '
       + esc(fullStamp(e.start)) + '<br>'
       + '<span style="color:var(--text2)">candidate '+esc(e.candidate_gallons)+' gal'
       + truth + err + ' · coverage '+esc(e.coverage)
@@ -677,7 +677,7 @@ function renderPhaseTracker(d){
     return '<div style="border-left:4px solid '+color+';padding:6px 10px;margin:6px 0;'
       + 'background:rgba(0,0,0,.03);border-radius:4px;font-size:.8rem">'
       + '<span style="color:'+color+';font-weight:700">'+label+'</span> &middot; '
-      + '<strong>'+esc(e.zone_label || ('Zone '+e.zone_id))+'</strong> &middot; '
+      + '<strong>'+esc(e.zone_label || ('Zone '+(Number(e.zone_id)+1)))+'</strong> &middot; '
       + esc(fullStamp(e.start)) + '<br>'
       + '<span style="color:var(--text2)">candidate '+esc(e.candidate_gallons)+' gal'
       + truth + err + ' - coverage '+esc(e.coverage)

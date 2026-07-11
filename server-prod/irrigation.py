@@ -361,7 +361,8 @@ class IrrigationEngine:
                              self._zone_label(zone_id), active["event_id"],
                              duration_sec, est_gallons)
                 except Exception as e:
-                    log.error("close_all: failed to finalize zone %d: %s", zone_id, e)
+                    log.error("close_all: failed to finalize %s: %s",
+                              self._zone_label(zone_id), e)
             return True
         except Exception as e:
             log.error("Failed to close all: %s", e)
@@ -1194,7 +1195,8 @@ class IrrigationEngine:
         # (race, manual override, or future bug). Log loudly so it shows up.
         if len(self._active) > 1:
             log.error("INVARIANT VIOLATED: %d zones active after run_cycle: %s",
-                      len(self._active), list(self._active.keys()))
+                      len(self._active),
+                      [self._zone_label(z) for z in self._active])
 
         # Log one summary row per cycle instead of per-zone skip events
         if n_skipped > 0 or n_watered > 0:

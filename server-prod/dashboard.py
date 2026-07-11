@@ -128,7 +128,7 @@ def create_app(config, engine, weather, billing):
         try:
             zid = int(zone_id)
         except (TypeError, ValueError):
-            return f"Unknown zone {zone_id}"
+            return "Unknown zone"
         if zid == ALL_VALVES_ZONE_ID:
             return "All Valves"
         for z in config.get("zones", []):
@@ -2739,7 +2739,7 @@ def create_app(config, engine, weather, billing):
         checked = missing = outliers = 0
         for z in zone_report.get("zones", []):
             zid = z.get("zone_id")
-            zlabel = z.get("zone_label") or z.get("zone_name") or f"Zone {zid}"
+            zlabel = z.get("zone_label") or z.get("zone_name") or zone_label(zid)
             baseline_med = (z.get("baseline") or {}).get("median_gpm")
             for run in z.get("selected_runs", []):
                 checked += 1

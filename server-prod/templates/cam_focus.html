@@ -1489,6 +1489,8 @@ body.compact-mode .history td {
   renderLockState();
   renderHistory();
   updateCoach();
+  var toolNav = document.getElementById('mtnBar');
+  if (toolNav) toolNav.scrollLeft = 0;
   setFrameActionsAvailable(false);
   fetchFrame(true);
   startPolling();

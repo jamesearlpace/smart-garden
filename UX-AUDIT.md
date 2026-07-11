@@ -196,3 +196,12 @@ Reviewed all 23 raw findings in `orchestrator/findings-0.json` through `findings
 | cam/labels | med | fixed (`035a019`) | large response | Hundreds of image-heavy cards rendered at once. | Initial captures are capped at 100 and rendering is paged in 100-card batches, bounding initial image/control construction while retaining access to all returned records. |
 
 Low findings retained: Focus cold-load latency variance and Labels explicit empty-state polish (the latter now has a clear message and disabled actions as part of the safety fix).
+
+## 2026-07-10 serial-fixer merge — regression traceability
+
+Reviewed all 19 raw findings in `orchestrator/findings-0.json` through `findings-5.json`. Seventeen camera-contract, strict-CSP, deployment-availability, health-probe, and favicon findings were deduplicated into the existing broader campaigns or low backlog. Two medium regression/quality findings were new. None was watering behavior.
+
+| Page | Severity | Status | Category | Expected vs Actual | Resolution / RCA |
+|------|----------|--------|----------|--------------------|------------------|
+| cam/regression | med | fixed (`143b21b`) | aggregate provenance | The page uses the evaluated `?flag=1` response, but the canonical unevaluated response omits `cnn`, `cnn_conf`, `pass`, and per-record error, so the displayed aggregate is not reproducible from the record set users are told about. | The live page identifies its evaluated endpoint, derives the aggregate from displayed `frames[].pass`, and warns on server/client total mismatch. Browser and authenticated API verification matched 0/9. |
+| cam/quality ↔ cam/regression | med | fixed (`ef8fa37`) | cross-page traceability | Quality recent rows expose only a timestamp and values, while regression uses durable bank filenames; shared-frame membership cannot be checked deterministically. | New evaluations persist and return the oracle-bank filename; the Quality table displays it and labels pre-migration rows `legacy — unavailable`. Live API returned `frame_file` on all 30 rows and the browser rendered the new Frame column. `cnn_metrics.py` and `dashboard.py` changes are reporting-only and do not affect irrigation. |

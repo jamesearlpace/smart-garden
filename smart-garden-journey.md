@@ -2343,3 +2343,14 @@ Changes: The labels controller now starts fail-safe, checks HTTP and envelope sh
 Decisions: Reading-detail provenance, durable IDs, timestamps, and the overlapping mobile-template edit require a common live/archive camera data contract, so those findings are logged for a broader RCA rather than receiving a misleading template-only patch. CSP extraction and restart availability remain broader campaigns. No Python backend or watering/control code changed.
 
 State: Commit `035a019` was deployed after a timestamped remote backup. Inline JavaScript parsing, zone-label checks, live authenticated API shape, `/login` smoke, and server/local SHA-256 parity passed. The requested in-app browser runtime was not exposed in this session; command-line Playwright fallback lacked an importable test package, so browser-state interception could not be repeated after deploy.
+## 2026-07-10 - Serial UX fixer: regression provenance
+
+Context: Parallel auditors found two medium traceability gaps between the regression and live-quality displays.
+
+Changes: Regression now identifies the evaluated `?flag=1` record set and derives its score from displayed frame verdicts (`143b21b`). New CNN/oracle evaluations persist their durable oracle-bank filename; the Quality API and table expose it while legacy rows are labeled unavailable (`ef8fa37`). Added a reusable deployment script that hashes local/remote files before and after, backs up deploy targets, optionally stops the service and backs up the live database, smoke-tests public `/login`, and enforces parity.
+
+Decisions: `cnn_metrics.py` and `dashboard.py` were changed only in the camera reporting path. No irrigation, water-balance, valve, runtime, schedule, or watering configuration code changed. Historical quality rows remain honestly marked as legacy rather than guessed by timestamp.
+
+State: Compiles passed. Both checkpoints were deployed with backups. Browser and authenticated API checks passed live; server/local hashes match.
+
+Next: The existing camera identity contract, strict-CSP migration, and zero-downtime deployment findings remain director-level RCA campaigns.

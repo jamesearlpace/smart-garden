@@ -155,7 +155,9 @@ a { color: var(--blue); text-decoration: none; }
   .tabs { flex-direction: column; align-items: stretch; }
   .tab { width: 100%; min-width: 0; padding-inline: 8px; text-align: left; }
   .controls, .control, .controls select, .controls button { width: 100%; min-width: 0; max-width: 100%; }
-  .acc-stat { min-width: 0; padding-inline: 6px; }
+  .accuracy-banner { min-width: 0; max-width: 100%; }
+  .acc-stat { flex-basis: auto; width: 100%; min-width: 0; max-width: 100%; padding-inline: 4px; overflow-wrap: anywhere; }
+  .acc-stat .aval { font-size: 1.2rem; }
   .zone { align-items: flex-start; flex-direction: column; }
   .zone-forecast { max-width: 100%; min-width: 0; text-align: left; overflow-wrap: anywhere; }
   .bar-wrap { max-width: 100%; }

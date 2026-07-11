@@ -2,11 +2,13 @@ param([string[]]$Files)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $stage = Join-Path $env:TEMP 'smart-garden-round05-head'
-if (Test-Path $stage) { git -C $root worktree remove --force $stage }
+if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+git -C $root worktree prune
 git -C $root worktree add --detach $stage HEAD
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 foreach ($rel in $Files) {
-    $remote = "~/smart-garden-server/$rel"
+    $remoteRel = $rel -replace '^server-prod/', ''
+    $remote = "~/smart-garden-server/$remoteRel"
     $local = Join-Path $stage $rel
     Write-Output "BEFORE $rel local=$((Get-FileHash $local -Algorithm SHA256).Hash.ToLower()) remote=$(ssh acer "sha256sum $remote")"
     ssh acer "test ! -f $remote || cp $remote $remote.bak.$stamp"
@@ -22,7 +24,8 @@ if ($login -ne '200') { throw "Login smoke failed: HTTP $login" }
 foreach ($rel in $Files) {
     $local = Join-Path $stage $rel
     $localHash = (Get-FileHash $local -Algorithm SHA256).Hash.ToLower()
-    $remoteHash = (ssh acer "sha256sum ~/smart-garden-server/$rel").Split()[0]
+    $remoteRel = $rel -replace '^server-prod/', ''
+    $remoteHash = (ssh acer "sha256sum ~/smart-garden-server/$remoteRel").Split()[0]
     if ($localHash -ne $remoteHash) { throw "Parity failed: $rel" }
     Write-Output "AFTER $rel parity=$localHash"
 }

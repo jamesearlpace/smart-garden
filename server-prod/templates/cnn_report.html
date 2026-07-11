@@ -77,12 +77,25 @@ th{color:var(--text2);font-weight:600}
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function pct(n){return n==null?'—':n.toFixed(1)+'%';}
+function reportJson(r){
+  if(!r.ok)throw new Error('Could not load report (HTTP '+r.status+').');
+  return r.text().then(function(body){
+    try{return JSON.parse(body);}catch(e){throw new Error('Report returned invalid JSON.');}
+  });
+}
+function validReport(d){
+  return d&&typeof d==='object'&&!d.error&&Array.isArray(d.by_version)&&
+    Array.isArray(d.daily)&&Array.isArray(d.recent)&&d.stats&&typeof d.stats==='object'&&
+    d.by_version.every(function(v){return v&&typeof v==='object'&&Number.isFinite(v.evals)&&Number.isFinite(v.correct||0)&&(v.acc_pct==null||Number.isFinite(v.acc_pct));})&&
+    d.daily.every(function(v){return v&&typeof v==='object';})&&
+    d.recent.every(function(v){return v&&typeof v==='object';});
+}
 
 function reportError(message){var s=document.getElementById('sub');s.innerHTML=esc(message)+' <button type="button" id="reportRetry">Retry</button>';document.getElementById('reportRetry').addEventListener('click',loadReport);}
 function loadReport(){
 var s=document.getElementById('sub');s.setAttribute('role','status');s.setAttribute('aria-live','polite');s.textContent='Loading report...';
-fetch('/api/cam/cnn-report').then(function(r){if(!r.ok)throw new Error('Could not load report (HTTP '+r.status+').');return r.json();}).then(function(d){
-  if (!d||typeof d!=='object'||d.error){throw new Error(d&&d.error?d.error:'Report data has an invalid format.');}
+fetch('/api/cam/cnn-report').then(reportJson).then(function(d){
+  if(!validReport(d)){throw new Error('Report data has an unexpected format.');}
   var bv = d.by_version||[], daily=d.daily||[], recent=d.recent||[], st=d.stats||{};
 
   // overall accuracy (all versions)

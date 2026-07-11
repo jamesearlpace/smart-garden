@@ -174,3 +174,25 @@ Reviewed all 35 raw findings in `orchestrator/findings-0.json` through `findings
 | sensor-history | med | fixed (`b347cd2`) | responsive reflow / zoom | Sensor cards widened the document to 478px at the audited narrow zoom equivalent. | Grid tracks and cards can shrink to 100% with zero minimum-content overflow. |
 
 Low findings retained for later polish: camera capture latency variability; archive cache/performance baseline; route-specific authenticated CSP minimization; dashboard data-image removal; Calibration landmarks/table refinements; and Login loading/keyboard recovery.
+
+## 2026-07-10 serial-fixer merge — reading provenance and label robustness
+
+Reviewed all 23 raw findings in `orchestrator/findings-0.json` through `findings-5.json`. Thirteen page/issue findings were new; strict-CSP and restart-availability reports were deduplicated into the existing broader campaigns. None was watering behavior.
+
+| Page | Severity | Status | Category | Expected vs Actual | Resolution / RCA |
+|------|----------|--------|----------|--------------------|------------------|
+| authenticated site | high | open — broader RCA | deployment availability | Planned service restarts caused brief origin-refused 502s across unrelated pages and APIs. | Display code cannot provide zero-downtime origin switching; director should schedule deployment/proxy RCA. |
+| authenticated site | high | open — broader RCA | strict CSP / script and DOM sinks | Inline controllers/handlers and inconsistent API-to-HTML rendering block strict CSP across dashboard, Forecast, Map, Moisture Simulation, and camera pages. | Deduped into the staged CSP extraction campaign; page-family migration and regression coverage are required. |
+| authenticated site | med | open — broader RCA | strict CSP / inline styles | Hundreds of inline/dynamic style attributes block `style-src 'self'`. | Deduped into the staged CSP extraction campaign. |
+| dashboard camera | med | open — broader RCA | CSP image source | Authenticated camera blobs require `blob:` if CSP is enforced. | Add the scheme only as part of the strict policy rollout after controller migration. |
+| cam/reading | high | open — broader RCA | reading provenance | Carried validated locks are labeled as the current frame's Reading even when the frame produced no fresh read. | Requires a common live/archive serializer contract separating frame model output, accepted lock, source, confidence, and disposition. Existing uncommitted camera-pipeline work overlaps this contract; do not patch the template alone. |
+| cam/reading | high | open — broader RCA | cross-endpoint consistency | Oracle detail can expose a rolled-back model result as Reading while the accepted monotonic lock differs. | Same serializer/provenance RCA; label model output and accepted/rejected/constrained disposition separately. |
+| cam/reading / archive | med | open — broader RCA | durable identity | Volatile live RIDs expire and archive rows have no compatible detail identity. | Persist a stable frame identity and archive fallback as part of the camera data-contract campaign. |
+| cam/reading | med | open — broader RCA | timestamps | Detail/live timestamps omit date and timezone offset. | Return and display canonical ISO timestamps with offsets in the common serializer campaign. |
+| cam/reading mobile | med | open — overlapping work | More sheet initial state | The reading page exposed the mobile dialog immediately. | Uncommitted user changes already modify this template and shared navigation; preserve them and verify/commit in the camera data-contract campaign. |
+| cam/labels | high | fixed (`035a019`) | fail-safe controls | Mutations stayed enabled during loading, errors, empty, and uncertain data. | Controls now start disabled and enable only after a fully valid, non-empty response. |
+| cam/labels | med | fixed (`035a019`) | error recovery / schema | HTTP, JSON, and envelope failures lacked safe Retry; malformed envelopes rendered undefined values. | Status/schema validation now fails closed into an announced GET-only Retry state. |
+| cam/labels | med | fixed (`035a019`) | partial/duplicate records | One malformed record collapsed the list and duplicate records produced repeated actions. | Records validate and deduplicate independently; valid subsets render read-only with rejected/duplicate counts. |
+| cam/labels | med | fixed (`035a019`) | large response | Hundreds of image-heavy cards rendered at once. | Initial captures are capped at 100 and rendering is paged in 100-card batches, bounding initial image/control construction while retaining access to all returned records. |
+
+Low findings retained: Focus cold-load latency variance and Labels explicit empty-state polish (the latter now has a clear message and disabled actions as part of the safety fix).

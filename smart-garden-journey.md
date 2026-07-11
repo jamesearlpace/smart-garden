@@ -2321,6 +2321,7 @@ Context: `/cam-device` failed with `rows.slice is not a function` because `/api/
 Changes: Commit `34e6af3` explicitly renders `series.frames`, checks both HTTP responses, replaces stale table content with a retryable error, and binds Refresh without an inline handler.
 
 State: Deployed after a timestamped server backup. `/login` returned 200, server/local SHA-256 matched, and authenticated live browser verification rendered 13 telemetry rows without a load-failed state. Template-only display change; no Python backend or watering/control code changed.
+
 ## 2026-07-10 - Serial UX fixer: auth, sensor history, archive loading
 
 Context: Parallel UX findings identified unsafe login return handling, ambiguous unauthenticated API redirects, sensor-history boundary/recovery failures, and an eager archive image burst.
@@ -2332,3 +2333,13 @@ Decisions: `dashboard.py` changes are display/authentication-only; no irrigation
 State: Deployed with backups. Python compile, live `/login`, authenticated browser checks, unauthenticated curl, forced HTTP-500 recovery, initial archive request count, and server/local parity passed.
 
 Next: The strict-CSP extraction findings remain a broader staged campaign; investigate intermittent tunnel 502 only if recaptured.
+
+## 2026-07-10 - Serial UX fixer: label fail-safe loading
+
+Context: The latest robustness audit found `/cam/labels` left mutation controls enabled while label data was loading, invalid, duplicated, empty, or unavailable, and could construct hundreds of image-heavy cards at once.
+
+Changes: The labels controller now starts fail-safe, checks HTTP and envelope shape, validates and deduplicates individual records, renders degraded subsets read-only, supplies an announced GET-only Retry, explains empty results, caps initial captures at 100, and renders records in explicit 100-card batches.
+
+Decisions: Reading-detail provenance, durable IDs, timestamps, and the overlapping mobile-template edit require a common live/archive camera data contract, so those findings are logged for a broader RCA rather than receiving a misleading template-only patch. CSP extraction and restart availability remain broader campaigns. No Python backend or watering/control code changed.
+
+State: Commit `035a019` was deployed after a timestamped remote backup. Inline JavaScript parsing, zone-label checks, live authenticated API shape, `/login` smoke, and server/local SHA-256 parity passed. The requested in-app browser runtime was not exposed in this session; command-line Playwright fallback lacked an importable test package, so browser-state interception could not be repeated after deploy.

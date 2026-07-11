@@ -2604,3 +2604,15 @@ Decisions: All non-watering high/medium reports refine the existing atomic moist
 State: Zero distinct new findings, zero fixes, and no deployment. Thirty-eight non-watering high/medium raw findings remain represented by six coordinated RCA campaigns. No backend Python or watering/control code changed.
 
 Next: Schedule the six coordinated contracts under their broader RCA campaigns; handle command-authority and Grapes behavior only through the watering-control change process.
+
+## 2026-07-11 - Round-18 audit convergence
+
+Context: Read and merged all 31 round-18 auditor findings; 26 were non-watering high/medium and one high finding was explicitly marked watering behavior.
+
+Changes: Added the round-18 deduplication and RCA mapping to `UX-AUDIT.md`; no product code changed.
+
+Decisions: Calibration/sensor authority, durable camera archive/detail, staged Costs/authenticated-shell CSP fallback, canonical flow reporting, and typed convergence metrics remain coordinated campaigns. The Grapes manual-only `soil_dry` attribution remains Watering-behavior DO NOT FIX. Dirty backend, watering, meter, cost, and camera files were preserved.
+
+State: Zero distinct new findings, zero fixes, and no deployment. Twenty-six non-watering high/medium raw findings remain represented by five coordinated RCA campaigns. No backend Python or watering/control code changed.
+
+Next: Schedule the five coordinated contracts; handle Grapes attribution only through the watering-control change process.

@@ -2414,3 +2414,15 @@ Decisions: No backend Python, irrigation balance, schedule, runtime, valve, MAD,
 State: Both commits were backed up and deployed independently. JavaScript syntax, public login, authenticated live pages/APIs, service state, and SHA-256 parity passed. Browser automation was unavailable because the required in-app Node REPL runtime was not exposed.
 
 Next: Run the reporting-timezone/range-contract and service-saturation campaigns; address the low daily-cost snapshot drift later.
+
+## 2026-07-10 - Serial UX fixer: Flow fail-closed and Audit safe DOM
+
+Context: Reconciled all 29 current auditor findings. Two reports described real watering behavior (manual Grapes and sync-group execution) and remain logged only. Most reporting-time, CSP, and availability findings deduplicated into existing coordinated campaigns.
+
+Changes: `511efaf` makes Flow reject HTTP failures, clear stale data, neutralize alerts, expose Retry, escape attribute-sensitive characters, and allowlist API-controlled state/severity classes. `c3a8c91` replaces Audit's API-controlled `innerHTML` construction with DOM nodes, `textContent`, numeric normalization, and status allowlisting.
+
+Decisions: `dashboard.py` changed only the self-contained Audit reporting page renderer; no irrigation balance, credit, schedule, runtime, precipitation, valve, MAD, or configuration logic changed. Offset-aware ranges, strict CSP extraction, and worker saturation remain broader campaigns.
+
+State: Both fixes were committed and deployed independently after timestamped remote backups. JavaScript/Python checks, service state, live `/login`, and SHA-256 server/local parity passed. The Flow restart briefly produced the known origin 502 before recovery. The required in-app browser runtime was unavailable, so the auditors' authenticated Playwright reproduction plus live HTTP/parity verification were used.
+
+Next: Run the coordinated reporting-timezone contract, strict-CSP extraction, and origin-saturation RCAs. Do not change the two logged watering behaviors in a UX pass.

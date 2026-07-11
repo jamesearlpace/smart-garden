@@ -325,3 +325,21 @@ Reviewed all 25 findings in `orchestrator/findings-0.json` through `findings-5.j
 | water usage | low | open | range-state explanation | After the range resolver exists, show resolved offset, timezone, duration, and safe API validation detail. |
 
 Live `/forecast`, `/api/forecast`, `/api/forecast-vs-actual?days=30`, `/costs`, and `/api/water-cost` returned authenticated HTTP 200. JavaScript syntax checks, timestamped remote backups, service restarts, `/login` smoke tests, and SHA-256 server/local parity passed for both deployments. No Python backend file was edited. The required in-app browser runtime was not exposed by tool discovery; the auditors' authenticated Playwright evidence was retained and live authenticated HTML/API verification was used after each fix.
+
+## 2026-07-10 serial-fixer merge - reporting time, availability, and safe rendering
+
+Reviewed all 29 findings in `orchestrator/findings-0.json` through `findings-5.json`. Three distinct display defects were newly folded into the queue; the remaining reports were deduplicated into the existing timezone/reporting-contract, strict-CSP, and service-saturation campaigns. The two watering-behavior reports (manual Grapes and sync-group execution) remain logged only in the dedicated DO NOT FIX section above.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| flow | med | fixed (`511efaf`) | HTTP failure shown as healthy | The GET now checks HTTP status. Failure clears stale zone/sample data, neutralizes alerts, and presents a GET-only Retry action. |
+| flow | med | fixed (`511efaf`) | API-controlled class/HTML contexts | Text escaping now covers quotes and API state/severity values map through fixed CSS-class allowlists. A full DOM-construction migration remains part of strict CSP. |
+| audit | high | fixed (`c3a8c91`) | API-controlled HTML injection | Summary pills, table rows, empty state, and error state are constructed with DOM nodes and `textContent`; status is allowlisted before class assignment. `dashboard.py` changed only the audit reporting page renderer. |
+| water-usage / reconcile / cost | high/med | open - broader RCA | offset-aware half-open ranges and downstream reconciliation | Requires the existing common ZoneInfo-aware reporting resolver and meter-report contract. Isolated label/query edits could reinterpret naive historical instants. |
+| weather / watering / cycle history / flow | high/med | open - broader RCA | timezone, repeated-hour, bucket and range semantics | Migrate these read-only reporting APIs under the existing timestamp-contract campaign; preserve repeated DST instants and publish resolved bounds/grain. |
+| moisture-sim / daily-summary / balance-history | med | open - broader RCA | calendar dates, DST conversion, and history coverage | Use local calendar-date parsing and a common explicit coverage contract; do not change balance credit or schedule generation. |
+| audit | high/med | open - broader RCA | offset, date-grain, elapsed-window, and accessible table semantics | Split instant and calendar-date reporting semantics and serialize explicit offsets as part of the coordinated reporting migration. |
+| origin / health / request telemetry / restart | high/med | open - broader RCA | worker starvation and availability attribution | Infrastructure RCA remains required for bounded reporting, queue/in-flight telemetry, readiness, and serving overlap. It is not a display-only fix. |
+| authenticated shell / water-usage / flow / audit | high/med | open - broader RCA | strict CSP extraction and remaining dynamic HTML | Deduplicated into the staged page-family CSP migration. Do not enforce the current policy until inline controllers/styles and remaining sinks are extracted and regression-tested. |
+
+The in-app browser runtime required by the browser skill was not exposed by tool discovery. The raw auditors' authenticated Playwright reproduction was retained; fixes were verified with syntax/compile checks, timestamped remote backups, service restarts, live `/login` smoke checks, and SHA-256 server/local parity. The first restart briefly returned the already-known origin 502 before recovering; this was recorded under the existing restart-availability RCA.

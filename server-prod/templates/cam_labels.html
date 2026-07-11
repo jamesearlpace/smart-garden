@@ -139,7 +139,7 @@ function fmtTime(ms){
 }
 function fmtLabel(l){
   l = String(l||'');
-  if (l.length===9) return '<span class="lbl">'+l.slice(0,6)+'<span class="dec">.'+l.slice(6)+'</span></span>';
+  if (l.length===9) return '<span class="lbl">'+esc(l.slice(0,6))+'<span class="dec">.'+esc(l.slice(6))+'</span></span>';
   return '<span class="lbl">'+esc(l)+'</span>';
 }
 var STATUS_SET={manual:1,verified:1,promoted:1,corrected:1,review:1,rejected:1,banked:1,flagged:1,repaired:1,confirmed:1};

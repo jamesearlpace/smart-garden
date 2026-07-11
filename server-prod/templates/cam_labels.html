@@ -162,6 +162,7 @@ function validItem(i){
 function validEnvelope(d){
   return !!d && typeof d==='object' && finiteCount(d.total)
     && d.counts && typeof d.counts==='object' && Array.isArray(d.items)
+    && Object.keys(d.counts).every(function(k){return finiteCount(d.counts[k]);})
     && (d.proposed==null || finiteCount(d.proposed))
     && (d.recent==null || finiteCount(d.recent));
 }

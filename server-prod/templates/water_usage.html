@@ -556,6 +556,14 @@ function renderIntegrity(d){
   list.innerHTML = rows;
 }
 
+function actualBucketLabel(d){
+  var seconds = Number(d && d.bucket_s);
+  if(!isFinite(seconds) || seconds <= 0) return (d && d.bucket_label) || '?';
+  if(seconds < 60) return seconds+' sec';
+  if(seconds % 60 === 0) return (seconds / 60)+' min';
+  return (Math.round((seconds / 60) * 10) / 10)+' min ('+seconds+' sec)';
+}
+
 function renderPhaseTracker(d){
   var card = document.getElementById('phaseTrackerCard');
   var sum = document.getElementById('phaseTrackerSummary');
@@ -696,6 +704,7 @@ function wireAnchorFrameButtons(){
 
 function render(d){
   var usage = d.usage || [], line = d.line || [];
+  var bucketLabel = actualBucketLabel(d);
   LAST_USAGE = usage;
   renderRateSummary(d);
   renderZoneReport(d);
@@ -704,10 +713,10 @@ function render(d){
   var windowEvents = d.events || [];
   var rateMode = d.rate_mode || state.rate_mode || 'actual';
   document.getElementById('bar-title').innerHTML = 'Gallons per bar'
-    + (d.bucket_label ? ' <span class="capsub">— each bar = '+d.bucket_label
+    + (bucketLabel !== '?' ? ' <span class="capsub">— each bar = '+bucketLabel
       +' · '+(rateMode==='interpolated'?'interpolated between committed meter points':'actual committed-row buckets')+'</span>' : '');
   document.getElementById('sub').innerHTML =
-    '<b>'+usage.length+'</b> buckets of '+(d.bucket_label||'?')+' · '
+    '<b>'+usage.length+'</b> buckets of '+bucketLabel+' · '
     + (d.total_gal||0)+' gal total this window · ledger sampled at capture cadence'
     + (windowEvents.length ? ' · <b style="color:#7c3aed">'+windowEvents.length+'</b> watering event(s) shown' : '')
     + (rateMode==='interpolated' ? ' · <b style="color:#0d9488">rate interpolation on</b>' : '')

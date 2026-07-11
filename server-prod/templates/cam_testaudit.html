@@ -147,8 +147,10 @@ function render(){
   document.getElementById('grid').innerHTML = f.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wire);
 }
-function testAuditError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="testRetry">Retry</button>';document.getElementById('testRetry').addEventListener('click',loadTestAudit);}
+function clearTestAudit(){ALL=[];document.getElementById('grid').replaceChildren();document.getElementById('cnt').textContent='';}
+function testAuditError(message){clearTestAudit();var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="testRetry">Retry</button>';document.getElementById('testRetry').addEventListener('click',loadTestAudit);}
 function loadTestAudit(){
+ clearTestAudit();
  var s=document.getElementById('sub');s.setAttribute('role','status');s.textContent='Running the model on each held-out frame… (up to 60 seconds)';
  var controller=new AbortController(), timer=setTimeout(function(){controller.abort();},60000);
  fetch('/api/cam/test-set?n=300&flag=1',{signal:controller.signal}).then(function(r){if(!r.ok)throw new Error('Could not load benchmark frames (HTTP '+r.status+').');return r.json();}).then(function(d){

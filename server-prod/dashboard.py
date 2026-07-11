@@ -4132,6 +4132,13 @@ def create_app(config, engine, weather, billing):
     @app.route("/api/sensor-history")
     def api_sensor_history():
         """Soil or DHT22 history for drill-down charts."""
+        def bounded_series(rows, limit=2000):
+            """Keep long display series responsive while preserving both endpoints."""
+            if len(rows) <= limit:
+                return rows
+            last = len(rows) - 1
+            return [rows[round(i * last / (limit - 1))] for i in range(limit)]
+
         if any(len(request.args.getlist(name)) != 1 for name in ("type", "hours")):
             return jsonify({"error": "type and hours must be supplied exactly once"}), 400
         sensor_type = request.args.get("type")
@@ -4157,6 +4164,7 @@ def create_app(config, engine, weather, billing):
                 (idx, f"-{hours} hours"),
             ).fetchall()
             conn.close()
+            rows = bounded_series(rows)
             return jsonify([{"ts": r["ts"], "pct": r["soil_pct"], "raw": r["soil_raw"]} for r in rows])
         elif sensor_type == "dht22":
             conn = db.get_conn()
@@ -4166,6 +4174,7 @@ def create_app(config, engine, weather, billing):
                 (f"-{hours} hours",),
             ).fetchall()
             conn.close()
+            rows = bounded_series(rows)
             return jsonify([{"ts": r["ts"], "temp_f": r["temp_f"], "humidity": r["humidity"]} for r in rows])
 
     @app.route("/api/dashboard")

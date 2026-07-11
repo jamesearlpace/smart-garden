@@ -9964,31 +9964,39 @@ async function load(){
   if (!d || !d.summary || !Array.isArray(d.tables)) throw new Error('Audit returned an invalid response.');
   document.getElementById('meta').textContent = 'Generated ' + d.generated_at;
   const s = d.summary;
-  document.getElementById('summary').innerHTML =
-    `<span class="pill ok">${s.ok} OK</span>` +
-    `<span class="pill stale">${s.stale} STALE</span>` +
-    `<span class="pill empty">${s.empty} EMPTY</span>` +
-    (s.disabled ? `<span class="pill">${s.disabled} DISABLED</span>` : '') +
-    (s.error ? `<span class="pill error">${s.error} ERROR</span>` : '');
+  const summary = document.getElementById('summary');
+  summary.replaceChildren();
+  const addPill = (value, label, kind) => {
+    const pill = document.createElement('span');
+    pill.className = 'pill' + (kind ? ' ' + kind : '');
+    pill.textContent = String(Number.isFinite(Number(value)) ? Number(value) : 0) + ' ' + label;
+    summary.appendChild(pill);
+  };
+  addPill(s.ok, 'OK', 'ok'); addPill(s.stale, 'STALE', 'stale'); addPill(s.empty, 'EMPTY', 'empty');
+  if (s.disabled) addPill(s.disabled, 'DISABLED', '');
+  if (s.error) addPill(s.error, 'ERROR', 'error');
   const tb = document.querySelector('#t tbody');
   tb.innerHTML = '';
   for (const t of d.tables){
     const tr = document.createElement('tr');
     const fmt = (v) => v === null || v === undefined ? '—' : v;
-    tr.innerHTML =
-      `<td><strong>${t.table}</strong><div class="label">${t.label || ''}</div></td>` +
-      `<td><span class="status ${t.status.toLowerCase()}">${t.status}</span></td>` +
-      `<td class="num">${fmt(t.rows)}</td>` +
-      `<td class="num">${fmt(t.rows_24h)}</td>` +
-      `<td>${fmt(t.last_write)}</td>` +
-      `<td class="num">${fmt(t.age_hours)}</td>` +
-      `<td class="num">${fmt(t.max_age_hours)}</td>`;
+    const name = document.createElement('td');
+    const strong = document.createElement('strong'); strong.textContent = fmt(t.table); name.appendChild(strong);
+    const label = document.createElement('div'); label.className = 'label'; label.textContent = t.label || ''; name.appendChild(label);
+    tr.appendChild(name);
+    const statusCell = document.createElement('td');
+    const status = document.createElement('span');
+    const statusName = ['OK','STALE','EMPTY','ERROR','DISABLED'].includes(t.status) ? t.status : 'ERROR';
+    status.className = 'status ' + statusName.toLowerCase(); status.textContent = statusName; statusCell.appendChild(status); tr.appendChild(statusCell);
+    for (const [value, numeric] of [[t.rows,true],[t.rows_24h,true],[t.last_write,false],[t.age_hours,true],[t.max_age_hours,true]]) {
+      const cell = document.createElement('td'); if (numeric) cell.className = 'num'; cell.textContent = fmt(value); tr.appendChild(cell);
+    }
     tb.appendChild(tr);
   }
-  if (!d.tables.length) tb.innerHTML = '<tr><td colspan="7">No audit table definitions are available.</td></tr>';
+  if (!d.tables.length) { const row=document.createElement('tr'); const cell=document.createElement('td'); cell.colSpan=7; cell.textContent='No audit table definitions are available.'; row.appendChild(cell); tb.appendChild(row); }
   } catch (e) {
-    document.getElementById('summary').innerHTML = '';
-    document.querySelector('#t tbody').innerHTML = '<tr><td colspan="7">Audit data unavailable.</td></tr>';
+    document.getElementById('summary').replaceChildren();
+    const tb=document.querySelector('#t tbody'); const row=document.createElement('tr'); const cell=document.createElement('td'); cell.colSpan=7; cell.textContent='Audit data unavailable.'; row.appendChild(cell); tb.replaceChildren(row);
     meta.textContent = e.message || 'Could not load audit data.';
   } finally { refresh.disabled = false; }
 }

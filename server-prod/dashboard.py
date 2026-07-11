@@ -233,9 +233,14 @@ def create_app(config, engine, weather, billing):
             app.config["last_successful_request_ts"] = now
             if request.headers.get("X-Smart-Garden-Internal-Health") != "1":
                 app.config["last_health_check_ts"] = now
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        if request.path == "/api/cam/archive/img" and response.status_code == 200:
+            response.headers["Cache-Control"] = "private, max-age=86400, immutable"
+            response.headers.pop("Pragma", None)
+            response.headers.pop("Expires", None)
+        else:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -9325,8 +9330,7 @@ def create_app(config, engine, weather, billing):
                 data = f.read()
         except OSError as e:
             return jsonify({"error": str(e)}), 500
-        return Response(data, mimetype="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
+        return Response(data, mimetype="image/jpeg")
 
     @app.route("/api/cam/archive/reread", methods=["POST"])
     def cam_archive_reread():

@@ -1119,8 +1119,33 @@ class IrrigationEngine:
         group_water = self._compute_group_water_set(installed_zones)
         for zone in installed_zones:
             zid = zone["id"]
-            # Water balance model — no soil sensor needed
-            soil = soil_readings.get(zid, 50)
+            # Water balance model — no soil sensor needed.  Use its persisted
+            # state for event telemetry too; a hardcoded 50 here made every
+            # restart look dry even when the durable balance was wet.
+            soil = soil_readings.get(zid)
+            if soil is None:
+                balance = db.get_soil_balance(zid)
+                if (balance and balance.get("balance_mm") is not None
+                        and balance.get("taw_mm")):
+                    soil = max(0.0, min(
+                        100.0,
+                        float(balance["balance_mm"])
+                        / float(balance["taw_mm"]) * 100.0,
+                    ))
+                else:
+                    latest = db.get_latest_soil(zid)
+                    if latest and latest.get("soil_pct") is not None:
+                        soil = float(latest["soil_pct"])
+            if soil is None:
+                log.error("%s: no persisted balance or real soil reading; "
+                          "failing closed", self._zone_label(zid))
+                actions.append(self._decision(
+                    "skip", zid,
+                    "No persisted moisture state — auto-watering disabled",
+                    {"moisture_state_missing": True},
+                ))
+                n_skipped += 1
+                continue
             decision = self.evaluate_zone(zid, soil, status, group_water=group_water)
             actions.append(decision)
 

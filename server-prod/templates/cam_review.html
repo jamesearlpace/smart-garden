@@ -28,15 +28,22 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .savebtn{font-size:.8rem;padding:5px 12px;border:none;border-radius:6px;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
 .msg{font-size:.75rem;color:var(--text2)}
 .empty{padding:40px;text-align:center;color:var(--text2)}
+.skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:8px;background:#fff;padding:8px;z-index:10}
+.frame-title{font-size:.82rem;margin-bottom:4px}.help{font-size:.72rem;color:var(--text2);width:100%}
+.imglink{display:block}.imglink:focus-visible,.fixinp:focus-visible,.savebtn:focus-visible{outline:3px solid #111827;outline-offset:2px}
+@media(max-width:600px){.back,.fixinp,.savebtn{min-height:44px}.back{display:inline-flex;align-items:center}.fixinp{padding:9px}.savebtn{padding:9px 14px}}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
+<a class="skip" href="#main-content">Skip to review queue</a>
 {% include '_meternav.html' %}
+<main id="main-content">
 <a class="back" href="/#cam">&larr; Back to Water Meter Cam</a>
 <h1>🎯 Review queue</h1>
 <div class="sub" id="sub">Loading the frames most worth correcting…</div>
 <div class="grid" id="grid"></div>
+</main>
 
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -47,13 +54,14 @@ function safeImg(v){try{var u=new URL(String(v||''),location.origin);return u.or
 
 function card(it){
   var img=safeImg(it.img);
-  return '<div class="card" data-id="'+esc(it.id)+'">'
-    + '<div class="imgwrap">'+(img?'<img loading="lazy" alt="Meter review frame '+esc(it.id)+'" src="'+esc(img)+'">':'<div class="empty">Frame unavailable</div>')+'</div>'
+  return '<article class="card" data-id="'+esc(it.id)+'" aria-labelledby="title-'+esc(it.id)+'">'
+    + '<div class="imgwrap">'+(img?'<a class="imglink" href="'+esc(img)+'" target="_blank" aria-label="Open full-size meter frame '+esc(it.id)+'"><img loading="lazy" alt="Meter frame '+esc(it.id)+' awaiting corrected reading" src="'+esc(img)+'"></a>':'<div class="empty">Frame unavailable</div>')+'</div>'
     + '<div class="body">'
+    + '<h2 class="frame-title" id="title-'+esc(it.id)+'">Review frame '+esc(it.id)+'</h2>'
     + '<div class="ai" data-ai>🤖 reading…</div>'
     + '<div class="meta">'+esc((it.ts||'').slice(11,19))+(it.note?(' · '+esc(it.note)):'')+'</div>'
     + '<div class="fixrow" data-fix></div>'
-    + '</div></div>';
+    + '</div></article>';
 }
 
 function wireCard(el){
@@ -67,8 +75,9 @@ function wireCard(el){
       ai.innerHTML = guess
         ? '🤖 AI reads '+fmt9(guess)
         : '<span style="color:#94a3b8">CNN unsure — type it</span>';
-      fix.innerHTML = '<input class="fixinp" maxlength="9" inputmode="numeric" value="'+esc(guess)+'">'
-        + '<button class="savebtn">Save</button><span class="msg"></span>';
+      fix.innerHTML = '<label class="help" for="fix-'+esc(id)+'">Corrected nine-digit meter reading. Saving records a human correction for this frame.</label>'
+        + '<input class="fixinp" id="fix-'+esc(id)+'" aria-describedby="msg-'+esc(id)+'" maxlength="9" inputmode="numeric" value="'+esc(guess)+'">'
+        + '<button class="savebtn" aria-label="Save corrected reading for frame '+esc(id)+'">Save</button><span class="msg" id="msg-'+esc(id)+'" role="status" aria-live="polite"></span>';
       var inp = fix.querySelector('.fixinp'), btn = fix.querySelector('.savebtn'), msg = fix.querySelector('.msg');
       function save(){
         var v = (inp.value.match(/\d/g)||[]).join('');
@@ -87,7 +96,11 @@ function wireCard(el){
     .catch(function(){ ai.textContent='🤖 (CNN offline)'; });
 }
 
-fetch('/api/cam/review-queue?n=40').then(function(r){return r.json();}).then(function(d){
+function reviewError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="reviewRetry">Retry</button>';document.getElementById('reviewRetry').addEventListener('click',loadReview);}
+function loadReview(){
+ var s=document.getElementById('sub');s.setAttribute('role','status');s.setAttribute('aria-live','polite');s.textContent='Loading review queue...';
+ fetch('/api/cam/review-queue?n=40').then(function(r){if(!r.ok)throw new Error('Could not load review queue (HTTP '+r.status+').');return r.json();}).then(function(d){
+  if(!d||!Array.isArray(d.queue))throw new Error('Review queue data has an invalid format.');
   var q = d.queue||[];
   if(!q.length){
     document.getElementById('sub').textContent='Nothing to review.';
@@ -98,7 +111,9 @@ fetch('/api/cam/review-queue?n=40').then(function(r){return r.json();}).then(fun
     + 'These are the highest-value corrections — the meter is usually clear, the CNN just missed. Fix what you can; each one trains the model on exactly where it fails.';
   document.getElementById('grid').innerHTML = q.map(card).join('');
   document.querySelectorAll('#grid .card').forEach(wireCard);
-}).catch(function(){ document.getElementById('sub').textContent='Could not load the queue.'; });
+ }).catch(function(e){reviewError(e.message||'Could not load the queue.');});
+}
+loadReview();
 </script>
 {% include '_mobilenav.html' %}
 </body>

@@ -994,6 +994,7 @@ body.compact-mode .history td {
         state.roiInitialized = true;
         syncInputsToRoi();
         drawRoiBox();
+        saveState();
       }
       renderRotatedFrame();
       state.capture = capture || new Date().toISOString();

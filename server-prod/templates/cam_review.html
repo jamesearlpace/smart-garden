@@ -75,7 +75,7 @@ function wireCard(el){
       ai.innerHTML = guess
         ? '🤖 AI reads '+fmt9(guess)
         : '<span style="color:#94a3b8">CNN unsure — type it</span>';
-      fix.innerHTML = '<label class="help" for="fix-'+esc(id)+'">Corrected nine-digit meter reading. Saving records a human correction for this frame.</label>'
+      fix.innerHTML = '<label class="help" for="fix-'+esc(id)+'">Corrected nine-digit meter reading for frame '+esc(id)+'. Saving records a human correction for this frame.</label>'
         + '<input class="fixinp" id="fix-'+esc(id)+'" aria-describedby="msg-'+esc(id)+'" maxlength="9" inputmode="numeric" value="'+esc(guess)+'">'
         + '<button class="savebtn" aria-label="Save corrected reading for frame '+esc(id)+'">Save</button><span class="msg" id="msg-'+esc(id)+'" role="status" aria-live="polite"></span>';
       var inp = fix.querySelector('.fixinp'), btn = fix.querySelector('.savebtn'), msg = fix.querySelector('.msg');

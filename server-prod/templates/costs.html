@@ -142,6 +142,7 @@ var usageChart = null, billChart = null, tierChart = null;
 
 function esc(s){var d=document.createElement('div');d.textContent=(s==null?'':s);return d.innerHTML;}
 function money(n){return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function perGal(n){return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:5,maximumFractionDigits:5});}
 function num(n,d){return Number(n).toLocaleString(undefined,{maximumFractionDigits:(d==null?0:d)});}
 
 var TIER_COLORS = ['#94a3b8','#60a5fa','#34d399','#fbbf24','#fb923c','#ef4444'];
@@ -213,7 +214,7 @@ function render(d){
       else { status='not this cycle'; cls=''; }
       var when = p.crossed ? ('~day '+Math.round(p.day))
                : (p.within_cycle ? ('~day '+Math.round(p.day)+' ('+esc(shortDate(p.date))+')') : '—');
-      html += '<tr><td>Tier '+p.tier+'</td><td>'+money(p.rate_per_gal)+'</td><td>'+num(p.entry_gal,0)+' gal</td>'
+      html += '<tr><td>Tier '+p.tier+'</td><td>'+perGal(p.rate_per_gal)+'</td><td>'+num(p.entry_gal,0)+' gal</td>'
             + '<td>'+when+'</td><td class="'+cls+'"><span class="chk">'+status+'</span></td></tr>';
     });
     html += '</tbody></table>';
@@ -226,7 +227,7 @@ function render(d){
     html += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">'
           + '<h2 style="margin:0">This billing cycle</h2>'
           + '<span class="pill tier">Tier ' + cy.current_tier + ' · '
-          + money(cy.marginal_rate) + '/100ft³ · ' + money(cy.marginal_per_gal*1) + '/gal</span></div>';
+          + money(cy.marginal_rate) + '/100ft³ · ' + perGal(cy.marginal_per_gal) + '/gal</span></div>';
     html += '<table style="margin-top:8px"><tbody>';
     html += rowKV('Cycle window', esc(shortDate(cy.start_date)) + ' → ~' + esc(shortDate(cy.close_date))
                   + ' &nbsp;<span class="muted">(' + cy.days_elapsed + ' of ~' + cy.cycle_days + ' days)</span>');

@@ -2426,3 +2426,15 @@ Decisions: `dashboard.py` changed only the self-contained Audit reporting page r
 State: Both fixes were committed and deployed independently after timestamped remote backups. JavaScript/Python checks, service state, live `/login`, and SHA-256 server/local parity passed. The Flow restart briefly produced the known origin 502 before recovery. The required in-app browser runtime was unavailable, so the auditors' authenticated Playwright reproduction plus live HTTP/parity verification were used.
 
 Next: Run the coordinated reporting-timezone contract, strict-CSP extraction, and origin-saturation RCAs. Do not change the two logged watering behaviors in a UX pass.
+
+## 2026-07-10 - Serial UX fixer: benchmark pagination and CNN insights
+
+Context: Round 01 supplied 25 findings. Seven distinct refinements were newly merged; none concerned watering behavior.
+
+Changes: Review fields now have frame-specific names, current-page state, 44px targets, and a visible current mobile destination (`58f16db`, `b888e0d`, `8609ed2`). The benchmark API paginates all 992 candidates with stable rank/order metadata, and the audit page exposes that provenance and the true 60-second deadline (`b011406`, `3c093a6`, `8e2d83c`). CNN Report independently renders `/api/cam/cnn-insights`, persistently announces loading, and controls parse/schema failures (`8690126`, `27227e0`, `4bbd84a`). Water Usage desktop controls no longer overflow (`829a0b9`).
+
+Decisions: `dashboard.py` changed only in the read-only camera benchmark serializer. No irrigation balance, credit, scheduling, runtime, precipitation, valve, MAD, or watering configuration code changed. DST/reconciliation, calibration authority, and health/schedule telemetry remain coordinated RCAs because isolated UI edits would invent missing authority or range semantics.
+
+State: Eleven high/medium findings were fixed through timestamped-backup deployments. Public login smoke, Python compilation, authenticated API checks, Playwright desktop/mobile geometry, invalid-response interception, and server/local SHA-256 parity passed. Eleven high/medium findings remain open across the three coordinated campaigns.
+
+Next: Run the shared ZoneInfo reporting-contract migration, then the versioned calibration/sample serializer and service-observability campaigns.

@@ -173,6 +173,9 @@ async function loadAll(){
 }
 
 function renderKpis(d){
+  if(!d.stats||!d.audit||!d.coverage||!d.drainer){
+    throw new Error('Convergence data is incomplete.');
+  }
   const s = d.stats||{};
   const blind = (d.audit&&d.audit.blind)||{};
   const human = (d.audit&&d.audit.human)||{};
@@ -188,20 +191,24 @@ function renderKpis(d){
        human.disagreed>0],
     ['Perfectable left', fmt(s.perfectable_remaining), false],
     ['Total frames', fmt(s.total), false],
-    ['Auditor', (dr.enabled?'on':'off'), false],
+    ['Auditor', (typeof dr.enabled==='boolean'?(dr.enabled?'on':'off'):'â€”'), false],
   ];
   document.getElementById('kpis').innerHTML = cards.map(c=>
     `<div class="kpi"><div class="label">${esc(c[0])}</div>
      <div class="val ${c[2]?'':'small'}" style="${c[2]?'color:var(--bad)':''}">${esc(c[1])}</div></div>`
   ).join('');
-  const disagreements=Number(blind.disagreed||0)+Number(human.disagreed||0);
-  document.getElementById('overallStatus').textContent=disagreements?'Warning: '+disagreements+' disagreement'+(disagreements===1?'':'s')+' detected across blind and human checks.':'No disagreements detected in completed blind and human checks.';
+  const known=Number.isFinite(Number(blind.disagreed))&&Number.isFinite(Number(human.disagreed));
+  const disagreements=known?Number(blind.disagreed)+Number(human.disagreed):null;
+  document.getElementById('overallStatus').textContent=!known?'Agreement status unavailable.':(disagreements?'Warning: '+disagreements+' disagreement'+(disagreements===1?'':'s')+' detected across blind and human checks.':'No disagreements detected in completed blind and human checks.');
 }
 
 function renderTrend(hist){
   const note = document.getElementById('trendNote');
   const table=document.getElementById('trendTable'), body=table.querySelector('tbody'); body.textContent='';
-  if(!hist||hist.length<2){ table.hidden=true; note.textContent='Not enough trend data yet (collects every ~2 min).'; return; }
+  const valid=(hist||[]).filter(function(h){return h&&typeof h.ts==='string'&&h.ts.length>=16&&Number.isFinite(Number(h.perfectable_remaining))&&Number.isFinite(Number(h.perfect_pct));});
+  if(valid.length===0){ table.hidden=true; note.textContent='No trend points in the last 24 hours.'; return; }
+  if(valid.length===1){ table.hidden=true; note.textContent='Only one valid trend point is available in the last 24 hours.'; return; }
+  hist=valid;
   const labels = hist.map(h=>h.ts.slice(11,16));
   const rem = hist.map(h=>h.perfectable_remaining);
   const pct = hist.map(h=>h.perfect_pct);

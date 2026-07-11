@@ -9571,10 +9571,14 @@ def create_app(config, engine, weather, billing):
         claim can be checked.
         """
         import meter_archive
-        try:
-            hours = query_int("hours", 24, min_value=1, max_value=720)
-        except Exception:
-            hours = 24
+        if set(request.args) - {"hours"} or len(request.args.getlist("hours")) != 1:
+            return jsonify({"ok": False, "error": "hours is required exactly once"}), 400
+        raw_hours = request.args.get("hours", "")
+        if not raw_hours.isdigit():
+            return jsonify({"ok": False, "error": "hours must be an integer from 1 to 720"}), 400
+        hours = int(raw_hours)
+        if hours < 1 or hours > 720:
+            return jsonify({"ok": False, "error": "hours must be an integer from 1 to 720"}), 400
         stats = meter_archive.convergence_stats()
         history = meter_archive.convergence_history(hours=hours)
         coverage = meter_archive.audit_coverage()

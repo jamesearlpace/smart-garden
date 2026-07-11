@@ -407,10 +407,13 @@ def audit_coverage():
         total = int(c.execute(
             "SELECT COUNT(*) n FROM archive_frame "
             "WHERE reading IS NOT NULL AND source!='evicted'").fetchone()["n"])
+        # Drive this display aggregation from the much smaller audit table.
+        # The former correlated EXISTS scanned audit_result for every archive
+        # frame and could take longer than the page's 15-second deadline.
         audited = int(c.execute(
-            "SELECT COUNT(DISTINCT a.ts) n FROM archive_frame a "
-            "WHERE a.reading IS NOT NULL "
-            "AND EXISTS (SELECT 1 FROM audit_result r WHERE r.frame_ts=a.ts)"
+            "SELECT COUNT(DISTINCT r.frame_ts) n FROM audit_result r "
+            "JOIN archive_frame a ON a.ts=r.frame_ts "
+            "WHERE a.reading IS NOT NULL AND a.source!='evicted'"
         ).fetchone()["n"])
         pct = round((audited / total * 100.0), 2) if total else 0.0
         return {"total": total, "audited": audited, "coverage_pct": pct}

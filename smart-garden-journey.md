@@ -2616,3 +2616,15 @@ Decisions: Calibration/sensor authority, durable camera archive/detail, staged C
 State: Zero distinct new findings, zero fixes, and no deployment. Twenty-six non-watering high/medium raw findings remain represented by five coordinated RCA campaigns. No backend Python or watering/control code changed.
 
 Next: Schedule the five coordinated contracts; handle Grapes attribution only through the watering-control change process.
+
+## 2026-07-11 - Round-19 Camera Quality accessibility and audit convergence
+
+Context: Read and merged all 44 round-19 auditor findings. Thirty-eight were non-watering high/medium; one high finding was explicitly watering behavior.
+
+Changes: Added a first-focusable Camera Quality skip link (`80c74f4`) and a semantic recent-read match heading plus screen-reader Match/Mismatch text (`337427e`). Both template checkpoints were deployed independently with backups, `/login` smoke checks, and SHA-256 parity.
+
+Decisions: The other 36 non-watering high/medium reports refine the existing atomic moisture, dashboard authority, reporting-time, durable camera-detail, persisted benchmark, and typed CNN-metric campaigns. The manual-zone configuration finding remains Watering-behavior DO NOT FIX. No backend Python or watering/control code changed. The authenticated browser runtime was unavailable, so no fresh browser-DOM verification is claimed.
+
+State: Camera Quality keyboard bypass and match-result semantics are live. All remaining round-19 high/medium items are recorded under coordinated RCA campaigns.
+
+Next: Schedule the six coordinated contracts; handle manual-zone behavior only through the watering-control change process.

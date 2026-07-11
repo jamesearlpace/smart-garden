@@ -2321,3 +2321,14 @@ Context: `/cam-device` failed with `rows.slice is not a function` because `/api/
 Changes: Commit `34e6af3` explicitly renders `series.frames`, checks both HTTP responses, replaces stale table content with a retryable error, and binds Refresh without an inline handler.
 
 State: Deployed after a timestamped server backup. `/login` returned 200, server/local SHA-256 matched, and authenticated live browser verification rendered 13 telemetry rows without a load-failed state. Template-only display change; no Python backend or watering/control code changed.
+## 2026-07-10 - Serial UX fixer: auth, sensor history, archive loading
+
+Context: Parallel UX findings identified unsafe login return handling, ambiguous unauthenticated API redirects, sensor-history boundary/recovery failures, and an eager archive image burst.
+
+Changes: Commits `b347cd2` and `654d34d` add safe deep-link restoration, JSON 401 API responses, bounded exact-window sensor reporting, synchronized sensor error/summary states, viewport-driven archive images, a 12-card batch, and suppression of unused full-dashboard navigation requests.
+
+Decisions: `dashboard.py` changes are display/authentication-only; no irrigation balance, credit, schedule, valve, runtime, or configuration logic changed. Grapes manual-mode and sync-group findings were logged as watering behavior and intentionally left untouched.
+
+State: Deployed with backups. Python compile, live `/login`, authenticated browser checks, unauthenticated curl, forced HTTP-500 recovery, initial archive request count, and server/local parity passed.
+
+Next: The strict-CSP extraction findings remain a broader staged campaign; investigate intermittent tunnel 502 only if recaptured.

@@ -25,11 +25,14 @@ body {
 }
 .page {
   max-width: 1200px;
+  min-width: 0;
   margin: 0 auto;
   padding: 16px;
 }
 .back {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   font-size: 13px;
   margin-bottom: 10px;
   color: var(--blue);
@@ -57,6 +60,7 @@ h1 {
   grid-template-columns: 1.05fr 1fr;
   gap: 14px;
 }
+.layout > *, .toolbar > *, .rotate-row > * { min-width: 0; max-width: 100%; }
 .card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -81,6 +85,7 @@ h1 {
   height: auto;
   display: block;
   background: #111;
+  min-width: 0;
   min-height: 220px;
 }
 #camImg { display: none; }
@@ -145,6 +150,7 @@ h1 {
   padding: 8px 10px;
   font-size: 13px;
   background: #fff;
+  min-height: 44px;
 }
 .btn {
   cursor: pointer;
@@ -152,7 +158,8 @@ h1 {
 }
 .btn.btn-inline {
   width: auto;
-  padding: 6px 10px;
+  padding: 8px 10px;
+  white-space: normal;
 }
 .btn:disabled,
 .field input:disabled,
@@ -319,6 +326,8 @@ body.compact-mode .history td {
   .btn-row-4 { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 620px) {
+  .page { padding: 10px; overflow-x: clip; }
+  #displayCanvas { min-height: 140px; }
   .controls-grid,
   .panel-grid,
   .btn-row-3,
@@ -326,6 +335,7 @@ body.compact-mode .history td {
     grid-template-columns: 1fr;
   }
 }
+.mtn-link { min-height: 44px !important; }
 .measure-block {
   margin-top: 12px;
   padding-top: 12px;
@@ -366,10 +376,13 @@ body.compact-mode .history td {
     <section class="card">
       <h2>Live frame + numbers ROI</h2>
       <div class="viewer-wrap" id="viewerWrap">
-        <canvas id="displayCanvas" aria-label="Live camera frame"></canvas>
+        <canvas id="displayCanvas" tabindex="0" aria-label="Live camera frame" aria-describedby="canvasHelp canvasSummary"></canvas>
         <img id="camImg" alt="Live camera frame source" hidden />
         <div id="roiBox"></div>
       </div>
+      <p id="canvasHelp" class="muted">The blue rectangle is the numbers ROI. Black areas are rotation padding inside the camera frame, not browser or page clipping. Use the labeled sliders for the keyboard equivalent.</p>
+      <p id="canvasSummary" class="muted" role="status" aria-live="polite"></p>
+      <p id="frameAlert" class="muted" role="alert" hidden></p>
 
       <div class="chip-row">
         <span class="chip" id="captureChip">Capture: waiting...</span>
@@ -524,6 +537,8 @@ body.compact-mode .history td {
 
 <script>
 (function(){
+  var focusNav = document.querySelector('#mtnBar a[href="/cam/focus"]');
+  if (focusNav) focusNav.setAttribute('aria-current', 'page');
   var img = document.getElementById('camImg');
   var viewerWrap = document.getElementById('viewerWrap');
   var displayCanvas = document.getElementById('displayCanvas');
@@ -540,6 +555,8 @@ body.compact-mode .history td {
   var measureBtn = document.getElementById('measureBtn');
   var measureResult = document.getElementById('measureResult');
   var measureList = document.getElementById('measureList');
+  var canvasSummary = document.getElementById('canvasSummary');
+  var frameAlert = document.getElementById('frameAlert');
 
   var state = {
     roi: { x: 0.22, y: 0.50, w: 0.56, h: 0.30 },
@@ -745,6 +762,10 @@ body.compact-mode .history td {
     roiBox.style.top = (state.roi.y * 100) + '%';
     roiBox.style.width = (state.roi.w * 100) + '%';
     roiBox.style.height = (state.roi.h * 100) + '%';
+    canvasSummary.textContent = 'ROI: left ' + Math.round(state.roi.x * 100) + '%, top ' + Math.round(state.roi.y * 100)
+      + '%, width ' + Math.round(state.roi.w * 100) + '%, height ' + Math.round(state.roi.h * 100)
+      + '%. Base orientation ' + state.baseOrientationDeg + ' degrees; fine rotation ' + state.rotationDeg.toFixed(1)
+      + ' degrees. Black areas are camera-frame rotation padding.';
   }
 
   function computePaddedSize(srcW, srcH) {
@@ -909,6 +930,13 @@ body.compact-mode .history td {
   function setFrameChip(kind, text) {
     frameChip.className = 'chip ' + (kind || '');
     frameChip.textContent = text;
+    if (kind === 'bad') {
+      frameAlert.hidden = false;
+      frameAlert.textContent = text + '. Frame controls are unavailable until a fresh frame loads.';
+    } else if (frameAlert.textContent) {
+      frameAlert.hidden = true;
+      frameAlert.textContent = '';
+    }
   }
 
   var frameActionIds = ['roiX','roiY','roiW','roiH','rotateDeg','rotateResetBtn',

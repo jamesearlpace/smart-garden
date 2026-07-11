@@ -481,3 +481,18 @@ Read all 31 findings in `orchestrator/_work/round-07/findings-0.json` through `f
 | history/reporting GET APIs | med | open - broader RCA | shared T-separated cutoff and timezone contract | Additional moisture, rain, weather, and sensor history predicates remain part of the coordinated ZoneInfo-aware half-open reporting migration; isolated edits could reinterpret naive historical timestamps. |
 
 All three display-only checkpoints were committed and deployed separately from committed HEAD after timestamped remote backups. Public `/login`, authenticated live API/browser checks, service restarts, and SHA-256 local/server parity passed. No backend `.py`, irrigation engine, balance, schedule generator, watering parameter, database, or valve behavior was changed.
+
+## 2026-07-10 serial-fixer merge - round 08 atomic snapshots and sensor bounds
+
+Read all 35 findings in `orchestrator/_work/round-08/findings-0.json` through `findings-5.json`, including the zero-finding authentication file. Two distinct sensor performance/bounds issues were newly folded into the backlog. The moisture snapshot, camera-reading detail, dashboard/Map generation safety, calibration authority, sensor identity/provenance, and reporting-timezone findings refine existing open campaigns. The Grapes automatic-watering report deduplicates into the Watering-behavior (DO NOT FIX) section and was not changed.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| sensor-history | med | open | bounded history rendering | The 30/90-day views transfer roughly 1.5-1.75 MB across four requests and produced measured 1.3-second main-thread tasks. Return a capped/downsampled series for long windows and avoid fetching the full dashboard snapshot for current sensor metadata. |
+| sensor-gaps API | med | open - overlapping reporting fix | strict query bounds | Invalid, duplicate, non-positive, fractional, unknown, and billion-hour parameters return 200. Add strict single-value parsing, a maximum window, and a result cap in the read-only reporting path; coordinate with the substantial uncommitted `database.py` work. |
+| moisture-sim | high/med | open - broader RCA | atomic all-zone snapshot and bounded failure | Existing campaign: one read-only generation-bearing snapshot must replace per-zone fan-out, duplicate initialization/schedule requests, mixed caches, and stale fallback. Do not change the schedule generator or watering predictor. |
+| camera reading detail | high/med | open - overlapping work | held-reading truth, distinct failures, recovery, labels, announcements, reflow and targets | Existing coordinated detail-page change in dirty `cam_reading.html`; suppress or explicitly qualify held values when `fresh_read=false`, distinguish 404/5xx/invalid/timeout/session states, and complete accessible recovery/inspection controls. |
+| dashboard and Map | high/med | open - broader RCA | validated generation, command authority and last-success provenance | Map already fails closed on transport/schema failure, but both pages need one non-overlapping generation-aware snapshot adapter. Dashboard controls must disable on uncertainty; Map controls must remain disabled when ESP32 command authority is absent. |
+| calibration / sensor reporting | high/med | open - broader RCA | active revision, durable physical identity, observation provenance, timezone and valid drift | Existing campaign: mutable endpoint config and independent history cannot identify an atomic active revision, and legacy samples lack durable identity/revision provenance. Do not invent those joins in the UI. |
+
+Low-only coordination, structure, optional-field, image-alt, and mobile-overflow polish remains outside this pass.

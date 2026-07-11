@@ -10,9 +10,9 @@
   --bg: #f5f7f9; --card: #ffffff; --bg-card: #ffffff;
   --border: #e8ecf0; --border-light: #f0f2f5;
   --text: #1a2b3c; --text2: #5f7082; --text3: #9ba8b5;
-  --green: #22c55e; --green-dark: #16a34a; --green-light: #dcfce7; --green-bg: rgba(34,197,94,.08);
+  --green: #15803d; --green-dark: #166534; --green-light: #dcfce7; --green-bg: rgba(34,197,94,.08);
   --blue: #3b82f6; --blue-light: #dbeafe; --blue-bg: rgba(59,130,246,.08);
-  --amber: #f59e0b; --amber-light: #fef3c7; --amber-bg: rgba(245,158,11,.08);
+  --amber: #92400e; --amber-light: #fef3c7; --amber-bg: rgba(245,158,11,.08);
   --red: #ef4444; --red-light: #fee2e2; --red-bg: rgba(239,68,68,.08);
   --purple: #a855f7;
   --bg-sidebar: #1b2e1f; --bg-sidebar-hover: rgba(255,255,255,.08);
@@ -57,7 +57,7 @@ a { color: var(--blue); text-decoration: none; }
 
 /* Tabs */
 .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid var(--border); }
-.tab { padding: 10px 20px; font-size: .9rem; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent;
+.tab { padding: 10px 20px; font-size: .9rem; font-weight: 600; cursor: pointer; border: 0; background: transparent; border-bottom: 2px solid transparent;
        margin-bottom: -2px; color: var(--text2); transition: color .2s, border-color .2s; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--green); border-bottom-color: var(--green); }
@@ -102,7 +102,12 @@ a { color: var(--blue); text-decoration: none; }
 .acc-bad { color: var(--red); }
 .controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .controls select, .controls button { background: var(--card); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 12px; font-size: .85rem; cursor: pointer; }
+  border-radius: 6px; padding: 8px 12px; min-height: 44px; font-size: .85rem; cursor: pointer; }
+.control { display: grid; gap: 2px; font-size: .72rem; color: var(--text2); }
+.skip-link { position: fixed; left: 12px; top: -60px; z-index: 1000; background: #fff; color: #111827; padding: 10px 14px; border: 2px solid #166534; border-radius: 6px; }
+.skip-link:focus { top: 12px; }
+.comparison-note { font-size: .85rem; color: var(--text2); margin-bottom: 12px; }
+.sr-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .day-group { margin-bottom: 16px; }
 .day-header { font-size: .85rem; font-weight: 600; color: var(--text2); margin-bottom: 8px;
               padding-bottom: 4px; border-bottom: 1px solid var(--border); }
@@ -148,49 +153,51 @@ a { color: var(--blue); text-decoration: none; }
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
 
 {% include '_appsidebar.html' %}
-<div class="main">
+<main class="main" id="main-content">
 
 <h1>🌧️ Forecast</h1>
 <div class="sub">Watering predictions and accuracy tracking</div>
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('forecast')">Forecast</div>
-  <div class="tab" onclick="switchTab('comparison')">Forecast vs Actual</div>
+<div class="tabs" role="tablist" aria-label="Forecast views">
+  <button type="button" class="tab active" id="forecast-tab" role="tab" aria-selected="true" aria-controls="tab-forecast" data-tab="forecast">Forecast</button>
+  <button type="button" class="tab" id="comparison-tab" role="tab" aria-selected="false" aria-controls="tab-comparison" data-tab="comparison">Forecast vs Actual</button>
 </div>
 
 <!-- ═══ TAB 1: Forecast ═══ -->
-<div class="tab-panel active" id="tab-forecast">
+<div class="tab-panel active" id="tab-forecast" role="tabpanel" aria-labelledby="forecast-tab">
   <div id="forecast-content"><div class="loading">Loading forecast...</div></div>
 </div>
 
 <!-- ═══ TAB 2: Forecast vs Actual ═══ -->
-<div class="tab-panel" id="tab-comparison">
+<div class="tab-panel" id="tab-comparison" role="tabpanel" aria-labelledby="comparison-tab">
   <div class="controls">
-    <select id="dayRange" onchange="loadComparison()">
+    <label class="control" for="dayRange">Date range<select id="dayRange">
       <option value="7">Last 7 days</option>
       <option value="14">Last 14 days</option>
       <option value="30" selected>Last 30 days</option>
       <option value="90">Last 90 days</option>
-    </select>
-    <select id="zoneFilter" onchange="applyFilter()">
+    </select></label>
+    <label class="control" for="zoneFilter">Zone<select id="zoneFilter">
       <option value="all">All zones</option>
-    </select>
-    <select id="outcomeFilter" onchange="applyFilter()">
+    </select></label>
+    <label class="control" for="outcomeFilter">Outcome<select id="outcomeFilter">
       <option value="all">All outcomes</option>
       <option value="correct_water">✅ Correct water</option>
       <option value="correct_skip">✅ Correct skip</option>
       <option value="false_skip">❌ False skip</option>
       <option value="missed_skip">⚠️ Missed skip</option>
       <option value="early_water">🌊 Early water</option>
-      <option value="no_event">— No event</option>
-    </select>
+    </select></label>
   </div>
-  <div id="comparison-content" role="status" aria-live="polite"><div class="loading">Loading...</div></div>
+  <p class="comparison-note" id="comparison-explanation">Accuracy includes only completed, scored automatic-mode decisions. Manual zones and incomplete decisions are excluded.</p>
+  <div id="comparison-status" class="sr-status" role="status" aria-live="polite"></div>
+  <div id="comparison-content" aria-describedby="comparison-explanation"><div class="loading">Loading...</div></div>
 </div>
 
-</div><!-- /.main -->
+</main><!-- /.main -->
 
 {% include '_mobilenav.html' %}
 
@@ -220,8 +227,11 @@ function switchTab(id) {
   document.querySelector('.tab-panel#tab-' + id).classList.add('active');
   // Activate the clicked tab
   var tabs = document.querySelectorAll('.tab');
-  if (id === 'forecast') tabs[0].classList.add('active');
-  else tabs[1].classList.add('active');
+  tabs.forEach(function(tab) {
+    const selected = tab.dataset.tab === id;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+  });
   localStorage.setItem('sg-forecast-tab', id);
   if (id === 'comparison' && !compLoaded) loadComparison();
 }
@@ -234,7 +244,7 @@ async function loadForecast() {
     const d = await r.json();
     renderForecast(d);
   } catch(e) {
-    document.getElementById('forecast-content').innerHTML = '<div class="card">Error: ' + e.message + '</div>';
+    document.getElementById('forecast-content').innerHTML = '<div class="card">Error: ' + esc(e.message) + '</div>';
   }
 }
 
@@ -255,6 +265,8 @@ function renderForecast(d) {
     html += '<div style="color:var(--text2);padding:12px">No zone data available</div>';
   } else {
     d.zones.forEach(z => {
+      const zoneId = Number(z.id);
+      if (!Number.isInteger(zoneId)) return;
       const days = z.days_until_water;
       let daysText, daysClass;
       // Manual-mode zones are never auto-watered by the engine — don't show a
@@ -265,10 +277,11 @@ function renderForecast(d) {
       else if (days < 1) { daysText = 'Today'; daysClass = 'now'; }
       else if (days <= 2) { daysText = days.toFixed(0) + 'd'; daysClass = 'soon'; }
       else { daysText = days.toFixed(0) + 'd'; daysClass = 'ok'; }
-      const pct = z.balance_pct !== null ? z.balance_pct : 0;
+      const rawPct = Number(z.balance_pct);
+      const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : 0;
       const barColor = pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--amber)' : 'var(--red)';
       html += '<div class="zone"><div>';
-      html += '<div class="zone-name">' + z.name + '</div>';
+      html += '<div class="zone-name">' + esc(String(z.name || 'Unnamed zone')) + '</div>';
       html += '<div class="zone-detail">' + (z.type === 'drip' ? '💧 Drip' : '🌱 Sprinkler') +
               ' · ET: ' + (z.etc_mm ? z.etc_mm.toFixed(1) : '?') + 'mm/day</div>';
       html += '<div class="bar-wrap"><div class="bar" style="width:' + pct + '%;background:' + barColor + '"></div></div>';
@@ -278,8 +291,8 @@ function renderForecast(d) {
       if (!isManual) {
         const bias = z.dry_bias_mm || 0;
         html += '<div class="dry-row">';
-        html += '<button class="dry-btn" onclick="looksDry(' + z.id + ',this)">\uD83C\uDF35 Looks dry</button>';
-        if (bias > 0) html += '<span class="dry-badge" title="learned dryness — fades over ~2 weeks">running dry −' + bias.toFixed(1) + 'mm<a href="#" onclick="resetDry(' + z.id + ',event)">reset</a></span>';
+        html += '<button class="dry-btn" data-zone-id="' + zoneId + '">\uD83C\uDF35 Looks dry</button>';
+        if (bias > 0) html += '<span class="dry-badge" title="learned dryness — fades over ~2 weeks">running dry −' + bias.toFixed(1) + 'mm<a href="#" class="dry-reset" data-zone-id="' + zoneId + '">reset</a></span>';
         html += '</div>';
       }
       html += '</div></div>';
@@ -287,8 +300,14 @@ function renderForecast(d) {
   }
   html += '</div>';
   html += '<div class="card" style="font-size:.85rem;color:var(--text2)">⏰ Watering window: ' +
-          (d.window_start || '04:00') + ' – ' + (d.window_end || '07:00') + '</div>';
+          safeTime(d.window_start, '04:00') + ' – ' + safeTime(d.window_end, '07:00') + '</div>';
   document.getElementById('forecast-content').innerHTML = html;
+  document.querySelectorAll('.dry-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { looksDry(Number(btn.dataset.zoneId), btn); });
+  });
+  document.querySelectorAll('.dry-reset').forEach(function(link) {
+    link.addEventListener('click', function(ev) { resetDry(Number(link.dataset.zoneId), ev); });
+  });
 }
 
 function fstat(val, label) {
@@ -346,12 +365,21 @@ async function loadComparison() {
   }
 }
 
+function safeTime(value, fallback) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value || '') ? esc(value) : fallback;
+}
+
 function normalizeComparison(payload) {
   if(!payload || !Array.isArray(payload.comparisons)) throw new Error('Comparison data was malformed.');
   const rows = payload.comparisons.filter(function(c){
     return c && typeof c === 'object' && Number.isInteger(Number(c.zone_id)) &&
       typeof c.zone_name === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.forecast_date||'');
-  }).map(function(c){ c.zone_id=Number(c.zone_id); c.scored=!!c.scored; return c; });
+  }).map(function(c){
+    c.zone_id=Number(c.zone_id); c.scored=!!c.scored;
+    const outcomes=['correct_water','correct_skip','false_skip','missed_skip','early_water','no_event','other'];
+    c.outcome=outcomes.indexOf(c.outcome)>=0?c.outcome:'other';
+    return c;
+  });
   return {comparisons:rows, invalid_count:payload.comparisons.length-rows.length};
 }
 
@@ -374,8 +402,13 @@ function populateZoneFilter(comparisons) {
   const current = sel.value;
   const zones = new Map();
   comparisons.forEach(c => { if (!zones.has(c.zone_id)) zones.set(c.zone_id, c.zone_name); });
-  sel.innerHTML = '<option value="all">All zones</option>';
-  zones.forEach((name, id) => { sel.innerHTML += '<option value="' + id + '">' + name + '</option>'; });
+  sel.replaceChildren();
+  const allOption = document.createElement('option');
+  allOption.value = 'all'; allOption.textContent = 'All zones'; sel.appendChild(allOption);
+  zones.forEach((name, id) => {
+    const option = document.createElement('option');
+    option.value = String(id); option.textContent = name; sel.appendChild(option);
+  });
   sel.value = current;
 }
 
@@ -387,6 +420,7 @@ function applyFilter() {
   if (zoneVal !== 'all') filtered = filtered.filter(c => c.zone_id == zoneVal);
   if (outcomeVal !== 'all') filtered = filtered.filter(c => c.outcome === outcomeVal);
   renderComparison(accuracyFrom(filtered), filtered);
+  document.getElementById('comparison-status').textContent = filtered.length + ' scored predictions shown.';
 }
 
 function renderComparison(accuracy, comparisons) {
@@ -398,7 +432,7 @@ function renderComparison(accuracy, comparisons) {
     html += accStat(accPct !== null ? accPct + '%' : '—', 'Accuracy', accClass);
     html += accStat(accuracy.total, 'Predictions', '');
     html += accStat(accuracy.total_waterings, 'Waterings', 'acc-good');
-    html += accStat(accuracy.total_skips, 'Skips', '');
+    html += accStat(accuracy.total_skips, 'No-water predictions', '');
     html += accStat(accuracy.false_skips, 'False Skips', accuracy.false_skips > 0 ? 'acc-bad' : '');
     html += accStat(accuracy.missed_skips, 'Missed Skips', accuracy.missed_skips > 0 ? 'acc-warn' : '');
     if (accuracy.early_waters !== undefined)
@@ -420,9 +454,9 @@ function renderComparison(accuracy, comparisons) {
   const dates = Object.keys(byDate).sort().reverse();
   html += '<div class="timeline">';
   dates.forEach(d => {
-    html += '<div class="day-group"><div class="day-header">' + formatDate(d) + '</div>';
+    html += '<section class="day-group"><h2 class="day-header">' + formatDate(d) + '</h2>';
     byDate[d].forEach(c => { html += renderRow(c); });
-    html += '</div>';
+    html += '</section>';
   });
   html += '</div>';
   document.getElementById('comparison-content').innerHTML = html;
@@ -470,6 +504,13 @@ function outcomeLabel(o) {
   return { correct_water:'✅ Correct', correct_skip:'✅ Correct', false_skip:'❌ False Skip',
            missed_skip:'⚠️ Missed', early_water:'🌊 Early', no_event:'— None', other:'? Other' }[o] || o;
 }
+
+document.querySelectorAll('.tab').forEach(function(tab) {
+  tab.addEventListener('click', function() { switchTab(tab.dataset.tab); });
+});
+document.getElementById('dayRange').addEventListener('change', loadComparison);
+document.getElementById('zoneFilter').addEventListener('change', applyFilter);
+document.getElementById('outcomeFilter').addEventListener('change', applyFilter);
 function formatDate(iso) {
   const d = new Date(iso + 'T12:00:00');
   return d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });

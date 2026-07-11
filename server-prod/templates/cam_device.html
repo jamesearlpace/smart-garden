@@ -60,12 +60,17 @@ function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return 
 function fmtTime(s){try{return new Date(s).toLocaleString()}catch(e){return s||'--'}}
 function num(v,d){return v==null?'--':Number(v).toFixed(d)}
 function card(label,value,detail,cls){return '<div class="card"><div class="label">'+esc(label)+'</div><div class="num '+(cls||'')+'">'+esc(value)+'</div><div class="sub" style="margin:4px 0 0">'+esc(detail||'')+'</div></div>'}
-function load(){
-  Promise.all([
-    fetch('/api/cam/status').then(function(r){if(!r.ok)throw new Error('Camera status unavailable ('+r.status+')');return r.json()}),
-    fetch('/api/cam-telemetry?hours=24').then(function(r){if(!r.ok)throw new Error('Telemetry unavailable ('+r.status+')');return r.json()})
-  ]).then(function(all){
-    var s=all[0]||{}, t=all[1]||{};
+var loading=false, pollTimer=null, stopped=false;
+function responseMessage(name,status){
+  if(status===401)return 'Session expired. Reload to sign in.';
+  if(status===403)return name+' access is forbidden.';
+  if(status===429)return name+' is rate-limited. Retry shortly.';
+  if(status>=500)return name+' service is temporarily unavailable.';
+  return name+' unavailable (HTTP '+status+').';
+}
+function getJson(url,name){return fetch(url).then(function(r){if(!r.ok)throw new Error(responseMessage(name,r.status));return r.json().catch(function(){throw new Error('Invalid '+name.toLowerCase()+' response.');});});}
+function renderStatus(s){
+    if(!s||typeof s!=='object'||typeof s.has_image!=='boolean'||!s.wifi||typeof s.wifi!=='object'||!s.ocr||typeof s.ocr!=='object'||!s.archive||typeof s.archive!=='object')throw new Error('Camera status format invalid.');
     var wifi=s.wifi||{}, ocr=s.ocr||{}, arch=s.archive||{}, acc=s.accepted_meter||{};
     var age='';
     if(s.timestamp){ age=Math.round((Date.now()-new Date(s.timestamp).getTime())/1000)+'s since upload'; }
@@ -77,20 +82,31 @@ function load(){
       card('Archive', (arch.files||0)+' files', num(arch.gb,2)+' GB of '+num(arch.cap_gb,2)+' GB', arch.enabled?'ok':'warn'),
       card('Reconnects', wifi.reconnects==null?'--':wifi.reconnects, 'device uptime '+(wifi.uptime_sec?Math.round(wifi.uptime_sec/3600)+' h':'--'), '')
     ].join('');
+}
+function renderTelemetry(t){
+    if(!t||typeof t!=='object'||!t.series||typeof t.series!=='object'||!Array.isArray(t.series.frames))throw new Error('Telemetry format invalid.');
     var series=t.series||{};
-    var rows=Array.isArray(series.frames)?series.frames:
-      (Array.isArray(t.rows)?t.rows:Array.isArray(t.telemetry)?t.telemetry:Array.isArray(t.samples)?t.samples:[]);
+    var rows=series.frames;
     document.getElementById('rows').innerHTML=rows.slice(-200).reverse().map(function(r){
       return '<tr><td>'+fmtTime(r.ts||r.timestamp)+'</td><td>'+esc(r.rssi==null?'--':r.rssi)+'</td><td>'+esc(r.gap_s==null?'--':num(r.gap_s,1)+'s')+'</td><td>'+esc(r.transfer_s==null?'--':num(r.transfer_s,2)+'s')+'</td><td>'+esc(r.uptime_sec==null?'--':Math.round(r.uptime_sec/3600)+'h')+'</td><td>'+esc(r.reconnects==null?'--':r.reconnects)+'</td></tr>';
     }).join('') || '<tr><td colspan="6">No telemetry rows returned.</td></tr>';
-  }).catch(function(e){
-    document.getElementById('cards').innerHTML=card('Load failed', e.message||e, 'Check /api/cam/status and /api/cam-telemetry', 'bad');
-    document.getElementById('rows').innerHTML='<tr><td colspan="6">Telemetry could not be loaded. Use Refresh to retry.</td></tr>';
-  });
+}
+function schedule(){clearTimeout(pollTimer);if(!stopped&&!document.hidden)pollTimer=setTimeout(load,15000);}
+function load(){
+  if(loading)return; loading=true;
+  Promise.allSettled([getJson('/api/cam/status','Camera status'),getJson('/api/cam-telemetry?hours=1','Telemetry')]).then(function(all){
+    if(all[0].status==='fulfilled'){try{renderStatus(all[0].value);}catch(e){document.getElementById('cards').innerHTML=card('Status unavailable',e.message,'Use Refresh to retry.','bad');}}
+    else document.getElementById('cards').innerHTML=card('Status unavailable',all[0].reason.message,'Use Refresh to retry.','bad');
+    if(all[1].status==='fulfilled'){try{renderTelemetry(all[1].value);}catch(e){document.getElementById('rows').innerHTML='<tr><td colspan="6">'+esc(e.message)+' Use Refresh to retry.</td></tr>';}}
+    else document.getElementById('rows').innerHTML='<tr><td colspan="6">'+esc(all[1].reason.message)+' Use Refresh to retry.</td></tr>';
+  }).finally(function(){loading=false;schedule();});
 }
 document.getElementById('refresh').addEventListener('click',load);
+document.addEventListener('visibilitychange',function(){if(document.hidden){clearTimeout(pollTimer);}else{load();}});
+window.addEventListener('pagehide',function(){stopped=true;clearTimeout(pollTimer);});
+window.addEventListener('pageshow',function(){stopped=false;load();});
+document.querySelectorAll('.mtn-link[data-path="/cam-device"]').forEach(function(link){link.setAttribute('aria-current','page');});
 load();
-setInterval(load,15000);
 </script>
 {% include '_mobilenav.html' %}
 </body>

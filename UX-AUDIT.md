@@ -293,3 +293,15 @@ Re-read all 37 findings in the current `orchestrator/findings-*.json` files. Eve
 | service / reporting availability | high/med | open - broader RCA | worker starvation, restart churn, telemetry, health boundary | Infrastructure and authentication-boundary campaign; not a display-only correction. |
 
 Browser re-verification could not run because the required in-app browser runtime was not exposed and the repository fallback lacked its Playwright dependency. Compile, guarded pre/post server diff, timestamped remote backup, service restart, `/login` smoke, authenticated `/api/audit`, and SHA-256 parity all passed. One current high finding was fixed; 31 current high/medium raw findings remain logged in broader or overlapping campaigns.
+
+## 2026-07-10 serial-fixer follow-up - rolling ranges and dashboard error sink
+
+Re-read all 37 current raw findings; all were already merged, so no duplicate rows were added. No finding was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| weather/cycle history APIs | high | fixed (`f5ffe4d`) | one-hour range inclusion | The read-only report queries now compare T-separated stored timestamps with T-separated local cutoffs. Live one-hour results begin at 19:01 rather than midnight. `dashboard.py` changed only reporting queries and cannot affect balances, schedules, runtimes, valves, or watering decisions. |
+| dashboard sensor test | high | fixed (`8e74df4`) | API-to-DOM HTML injection | API/fetch error text is rendered through `textContent` in a constructed span instead of `innerHTML`. |
+| camera provenance, calibration authority, timezone/DST contract, strict CSP extraction, service saturation, shared camera navigation | high/med | open - broader RCA | coordinated contracts / infrastructure | These remain broader campaigns: piecemeal display changes would invent missing provenance, reinterpret naive timestamps, overlap active shared-template work, or cross into service/auth architecture. The service-saturation failure is broader infrastructure RCA evidence, not a display defect. |
+
+Both deployments used timestamped backups, `/login` smoke tests, authenticated live API checks where applicable, and pre/post SHA-256 parity. The required in-app browser runtime was not exposed in this session, so browser interaction verification could not be performed.

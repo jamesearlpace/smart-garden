@@ -2390,3 +2390,15 @@ Decisions: `dashboard.py` changed only in the read-only audit serializer/query. 
 State: Compiled, backed up remotely, deployed, restarted, and verified with zero audit query errors plus SHA-256 parity. Browser verification was unavailable because the in-app runtime was not exposed and the fallback Playwright dependency was absent.
 
 Next: Director should schedule the remaining reporting-timezone, calibration/sensor serializer, camera identity, shared-navigation, and infrastructure campaigns.
+
+## 2026-07-10 - Serial UX follow-up: rolling history and safe dashboard errors
+
+Context: The latest 37 raw findings were already merged. The actionable one-hour reporting bug and dashboard sensor-test HTML sink were isolated from the broader camera, calibration, timezone, CSP, navigation, and saturation campaigns.
+
+Changes: Commit `f5ffe4d` makes weather/cycle history use T-separated rolling cutoffs; commit `8e74df4` renders sensor-test errors as text rather than HTML.
+
+Decisions: `dashboard.py` changed only read-only reporting queries. No balance, schedule, irrigation, runtime, precipitation, valve, MAD, or configuration behavior changed. Missing provenance, DST semantics, strict CSP extraction, service saturation, and overlapping shared navigation remain coordinated RCAs.
+
+State: Both checkpoints were backed up, deployed, `/login`-smoked, and hash-verified. Live one-hour weather/cycle responses now contain only the preceding hour. Browser automation was unavailable because the required in-app runtime was not exposed.
+
+Next: Run the coordinated camera/calibration/timezone/CSP/infrastructure campaigns; re-run browser interaction verification when the in-app runtime is available.

@@ -2628,3 +2628,14 @@ Decisions: The other 36 non-watering high/medium reports refine the existing ato
 State: Camera Quality keyboard bypass and match-result semantics are live. All remaining round-19 high/medium items are recorded under coordinated RCA campaigns.
 
 Next: Schedule the six coordinated contracts; handle manual-zone behavior only through the watering-control change process.
+## 2026-07-11 - Round-20 camera label safety and Flow truth
+
+Context: Read and merged all 32 round-20 findings. One Grapes automatic-mode/schedule/scoring finding is watering behavior and remains quarantined. Seven standalone display issues were added; the rest refine existing coordinated authority/reporting campaigns.
+
+Changes: Camera Labels validates all count fields (`6dd0e8d`), escapes the nine-character formatter (`5095abf`), rejects stale load generations (`a63adee`), and treats file as the unique mutation identity (`71565bb`). Flow keeps every unresolved event in its banner (`85fd488`) and rejects error-bearing 200 payloads (`9d19f8c`). Forecast comparison labels crop-adjusted `etc_mm` as ETc (`021bd67`).
+
+Decisions: Calibration identity/revisions, forecast lineage, audit query/performance contracts, and canonical water reconciliation remain coordinated RCAs. The API half of Flow's failure contract remains open because deploying the heavily dirty `dashboard.py` would absorb unrelated backend work. No Python backend or watering/control code changed.
+
+State: Six findings are fully fixed and live; Flow error-envelope display hardening is live but the combined API finding remains open. Each checkpoint used a timestamped backup, restart, `/login` smoke, authenticated API/page verification, and SHA-256 parity.
+
+Next: Land the clean Flow API status change with the coordinated backend work, then implement the versioned calibration/sample and canonical reporting contracts. Do not change Grapes behavior in a UX pass.

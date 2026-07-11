@@ -93,8 +93,6 @@ function wire(el){
   var ai = el.querySelector('[data-ai]');
   var row = el.querySelector('[data-row]');
   var msg = row.querySelector('.msg');
-  // lazily ask the CNN what it reads, to flag likely-wrong labels
-  fetch('/api/cam/training/img/'+encodeURIComponent(file)); // warm
   el.querySelector('.ok').onclick = function(){ commit(label); };
   el.querySelector('.rm').onclick = function(){
     if(!confirm('Discard this frame from the benchmark? (bad / cut-off capture)')) return;

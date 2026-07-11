@@ -12,8 +12,13 @@ foreach ($rel in $Files) {
     scp $local "acer:$remote"
 }
 ssh acer "sudo systemctl restart smart-garden-server && sudo systemctl is-active smart-garden-server"
-$login = curl.exe -sS -o NUL -w '%{http_code}' https://sprinklers.savagepace.com/login
-if ($login -ne '200') { throw "Live login smoke failed: HTTP $login" }
+$login = ''
+for ($attempt = 1; $attempt -le 15; $attempt++) {
+    $login = curl.exe -sS -o NUL -w '%{http_code}' https://sprinklers.savagepace.com/login
+    if ($login -eq '200') { break }
+    Start-Sleep -Seconds 2
+}
+if ($login -ne '200') { throw "Live login smoke failed after retries: HTTP $login" }
 foreach ($rel in $Files) {
     $local = Join-Path $root (Join-Path 'server-prod' $rel)
     $remote = "~/smart-garden-server/$($rel -replace '\\','/')"

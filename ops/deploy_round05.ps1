@@ -2,9 +2,8 @@ param([string[]]$Files)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $stage = Join-Path $env:TEMP 'smart-garden-round05-head'
-if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-New-Item -ItemType Directory -Path $stage | Out-Null
-git -C $root archive HEAD @Files | tar -xf - -C $stage
+if (Test-Path $stage) { git -C $root worktree remove --force $stage }
+git -C $root worktree add --detach $stage HEAD
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 foreach ($rel in $Files) {
     $remote = "~/smart-garden-server/$rel"
@@ -27,3 +26,4 @@ foreach ($rel in $Files) {
     if ($localHash -ne $remoteHash) { throw "Parity failed: $rel" }
     Write-Output "AFTER $rel parity=$localHash"
 }
+git -C $root worktree remove --force $stage

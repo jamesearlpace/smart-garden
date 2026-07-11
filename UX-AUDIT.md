@@ -305,3 +305,23 @@ Re-read all 37 current raw findings; all were already merged, so no duplicate ro
 | camera provenance, calibration authority, timezone/DST contract, strict CSP extraction, service saturation, shared camera navigation | high/med | open - broader RCA | coordinated contracts / infrastructure | These remain broader campaigns: piecemeal display changes would invent missing provenance, reinterpret naive timestamps, overlap active shared-template work, or cross into service/auth architecture. The service-saturation failure is broader infrastructure RCA evidence, not a display defect. |
 
 Both deployments used timestamped backups, `/login` smoke tests, authenticated live API checks where applicable, and pre/post SHA-256 parity. The required in-app browser runtime was not exposed in this session, so browser interaction verification could not be performed.
+
+## 2026-07-10 serial-fixer merge - forecast safety/accessibility, cost precision, and time contracts
+
+Reviewed all 25 findings in `orchestrator/findings-0.json` through `findings-5.json`. Twenty-three page/issue findings were newly folded into the backlog; the service-availability burst and favicon 404 were deduplicated into existing campaigns. None was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| forecast panels | high | fixed (`ba8cdf5`) | API-controlled HTML, attribute, inline-handler, configuration, option, and outcome sinks | Zone names and errors are escaped; IDs and percentages are validated/clamped; stored times are allowlisted; data-controlled inline actions were replaced with listeners; filter options use DOM text; outcomes are allowlisted. |
+| forecast comparison | high/med | fixed (`ba8cdf5`) | keyboard tabs, landmarks, labels, announcements, structure, equivalence, contrast, targets | Tabs are real named controls with exposed selection, the page has skip/main structure, filters are labeled and 44px tall, dates are headings, result announcements are concise, exclusions are explained, the impossible filter is gone, the client-derived metric is named `No-water predictions`, and foreground tokens are darker. |
+| forecast error state | med | fixed (`ba8cdf5`) | unsafe error sink | Error text is escaped before entering the existing card renderer. |
+| costs | med | fixed (`5dcd056`) | tier-rate precision | Per-gallon rates render five decimal places, preserving all distinctions in the live tariff. |
+| costs | low | open | snapshot/display conversion drift | Render daily disclosure gallons directly from `snapshots[].used_gal` in a later low-priority pass. |
+| origin/service-wide | med | open - broader RCA | navigation burst 502s | Deduped into the existing saturation/deployment-availability campaign; display code cannot repair tunnel/upstream failure. |
+| water-usage instant ranges | high | open - broader RCA | DST-aware bounds and half-open range contract | Requires one ZoneInfo-aware reporting range resolver and a coordinated meter-ledger/report serializer migration. Do not patch isolated labels while bounds remain ambiguous. |
+| watering/weather/cycle history reports | high | open - broader RCA | naive local instants and repeated-hour aggregation | Migrate stored/query instants and hourly buckets to an offset-aware common contract; read-only reporting issue, but broad enough for the existing timezone campaign. |
+| daily summary / balance history | med | open - broader RCA | calendar-date range contract | Replace hour-floor conversion with explicit resolved calendar bounds in the reporting-contract campaign. |
+| audit report | med | open - broader RCA | offset and elapsed/calendar semantics | Offset-aware serialization and distinct elapsed-24-hour versus calendar-day labels remain part of the shared reporting migration. |
+| water usage | low | open | range-state explanation | After the range resolver exists, show resolved offset, timezone, duration, and safe API validation detail. |
+
+Live `/forecast`, `/api/forecast`, `/api/forecast-vs-actual?days=30`, `/costs`, and `/api/water-cost` returned authenticated HTTP 200. JavaScript syntax checks, timestamped remote backups, service restarts, `/login` smoke tests, and SHA-256 server/local parity passed for both deployments. No Python backend file was edited. The required in-app browser runtime was not exposed by tool discovery; the auditors' authenticated Playwright evidence was retained and live authenticated HTML/API verification was used after each fix.

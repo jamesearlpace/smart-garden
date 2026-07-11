@@ -2402,3 +2402,15 @@ Decisions: `dashboard.py` changed only read-only reporting queries. No balance, 
 State: Both checkpoints were backed up, deployed, `/login`-smoked, and hash-verified. Live one-hour weather/cycle responses now contain only the preceding hour. Browser automation was unavailable because the required in-app runtime was not exposed.
 
 Next: Run the coordinated camera/calibration/timezone/CSP/infrastructure campaigns; re-run browser interaction verification when the in-app runtime is available.
+
+## 2026-07-10 - Serial UX fixer: forecast hardening and tariff precision
+
+Context: Merged 25 current auditor findings. The actionable display defects were forecast API-to-HTML safety, comparison accessibility/equivalence, and cost-tier precision. DST/range-contract and service-availability findings remain coordinated reporting/infrastructure RCAs.
+
+Changes: `ba8cdf5` validates or escapes forecast API fields, replaces data-controlled inline actions and option HTML, allowlists outcomes, adds semantic keyboard tabs/skip/main/filter labels/headings/concise status, explains scored exclusions, corrects the client metric label, and improves contrast/target size. `5dcd056` renders per-gallon tariff rates to five decimals.
+
+Decisions: No backend Python, irrigation balance, schedule, runtime, valve, MAD, precipitation, or watering configuration code changed. Offset-aware reporting requires one shared range/serialization contract rather than isolated display patches.
+
+State: Both commits were backed up and deployed independently. JavaScript syntax, public login, authenticated live pages/APIs, service state, and SHA-256 parity passed. Browser automation was unavailable because the required in-app Node REPL runtime was not exposed.
+
+Next: Run the reporting-timezone/range-contract and service-saturation campaigns; address the low daily-cost snapshot drift later.

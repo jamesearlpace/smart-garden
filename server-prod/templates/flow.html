@@ -89,12 +89,14 @@ button{font:inherit;padding:5px 12px;border:1px solid var(--border);border-radiu
   </div>
 
 <script>
-function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function flowState(s){return ['idle','watering','household','leak','unknown'].includes(s)?s:'unknown'}
+function eventSeverity(s){return ['urgent','warn','info','resolved'].includes(s)?s:'info'}
 function fmtTime(iso){try{return new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit'})}catch(e){return iso}}
 function isStaleOpen(e, latest){return latest && latest.state==='idle' && Number(latest.gpm||0)===0 && (Date.now()-new Date(latest.ts).getTime())<120000 && (new Date(latest.ts)-new Date(e.start_ts))>120000;}
 
 function load(){
-  fetch('/api/flow?samples=150').then(r=>r.json()).then(d=>{
+  fetch('/api/flow?samples=150').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{
     // Banner
     var latest=(d.samples||[])[0]||null;
     var open=(d.open_events||[]).filter(e=>!isStaleOpen(e,latest));
@@ -126,7 +128,7 @@ function load(){
       var when=fmtTime(e.start_ts)+(e.end_ts?(' → '+fmtTime(e.end_ts)):(stale?' (stale unresolved record)':' (ongoing)'));
       var g=e.gallons?(' · '+e.gallons.toFixed(1)+' gal'):'';
       var pk=e.peak_gpm?(' · peak '+e.peak_gpm.toFixed(2)+' gpm'):'';
-      return '<div class="ev '+esc(e.severity||'')+'"><b>'+esc((e.kind||'').toUpperCase())+'</b> — '+esc(e.note||'')+
+      return '<div class="ev '+eventSeverity(e.severity)+'"><b>'+esc((e.kind||'').toUpperCase())+'</b> — '+esc(e.note||'')+
         '<div class="muted" style="font-size:.74rem">'+when+g+pk+(e.resolved?' · resolved':'')+'</div></div>';
     }).join('') || '<div class="muted">No events yet — leaks, overruns and high-flow anomalies will appear here.</div>';
     // Samples
@@ -134,9 +136,9 @@ function load(){
       '<tr><td>'+fmtTime(s.ts)+'</td><td>'+(s.reading_cf!=null?s.reading_cf.toLocaleString():'—')+'</td>'+
       '<td>'+(s.delta_cf!=null?s.delta_cf.toFixed(3):'—')+'</td><td>'+(s.interval_s||'')+'s</td>'+
       '<td>'+(s.gpm!=null?s.gpm.toFixed(2):'—')+'</td><td>'+esc(s.active_zones||'—')+'</td>'+
-      '<td class="s-'+esc(s.state)+'">'+esc(s.state)+'</td><td class="muted">'+esc(s.note||'')+'</td></tr>'
+      '<td class="s-'+flowState(s.state)+'">'+esc(s.state)+'</td><td class="muted">'+esc(s.note||'')+'</td></tr>'
     ).join('') || '<tr><td colspan="8" class="muted">No samples yet.</td></tr>';
-  }).catch(e=>{var b=document.getElementById('banner');b.className='banner warn';b.textContent='Flow data could not be refreshed. Alerts are unavailable until retry.';document.getElementById('events').innerHTML='<div class="muted">Prior alerts hidden because current flow status is unavailable.</div>';});
+  }).catch(e=>{var b=document.getElementById('banner');b.className='banner warn';b.replaceChildren(document.createTextNode('Flow data could not be refreshed. Alerts are unavailable. '));var retry=document.createElement('button');retry.type='button';retry.textContent='Retry';retry.addEventListener('click',load);b.appendChild(retry);document.getElementById('zones').replaceChildren();document.getElementById('samples').replaceChildren();var unavailable=document.createElement('div');unavailable.className='muted';unavailable.textContent='Prior alerts hidden because current flow status is unavailable.';document.getElementById('events').replaceChildren(unavailable);});
 }
 load(); setInterval(load, 15000);
 </script>

@@ -31,6 +31,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 .table-scroll:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
 .table-scroll table{min-width:680px}
 .skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:8px;background:#fff;padding:8px;z-index:10}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
@@ -49,7 +50,7 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 <div class="note">"Fell back to oracle" = frames the CNN couldn't read, so the paid GPT-4o read them instead. High fallback + low accuracy = the CNN isn't carrying its weight yet; the oracle is.</div>
 
 <h2>Recent reads (CNN vs ground truth)</h2>
-<div class="table-scroll" role="region" aria-label="Recent CNN and ground-truth reads table" tabindex="0"><table id="recent"><thead><tr><th>Time</th><th>Frame</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table></div>
+<div class="table-scroll" role="region" aria-label="Recent CNN and ground-truth reads table" tabindex="0"><table id="recent"><thead><tr><th>Time</th><th>Frame</th><th>CNN matched oracle</th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table></div>
 </main>
 
 <script>
@@ -97,7 +98,7 @@ function loadQuality(){
     var ok=x.correct===1;
     return '<tr><td><time datetime="'+esc(x.ts||'')+'">'+esc(x.ts||'timestamp unavailable')+'</time></td>'
       +'<td class="mono">'+esc(x.frame_file||'legacy — unavailable')+'</td>'
-      +'<td class="'+(ok?'ok':'miss')+'">'+(ok?'&#10003;':'&#10007;')+'</td>'
+      +'<td class="'+(ok?'ok':'miss')+'"><span aria-hidden="true">'+(ok?'&#10003;':'&#10007;')+'</span><span class="sr-only">'+(ok?'Match':'Mismatch')+'</span></td>'
       +'<td class="mono">'+fmt9(x.cnn)+'</td><td class="mono">'+fmt9(x.oracle)+'</td><td>'+esc(x.version||'')+'</td></tr>';
   }).join('') : '<tr><td colspan="6">No data yet.</td></tr>';
  }).catch(function(e){ qualityError(e.message||'Could not load quality data.'); });

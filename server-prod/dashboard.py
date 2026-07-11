@@ -7955,7 +7955,7 @@ def create_app(config, engine, weather, billing):
         n = query_int("n", 200, min_value=1, max_value=500)
         flag = request.args.get("flag")
         manual = _load_manual()
-        out = []
+        candidates = []
         try:
             names = [f for f in os.listdir(BANK_DIR) if f.endswith(".jpg")]
         except FileNotFoundError:
@@ -7967,11 +7967,24 @@ def create_app(config, engine, weather, billing):
             lbl = mv.get("label") or name.split("_")[0]
             if not (lbl and lbl.isdigit() and len(lbl) == 9):
                 continue
-            out.append({"file": name, "label": lbl,
+            parts = name[:-4].split("_")
+            captured_at = None
+            if len(parts) >= 2 and parts[1].isdigit():
+                try:
+                    captured_at = datetime.fromtimestamp(
+                        int(parts[1]) / 1000.0).astimezone().isoformat(
+                            timespec="milliseconds")
+                except (OverflowError, OSError, ValueError):
+                    pass
+            candidates.append({"file": name, "frame_id": name,
+                        "captured_at": captured_at,
+                        "provenance": parts[2] if len(parts) >= 3 else "legacy",
+                        "label": lbl,
                         "img": "/api/cam/training/img/" + name,
                         "corrected": bool(mv.get("action") == "correct")})
-            if len(out) >= n:
-                break
+        candidates.sort(key=lambda r: r["file"])
+        total_count = len(candidates)
+        out = candidates[:n]
         if flag:
             for it in out:
                 try:
@@ -7992,6 +8005,8 @@ def create_app(config, engine, weather, billing):
         out.sort(key=lambda r: (not r.get("disagree", False), r["file"]))
         n_dis = sum(1 for r in out if r.get("disagree"))
         return jsonify({"frames": out, "count": len(out),
+                        "total_count": total_count,
+                        "limit": n, "has_more": total_count > len(out),
                         "disagree": n_dis, "flagged": bool(flag)})
 
     @app.route("/api/cam/test-set/remove", methods=["POST"])

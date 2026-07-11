@@ -77,6 +77,7 @@ function card(it){
     + '<div class="body">'
     + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span>'
     + (it.corrected?' <span class="tag">\u2713 yours</span>':'')+'</div>'
+    + '<div class="meta">Captured '+esc(it.captured_at||'time unavailable')+' &middot; source '+esc(it.provenance||'unknown')+' &middot; frame '+esc(it.frame_id||it.file)+'</div>'
     + cnnLine
     + '<div class="row" data-row>'
     + '<button class="ok" aria-label="Label is right for frame '+esc(it.file)+'">\u2713 Label is right</button><button class="fix" aria-label="Fix label for frame '+esc(it.file)+'">Fix</button>'
@@ -149,14 +150,16 @@ function render(){
 function testAuditError(message){var s=document.getElementById('sub');s.setAttribute('role','alert');s.innerHTML=esc(message)+' <button type="button" id="testRetry">Retry</button>';document.getElementById('testRetry').addEventListener('click',loadTestAudit);}
 function loadTestAudit(){
  var s=document.getElementById('sub');s.setAttribute('role','status');s.textContent='Running the model on each held-out frame… (up to 30 seconds)';
- var controller=new AbortController(), timer=setTimeout(function(){controller.abort();},30000);
+ var controller=new AbortController(), timer=setTimeout(function(){controller.abort();},60000);
  fetch('/api/cam/test-set?n=300&flag=1',{signal:controller.signal}).then(function(r){if(!r.ok)throw new Error('Could not load benchmark frames (HTTP '+r.status+').');return r.json();}).then(function(d){
   if(!d||!Array.isArray(d.frames))throw new Error('Benchmark data has an invalid format.');
   var rejected=d.frames.length-d.frames.filter(validFrame).length; ALL=d.frames.filter(validFrame);
+  var total=Number.isFinite(Number(d.total_count))?Number(d.total_count):ALL.length;
   var nd = ALL.filter(function(x){return x.disagree && !x.corrected;}).length;
   document.getElementById('sub').innerHTML = '<b>'+nd+'</b> of '+ALL.length
     + ' benchmark frames still need review — the model disagrees with the stored label. ✓ if the label matches the meter, Fix if the label is wrong (reviewed ones drop off this list).';
   document.getElementById('controls').style.display = 'flex';
+  document.getElementById('sub').textContent += ' Loaded deterministic subset: '+ALL.length+' of '+total+' total held-out frames.';
   document.getElementById('suspToggle').onchange = render;
   render();
   if(rejected) document.getElementById('sub').textContent += ' '+rejected+' invalid frame'+(rejected===1?' was':'s were')+' skipped.';

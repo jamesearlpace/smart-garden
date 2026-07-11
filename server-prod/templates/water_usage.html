@@ -29,8 +29,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .chip{font-size:.8rem;padding:6px 14px;border-radius:20px;border:1px solid var(--border);
   background:var(--card);cursor:pointer;font-weight:600}
 .chip.on{background:var(--text);color:#fff;border-color:var(--text)}
-.controls{display:grid;grid-template-columns:minmax(220px,1.25fr) 1fr 1fr 150px 155px auto auto;gap:8px;align-items:end;
+.controls{display:grid;grid-template-columns:minmax(180px,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(120px,150px) minmax(120px,155px) auto auto;gap:8px;align-items:end;
   background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.controls>*{min-width:0}
 .ctl label{display:block;font-size:.68rem;font-weight:700;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
 .ctl input,.ctl select{width:100%;height:34px;border:1px solid var(--border);border-radius:7px;background:#fff;
   color:var(--text);font:inherit;font-size:.82rem;padding:5px 8px}

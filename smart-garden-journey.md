@@ -2537,3 +2537,11 @@ Context: Read and merged all 28 round-11 findings; none concerned watering behav
 Changes: Convergence query validation rejects unsupported requests before database work, its displayed coverage aggregation avoids the correlated scan, and incomplete/null trend payloads fail closed.
 
 Decisions/State/Next: `dashboard.py` and `meter_archive.py` are read-only reporting changes; no watering/control logic changed. Commit `d1a4f05` was deployed with backups; authenticated convergence completed in 76 ms, invalid input returned 400 in 1.4 ms, `/login` returned 200, and SHA-256 parity passed. Costs CSP, regression inference pagination, CNN metric provenance, and sensor identity/revision remain coordinated campaigns.
+
+## 2026-07-10 - Round-12 forecast request ownership
+
+Context: Read and merged all 32 round-12 findings; none concerned watering behavior. Twenty-one high/medium reports refine the existing atomic moisture, dashboard authority, telemetry-time, reading-detail, CSP, and calibration-provenance campaigns.
+
+Changes: Forecast loads now have one page-level abort owner and a render sequence, so an older overlapping response cannot overwrite newer display state (`065491d`).
+
+Decisions/State/Next: This was template-only; no backend or watering/control code changed. Deployed after a timestamped backup with authenticated forecast/API checks, `/login` smoke, service-active verification, and server/local SHA-256 parity. Continue the six coordinated campaigns recorded in `UX-AUDIT.md`.

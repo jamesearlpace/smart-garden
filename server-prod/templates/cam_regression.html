@@ -32,6 +32,9 @@ h1{font-size:1.35rem;margin-bottom:2px}
 .row{margin-top:8px;display:flex;gap:6px;align-items:center}
 .rm{font-size:.74rem;padding:4px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text2);cursor:pointer}
 .msg{font-size:.72rem}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:0 0 14px}
+.controls label{font-size:.78rem;font-weight:700}.controls input,.controls select,.controls button{display:block;min-height:44px;margin-top:3px;padding:8px;border:1px solid var(--border);border-radius:8px;background:#fff}
+.pager{display:flex;gap:8px;align-items:center;margin:14px 0}.pager button,.rm{min-height:44px}.inspect{display:block}.inspect:focus-visible{outline:3px solid var(--blue);outline-offset:-3px}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
@@ -41,8 +44,15 @@ h1{font-size:1.35rem;margin-bottom:2px}
 <h1>&#9875; Regression set</h1>
 <div class="sub" id="sub">Loading the permanent regression frames&hellip;</div>
 <div class="bar">These are <b>known-hard frames the model got wrong and a human verified</b> (glare collapse, current leading edge). They are <b>always test</b> &mdash; the trainer never trains on them &mdash; and the gate must never let a new model silently regress on them. A fixed failure becomes a <b>forever-test</b>. Add frames from the <a href="/cam/test-audit">benchmark audit</a> with the &#9875; button.</div>
+<div class="controls" aria-label="Regression frame controls">
+  <label>Filter frames<input id="filter" type="search" placeholder="Filename or reading"></label>
+  <label>Result<select id="result"><option value="all">All results</option><option value="fail">Failures</option><option value="pass">Passing</option><option value="noread">No read</option></select></label>
+  <label>Sort<select id="sort"><option value="file">Filename</option><option value="label">Verified reading</option><option value="result">Result</option></select></label>
+  <button type="button" id="reset">Clear filters</button>
+</div>
 <div class="score" id="score"></div>
 <div class="grid" id="grid"></div>
+<div class="pager" id="pager" hidden><button type="button" id="prev">Previous</button><span id="pageStatus" role="status" aria-live="polite"></span><button type="button" id="next">Next</button></div>
 
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -65,12 +75,12 @@ function card(it){
     ? (p ? '<div class="verdict" style="color:var(--green)">\u2713 PASS</div>'
          : '<div class="verdict" style="color:var(--red)">\u2717 FAIL</div>') : '';
   return '<div class="card '+(it.cnn?(p?'pass':'fail'):'')+'" data-file="'+esc(it.file)+'">'
-    + '<div class="imgwrap"><img loading="lazy" alt="Regression frame '+esc(it.file)+'; verified label '+fmt9(it.label)+'" src="'+esc(safeImg(it.img))+'"></div>'
+    + '<div class="imgwrap"><a class="inspect" href="'+esc(safeImg(it.img))+'" target="_blank" rel="noopener" aria-label="Open full-size regression frame '+esc(it.file)+'"><img loading="lazy" alt="Regression frame '+esc(it.file)+'; verified label '+fmt9(it.label)+'" src="'+esc(safeImg(it.img))+'"></a></div>'
     + '<div class="body">'
     + '<div class="lbl">'+fmt9(it.label)+' <span class="dot">ft\u00b3</span></div>'
     + read + verdict
     + (it.reason?('<div class="reason">'+esc(it.reason)+'</div>'):'')
-    + '<div class="row"><button class="rm">remove</button><span class="msg"></span></div>'
+    + '<div class="row"><button class="rm" aria-label="Remove regression frame '+esc(it.file)+'">remove</button><span class="msg" role="status"></span></div>'
     + '</div></div>';
 }
 
@@ -111,10 +121,31 @@ function loadRegression(){
   var col = pct===100 ? 'var(--green)' : (pct>=80 ? 'var(--amber)' : 'var(--red)');
   document.getElementById('score').innerHTML =
     '<span style="color:'+col+'">'+np+' / '+n+' passing ('+pct+'%)</span>';
-  document.getElementById('grid').innerHTML = fr.map(card).join('');
-  document.querySelectorAll('#grid .card').forEach(wire);
+  allFrames=fr; currentPage=1; renderFrames();
  }).catch(function(e){ showLoadError(e.message||'Could not load the regression set.'); });
 }
+var allFrames=[], currentPage=1, pageSize=24;
+function renderFrames(){
+  var q=document.getElementById('filter').value.trim().toLowerCase(), result=document.getElementById('result').value;
+  var shown=allFrames.filter(function(x){
+    var match=!q||(String(x.file)+' '+String(x.label)+' '+String(x.cnn||'')).toLowerCase().includes(q);
+    var state=x.cnn?(x.pass?'pass':'fail'):'noread'; return match&&(result==='all'||state===result);
+  });
+  var sort=document.getElementById('sort').value;
+  shown.sort(function(a,b){var av=sort==='label'?String(a.label):sort==='result'?(a.cnn?(a.pass?'pass':'fail'):'noread'):String(a.file);var bv=sort==='label'?String(b.label):sort==='result'?(b.cnn?(b.pass?'pass':'fail'):'noread'):String(b.file);return av.localeCompare(bv);});
+  var pages=Math.max(1,Math.ceil(shown.length/pageSize)); currentPage=Math.min(currentPage,pages);
+  var subset=shown.slice((currentPage-1)*pageSize,currentPage*pageSize), grid=document.getElementById('grid');
+  grid.innerHTML=subset.map(card).join('') || '<div class="bar">No frames match these filters. Clear filters to restore the full set.</div>';
+  document.querySelectorAll('#grid .card').forEach(wire);
+  var pager=document.getElementById('pager'); pager.hidden=shown.length<=pageSize;
+  document.getElementById('prev').disabled=currentPage===1; document.getElementById('next').disabled=currentPage===pages;
+  document.getElementById('pageStatus').textContent=shown.length+' frame'+(shown.length===1?'':'s')+'; page '+currentPage+' of '+pages;
+}
+['filter','result','sort'].forEach(function(id){document.getElementById(id).addEventListener(id==='filter'?'input':'change',function(){currentPage=1;renderFrames();});});
+document.getElementById('reset').addEventListener('click',function(){document.getElementById('filter').value='';document.getElementById('result').value='all';document.getElementById('sort').value='file';currentPage=1;renderFrames();});
+document.getElementById('prev').addEventListener('click',function(){if(currentPage>1){currentPage--;renderFrames();}});
+document.getElementById('next').addEventListener('click',function(){currentPage++;renderFrames();});
+document.querySelectorAll('.mtn-link[data-path="/cam/regression"]').forEach(function(link){link.setAttribute('aria-current','page');link.addEventListener('click',function(e){e.preventDefault();});});
 loadRegression();
 </script>
 {% include '_mobilenav.html' %}

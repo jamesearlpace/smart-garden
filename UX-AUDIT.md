@@ -403,3 +403,23 @@ Reviewed all 41 findings in `orchestrator/_work/round-03/findings-0.json` throug
 Low-only loading-state polish remains outside this pass.
 
 All four display-only checkpoints were deployed separately after timestamped remote backups. JavaScript parsing, live authenticated Playwright reproduction/regression checks, `/login` smoke tests, and local/server SHA-256 parity passed. No backend `.py`, watering engine, schedule generator, configuration, database, or valve path was edited.
+
+## 2026-07-10 serial-fixer merge - round 04 camera tools and health
+
+Read all 35 findings in `orchestrator/_work/round-04/findings-0.json` through `findings-5.json`. Eighteen page/issue findings were newly folded into the backlog; seventeen deduplicate into the existing camera identity/provenance, shared camera navigation, site favicon, and service saturation/liveness campaigns. No finding was watering behavior.
+
+| Page / area | Severity | Status | Category | Resolution / RCA |
+|---|---|---|---|---|
+| camera reading / archive / quality APIs | high/med | open - broader RCA | immutable frame identity, carried/accepted provenance, quality joins, versioned rollups | Six findings refine the existing camera data-contract campaign. Capture, OCR, archive, and evaluation use independent identifiers; a display patch cannot truthfully invent durable joins or accepted-state lineage. |
+| cam/regression | high | open | rapid active-link navigation | Repeated activation of the current Regression link can leave a blank same-URL document. Make the current destination non-navigating and add current-page semantics. |
+| cam/regression | med | open | accessible row actions and image inspection | Remove controls do not name their frame and images have no keyboard-operable inspection path. Add frame-specific names and read-only links. |
+| cam/regression | med | open | filter, sort, pagination | The permanent set cannot be narrowed, reordered, or paged; add read-only controls, count announcements, reset, and paging. |
+| cam/convergence | high/med | open | bounded loading, chart equivalence, reflow, status/table semantics, target size | Add GET timeout/Retry and fail-closed states, a named chart plus text data, responsive containment, explicit disagreement text, semantic audit table/status, and 44px controls. |
+| shared camera tool strip | med | open - overlapping work | current-item visibility and target size | `_meternav.html` contains unrelated in-progress user changes. Preserve it for the existing shared-navigation campaign; page-local current semantics may be added without replacing that work. |
+| cam-device | med | open | failure/schema isolation | Status and telemetry failures are collapsed and invalid schema looks like legitimate zero/empty data. Validate and render independent classified states. |
+| cam-device | med | open | polling bandwidth and overlap | Full 24-hour telemetry is fetched every 15 seconds and slow requests overlap. Bound the displayed payload, self-schedule one request, and pause while hidden. |
+| health history reports | high | open - overlapping reporting fix | T-separated rolling cutoff | Three read-only history queries compare T-separated stored values with space-separated cutoffs. The required query fix overlaps uncommitted `database.py` work and must be staged/deployed without absorbing unrelated changes. |
+| origin / application health | high/med | open - broader RCA | authenticated liveness, worker saturation, layer attribution | The monitor accepts redirects/rejections as healthy and lacks queue/worker/probe telemetry. This is the existing infrastructure/observability campaign, not a UI-only correction. |
+| Health dashboard | med | open | verdict, freshness, uptime, loading, incidents | Scope ESP32 and application uptime separately, fail closed on stale/error/empty history, and reconcile the headline with valve and connectivity evidence. Incident grouping needs an authoritative reporting contract. |
+
+Low-only malformed-response wording, loading skeleton, convergence empty-state polish, corrupted Regression glyph, and favicon reports remain outside this pass.

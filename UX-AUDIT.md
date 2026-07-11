@@ -579,3 +579,26 @@ Read all 41 findings in `orchestrator/_work/round-13/findings-0.json` through `f
 | cam/cnn-report | high/med | open - broader RCA | exhaustive outcome partition, oracle reconciliation and metric provenance | Existing typed metric-contract campaign. The current API lacks canonical unknown/error/excluded and call/check classifications, so the UI must not invent reconciliation labels. |
 
 No code fix or deployment was made in this round. The only apparent manual-zone display defect depends on `/api/schedule-7day` control/schedule output and remains in Watering-behavior (DO NOT FIX). No backend `.py`, template, irrigation balance/credit, schedule generator, valve, runtime, precipitation, MAD, or watering configuration file was changed.
+
+## 2026-07-10 round-14 serial-fixer merge
+
+Read all 28 findings in `orchestrator/_work/round-14/findings-0.json` through `findings-5.json`, including the zero-finding authentication/cache file. Six distinct display issues were added and fixed. The Grapes automatic-schedule contradiction deduplicates into Watering-behavior (DO NOT FIX) and was not changed.
+
+| Page | Severity | Status | Category | Finding | Resolution |
+|---|---|---|---|---|---|
+| water-usage | med | fixed (`1133e27`) | bucket-unit accuracy | API `bucket_s=90` could be presented using the inconsistent `bucket_label` as one minute. | Labels now derive from authoritative seconds and show `1.5 min (90 sec)` consistently. |
+| water-usage audit | med | fixed (`7a03956`) | audit-verdict reconciliation | “Accurate” appeared beside visibly different chart and physical totals without arithmetic. | The display now shows physical movement + boundary/carry adjustment = chart total and explicitly discloses that the API omits tolerance and adjustment timestamps. |
+| login | med | fixed (`1974763`) | announced error state | Dynamic sign-in errors were visual only. | The persistent error container is an assertive atomic alert. |
+| cam/focus | med | fixed (`0886c94`) | lock persistence | A successful frame load re-enabled controls that stored locks said were locked. | Lock state is reapplied after frame actions become available. |
+| cam/focus | med | fixed (`13226da`) | precise ROI persistence | The transformed preset was not persisted immediately, causing a one-pixel reload drift. | Full-precision canvas-relative ROI state is saved immediately after initialization. |
+| cam/focus | med | fixed (`fe198ca`) | initial navigation clipping | Active-link centering loaded the shared tool strip with Dashboard clipped. | Focus resets the strip to its leading edge after initialization. |
+
+The reported login deep-link defect did not reproduce: both git and live already render a validated local `next_path`; live curl for `/login?next=%2Fcam%2Freading%2F1` produced `const nextPath = "/cam/reading/1"`. External, protocol-relative, control-character, and backslash targets remain rejected by `safe_next_path`, so no duplicate backlog row or code change was warranted.
+
+| Campaign | Severity | Status | Round-14 refinements | Disposition |
+|---|---|---|---|---|
+| moisture-sim | high/med | open - broader RCA | stale overwrite, duplicate initialization, bounded schedule failure, history navigation, and cross-endpoint snapshot identity | Deduplicated into the atomic all-zone display-snapshot campaign. One generation-bearing read-only envelope and one client owner are required; do not change schedule generation or the watering predictor. |
+| cam/test-audit and regression | high/med | open - broader RCA | full pagination, denominator/version provenance, immutable-frame equivalence, bounded error handling, and metric explanation | Deduplicated into the persisted model-versioned benchmark/inference campaign. |
+| cam/quality and cnn-report | high/med | open - broader RCA | inconsistent denominators, unexplained outcome remainders, frame provenance, and responsive/keyboard navigation | Deduplicated into the typed camera metric/provenance contract and shared-navigation campaigns; do not invent missing outcome partitions in presentation. |
+
+Thirteen non-watering high/medium raw findings remain represented by those coordinated campaigns. No backend `.py`, irrigation balance/credit, schedule generator, valve, runtime, precipitation, MAD, or watering configuration file was changed.

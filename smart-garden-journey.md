@@ -2557,3 +2557,15 @@ Decisions: All non-watering high/medium reports refine existing coordinated atom
 State: Zero new distinct findings, zero fixes, no deployment, and 38 raw high/medium findings remain represented by six open coordinated campaigns.
 
 Next: Land those campaigns as coordinated changes with their required data contracts; do not patch schedule/control output from a UX pass.
+
+## 2026-07-10 - Round-14 water labels, login alert, and Focus persistence
+
+Context: Read and merged all 28 round-14 findings. One Grapes automatic-schedule contradiction remains quarantined as watering behavior.
+
+Changes: Water Usage derives bucket labels from `bucket_s` (`1133e27`) and explains visible audit reconciliation arithmetic (`7a03956`). Login errors are announced (`1974763`). Focus reapplies stored locks, immediately persists the precise transformed ROI, and starts its tool strip at the leading edge (`0886c94`, `13226da`, `fe198ca`).
+
+Decisions: The login deep-link report was invalidated by live curl and existing same-origin validation. Moisture atomic snapshots and camera benchmark/metric provenance remain coordinated campaigns. No backend Python or watering/control code changed.
+
+State: Six display fixes were committed and deployed serially with timestamped backups, `/login` smoke checks, and SHA-256 parity. Thirteen non-watering high/medium raw findings remain represented by coordinated campaigns.
+
+Next: Implement the atomic moisture envelope and the persisted, versioned camera metric/provenance contracts without changing schedule generation or watering behavior.

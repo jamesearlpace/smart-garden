@@ -99,7 +99,7 @@ function load(){
   fetch('/api/flow?samples=150').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{
     // Banner
     var latest=(d.samples||[])[0]||null;
-    var open=(d.open_events||[]).filter(e=>!isStaleOpen(e,latest));
+    var open=d.open_events||[];
     var b=document.getElementById('banner');
     if(open.length){
       var urgent=open.some(e=>e.severity==='urgent');

@@ -347,7 +347,7 @@ async function loadComparison() {
   const box = document.getElementById('comparison-content');
   box.innerHTML = '<div class="card">Updating comparison…</div>';
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), 60000);
   try {
     const r = await fetch('/api/forecast-vs-actual?days=' + days, {signal:controller.signal, headers:{'X-Requested-With':'XMLHttpRequest'}});
     if (r.status === 401) throw new Error('Your session expired. Sign in again, then retry this view.');

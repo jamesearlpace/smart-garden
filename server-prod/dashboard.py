@@ -3972,14 +3972,14 @@ def create_app(config, engine, weather, billing):
                 "SELECT strftime('%Y-%m-%dT%H:00:00',ts) as ts, "
                 "ROUND(AVG(wind_mph),1) as wind_mph, ROUND(SUM(rain_mm),2) as rain_mm, "
                 "ROUND(AVG(et0_mm),3) as et0_mm, ROUND(AVG(solar_rad),0) as solar_rad "
-                "FROM weather_log WHERE source='api' AND ts >= datetime('now','localtime',?) "
+                "FROM weather_log WHERE source='api' AND ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
                 "GROUP BY strftime('%Y-%m-%dT%H',ts) ORDER BY ts",
                 (f"-{hours} hours",),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT ts, wind_mph, rain_mm, et0_mm, solar_rad "
-                "FROM weather_log WHERE source='api' AND ts >= datetime('now','localtime',?) "
+                "FROM weather_log WHERE source='api' AND ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) "
                 "ORDER BY ts",
                 (f"-{hours} hours",),
             ).fetchall()
@@ -3994,7 +3994,7 @@ def create_app(config, engine, weather, billing):
         rows = conn.execute(
             "SELECT ts, zones_evaluated, zones_skipped, zones_watered, "
             "zones_outside_window, dominant_reason "
-            "FROM cycle_summary WHERE ts >= datetime('now','localtime',?) ORDER BY ts",
+            "FROM cycle_summary WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime',?) ORDER BY ts",
             (f"-{hours} hours",),
         ).fetchall()
         conn.close()

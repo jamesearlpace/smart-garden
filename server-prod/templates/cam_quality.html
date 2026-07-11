@@ -88,7 +88,7 @@ function loadQuality(){
   var rc=d.recent||[];
   document.querySelector('#recent tbody').innerHTML = rc.length ? rc.map(function(x){
     var ok=x.correct===1;
-    return '<tr><td>'+esc((x.ts||'').slice(11,19))+'</td>'
+    return '<tr><td><time datetime="'+esc(x.ts||'')+'">'+esc(x.ts||'timestamp unavailable')+'</time></td>'
       +'<td class="mono">'+esc(x.frame_file||'legacy — unavailable')+'</td>'
       +'<td class="'+(ok?'ok':'miss')+'">'+(ok?'&#10003;':'&#10007;')+'</td>'
       +'<td class="mono">'+fmt9(x.cnn)+'</td><td class="mono">'+fmt9(x.oracle)+'</td><td>'+esc(x.version||'')+'</td></tr>';

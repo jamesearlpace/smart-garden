@@ -3929,8 +3929,14 @@ def create_app(config, engine, weather, billing):
             return jsonify(flow_monitor.build_report(config, limit))
         except Exception as e:
             log.warning("api_flow failed: %s", e)
-            return jsonify({"error": str(e), "zones": [], "samples": [],
-                            "events": [], "open_events": []})
+            return jsonify({
+                "ok": False,
+                "error": {
+                    "code": "FLOW_UNAVAILABLE",
+                    "message": "Flow data is temporarily unavailable.",
+                },
+                "zones": [], "samples": [], "events": [], "open_events": [],
+            }), 503
 
     @app.route("/api/connectivity")
     def api_connectivity():

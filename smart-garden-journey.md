@@ -2510,3 +2510,15 @@ Decisions: Calibration authority, strict CSP, timestamp contracts, dashboard gen
 State: Three checkpoints deployed after backups. Live authenticated Playwright, `/login`, restart recovery, and SHA-256 parity passed.
 
 Next: Land the isolated read-only telemetry cutoff and finish the page-local camera reading recovery/landmark work.
+
+## 2026-07-10 - Serial UX fixer: round 09 forecast extreme zoom
+
+Context: Read all 40 round-09 findings. None was a new page/issue after deduplication; two watering-control reports remain quarantined. The only clean standalone open defect was Forecast comparison reflow at 200% and 400% zoom.
+
+Changes: Forecast tabs stack at narrow effective widths, controls and comparison content shrink/wrap, summary cards lose their intrinsic minimum, forecast rows stack, and shared mobile navigation uses zero-minimum grid tracks (`4034c11`, `21bfa08`, `49a495d`).
+
+Decisions: Moisture atomic snapshots, Dashboard generation/command authority, Cam Device time ranges, camera-reading detail, and calibration/sensor authority remain coordinated RCA campaigns. Dirty `database.py` and `cam_reading.html` were not absorbed. No backend Python or watering/control code changed.
+
+State: Three guarded template deployments used timestamped backups, `/login` smoke checks, and server/local SHA-256 parity. Authenticated live Playwright measured exact document containment at 195px and 98px effective viewports. Thirty-two non-watering high/medium raw findings remain grouped into five broader/overlapping campaigns.
+
+Next: Land the isolated read-only telemetry cutoff from a clean database patch, then run the atomic snapshot, Dashboard authority, camera-detail, and calibration-authority campaigns.

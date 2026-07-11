@@ -27,6 +27,9 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 .mono{font-family:ui-monospace,monospace}
 .miss{color:var(--red)}.ok{color:var(--green)}
 .note{font-size:.8rem;color:var(--text2);margin-top:6px}
+.table-scroll{max-width:100%;overflow-x:auto;border-radius:10px}
+.table-scroll:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+.table-scroll table{min-width:680px}
 </style>
 <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
 </head>
@@ -39,11 +42,11 @@ td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
 <div id="banner" class="banner up" role="status" aria-live="polite">Checking oracle&hellip;</div>
 
 <h2>Live CNN accuracy over time <span class="note">(oracle-graded &mdash; this is the real metric, not the offline benchmark)</span></h2>
-<table id="daily"><thead><tr><th>Date</th><th>Model</th><th class="r">CNN accuracy</th><th class="r">samples</th><th class="r">fell back to oracle</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table>
+<div class="table-scroll" role="region" aria-label="Live CNN accuracy table" tabindex="0"><table id="daily"><thead><tr><th>Date</th><th>Model</th><th class="r">CNN accuracy</th><th class="r">samples</th><th class="r">fell back to oracle</th></tr></thead><tbody><tr><td colspan="5">Loading&hellip;</td></tr></tbody></table></div>
 <div class="note">"Fell back to oracle" = frames the CNN couldn't read, so the paid GPT-4o read them instead. High fallback + low accuracy = the CNN isn't carrying its weight yet; the oracle is.</div>
 
 <h2>Recent reads (CNN vs ground truth)</h2>
-<table id="recent"><thead><tr><th>Time</th><th>Frame</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table>
+<div class="table-scroll" role="region" aria-label="Recent CNN and ground-truth reads table" tabindex="0"><table id="recent"><thead><tr><th>Time</th><th>Frame</th><th></th><th>CNN said</th><th>Oracle (truth)</th><th>Model</th></tr></thead><tbody><tr><td colspan="6">Loading&hellip;</td></tr></tbody></table></div>
 
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}

@@ -324,7 +324,7 @@ function loadLabels(){
   var rejected=0, duplicates=0, seen=Object.create(null), valid=[];
   d.items.forEach(function(i){
     if(!validItem(i)){rejected++;return;}
-    var key=i.file+'|'+String(i.captured_ms||'');
+    var key=i.file;
     if(seen[key]){duplicates++;return;}
     seen[key]=1; valid.push(i);
   });

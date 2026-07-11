@@ -264,36 +264,41 @@ function render(d){
   html += '<div class="table-scroll" tabindex="0" role="region" aria-label="Bill history table"><table style="margin-top:10px"><thead><tr><th>Cycle</th><th>Used (ft³)</th><th>Gallons</th>'
         + '<th>Water</th><th>Sewer</th><th>Storm</th><th>Total</th></tr></thead><tbody>';
   d.history.forEach(function(h){
-    html += '<tr class="' + (h.actual?'':'est') + '"><td>' + esc(h.label) + (h.actual?'':'')
+    var historyKind = h.actual ? 'paid bill' : (h.source ? 'completed derived cycle' : 'open-cycle projection');
+    var historySource = h.actual ? 'paper bill' : (h.source || 'live meter projection');
+    html += '<tr class="' + (h.actual?'':'est') + '"><td>' + esc(h.label)
+          + '<br><span class="muted">' + esc(historyKind + ' · ' + historySource) + '</span>'
           + '</td><td>' + num(h.used_cf,0) + '</td><td>' + num(h.used_gal,0) + '</td><td>' + money(h.water)
           + '</td><td>' + money(h.sewer) + '</td><td>' + money(h.storm) + '</td><td><b>' + money(h.total) + '</b></td></tr>';
   });
   if(!d.history.length) html += '<tr><td colspan="7" class="muted">No bill history available.</td></tr>';
   html += '</tbody></table></div>';
-  html += '<p class="muted" style="margin-top:8px">Solid rows are real paid bills; the italic row is this cycle projected from the meter. '
+  html += '<p class="muted" style="margin-top:8px">Solid rows are paid paper bills. Italic rows are either completed cycles derived from the named start/end anchors or the open-cycle projection, as labeled. '
         + 'Rates: ' + r.year + ' City of Duvall · base ' + money(r.base_fee) + ' · sewer ' + money(r.sewer)
         + ' · storm ' + money(r.storm) + ' · <a href="' + esc(r.source_url) + '" target="_blank" rel="noopener">rate source</a>.</p>';
   html += '</div>';
 
   // ── Daily usage from meter snapshots ──
   html += '<div class="card"><h2>Daily water use (from meter)</h2>';
-  if(d.snapshots && d.snapshots.filter(function(s){return s.used_cf>0;}).length){
+  if(d.snapshots && d.snapshots.length){
     html += '<div class="chart-wrap"><canvas id="usageChart" role="img" aria-label="Daily water usage in gallons"></canvas></div>';
+    html += '<p class="muted" aria-label="Daily usage source legend">Sources: <span style="color:#2563eb">■ auto camera</span> · <span style="color:#64748b">■ paper bill</span> · <span style="color:#f59e0b">■ interpolated</span> · <span style="color:#a855f7">■ carried</span></p>';
     html += accessibleSeries('Daily water usage values', d.snapshots);
-    html += '<p class="muted" style="margin-top:8px">One snapshot per day from the camera. Bars before the first auto snapshot '
-          + 'are interpolated from real bill reads.</p>';
+    html += '<p class="muted" style="margin-top:8px">Daily values identify their source. Auto values come from camera reads; bill values are paper-bill anchors; gaps anywhere between real snapshots are linearly interpolated; carried values repeat the nearest available anchor.</p>';
   } else {
     html += '<p class="muted">Daily usage history builds as the camera records one snapshot per day. '
           + 'Check back tomorrow for the first bar.</p>';
   }
   html += '</div>';
 
+  html += '<div class="card"><h2>Which cost report is authoritative?</h2>'
+        + '<p class="muted" style="margin:0">This Costs page uses whole-house meter movement and is the bill-reconciliation authority. The separate <code>/api/billing</code> report is an irrigation-planning estimate with an assumed 150 ft³ indoor baseline; do not add it to or directly reconcile it with this projected bill.</p></div>';
+
   c.innerHTML = html;
 
   if(cy) drawTierChart(cy, d.rates, d.snapshots, cy.start_cf);
   if(cy) drawBillChart(d.history);
-  var used = (d.snapshots||[]).filter(function(s){return s.used_cf>0;});
-  if(used.length) drawUsageChart(d.snapshots);
+  if((d.snapshots||[]).length) drawUsageChart(d.snapshots);
 }
 
 function stat(val,lbl,size,color,sub2){
@@ -303,7 +308,7 @@ function stat(val,lbl,size,color,sub2){
 }
 function accessibleSeries(label, rows){
   var out='<details class="muted"><summary>'+esc(label)+'</summary><ul>';
-  (rows||[]).forEach(function(row){out+='<li>'+esc(row.date)+': '+esc(num((Number(row.used_cf)||0)*7.48052,1))+' gal</li>';});
+  (rows||[]).forEach(function(row){out+='<li>'+esc(row.date)+': '+esc(num(row.used_gal,1))+' gal ('+esc(row.source||'unknown source')+')</li>';});
   return out+'</ul></details>';
 }
 function rowKV(k,v){ return '<tr><td>' + esc(k) + '</td><td colspan="2" style="text-align:right">' + v + '</td></tr>'; }
@@ -443,10 +448,10 @@ function drawUsageChart(snaps){
     type:'bar',
     data:{ labels: snaps.map(function(s){return s.date.slice(5);}),
       datasets:[{ label:'Gallons/day', data:snaps.map(function(s){return s.used_gal;}),
-        backgroundColor: snaps.map(function(s){return s.source==='bill'?'#cbd5e1':'#3b82f6';}) }]},
+        backgroundColor: snaps.map(function(s){return ({auto:'#2563eb',bill:'#64748b',interpolated:'#f59e0b',carried:'#a855f7'})[s.source]||'#64748b';}) }]},
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false},
-        tooltip:{ callbacks:{ label:function(i){return num(i.raw,0)+' gal'; } } } },
+        tooltip:{ callbacks:{ label:function(i){var s=snaps[i.dataIndex]||{};return num(i.raw,1)+' gal · '+(s.source||'unknown source'); } } } },
       scales:{ x:{grid:{display:false}}, y:{beginAtZero:true,title:{display:true,text:'gal/day'}} } }
   });
 }

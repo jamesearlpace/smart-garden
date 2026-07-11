@@ -2569,3 +2569,14 @@ Decisions: The login deep-link report was invalidated by live curl and existing 
 State: Six display fixes were committed and deployed serially with timestamped backups, `/login` smoke checks, and SHA-256 parity. Thirteen non-watering high/medium raw findings remain represented by coordinated campaigns.
 
 Next: Implement the atomic moisture envelope and the persisted, versioned camera metric/provenance contracts without changing schedule generation or watering behavior.
+## 2026-07-10 - Round-15 benchmark failure truth
+
+Context: Read and merged all 44 round-15 findings. Two Test Audit display/request issues were distinct and actionable; two Grapes/manual-zone reports remain quarantined as watering behavior.
+
+Changes: Test Audit clears prior cards, counts, controls, and state before loads and on every failure (`0e5b5de`), and no longer issues a redundant per-card warm image GET (`31fef84`).
+
+Decisions: The remaining 38 non-watering high/medium reports refine the existing atomic moisture, dashboard authority, reporting-time, durable camera-detail, persisted benchmark, and typed CNN-metric campaigns. No backend Python or watering/control code changed.
+
+State: Both template checkpoints were deployed independently after timestamped backups. Authenticated live Playwright verified a forced HTTP 500 leaves zero stale cards/count and that the normal 83-card result still renders. Public `/login` returned 200 and remote/local SHA-256 parity passed.
+
+Next: Land the six coordinated contracts without changing schedule generation, irrigation balance, valves, runtimes, MAD, precipitation rates, or watering configuration.

@@ -650,7 +650,7 @@ def get_connectivity_history(hours: int = 24) -> list[dict]:
     conn = get_conn()
     rows = conn.execute(
         "SELECT ts, success, latency_ms, error_message, boot_count, uptime_sec "
-        "FROM connectivity_log WHERE ts >= datetime('now','localtime', ?) ORDER BY ts",
+        "FROM connectivity_log WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?) ORDER BY ts",
         (f"-{hours} hours",),
     ).fetchall()
     conn.close()
@@ -883,7 +883,7 @@ def get_health_timeseries(hours: int = 24) -> list[dict]:
             "ROUND(AVG(chip_temp_f),1) as chip_temp_f, "
             "MAX(wifi_reconnects) as wifi_reconnects, MAX(crash_count) as crash_count, "
             "ROUND(AVG(battery_v),2) as battery_v "
-            "FROM system_health WHERE ts >= datetime('now','localtime', ?) "
+            "FROM system_health WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?) "
             "GROUP BY strftime('%Y-%m-%dT%H',ts) ORDER BY ts",
             (cutoff,),
         ).fetchall()
@@ -891,7 +891,7 @@ def get_health_timeseries(hours: int = 24) -> list[dict]:
         rows = conn.execute(
             "SELECT ts, wifi_rssi, heap_pct, uptime_sec, boot_count, chip_temp_f, "
             "wifi_reconnects, crash_count, battery_v "
-            "FROM system_health WHERE ts >= datetime('now','localtime', ?) ORDER BY ts",
+            "FROM system_health WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?) ORDER BY ts",
             (cutoff,),
         ).fetchall()
     conn.close()
@@ -904,7 +904,7 @@ def get_sensor_flatline(zone_id: int, hours: int = 24) -> dict:
     row = conn.execute(
         "SELECT COUNT(*) as cnt, MIN(soil_pct) as min_pct, MAX(soil_pct) as max_pct, "
         "MIN(soil_raw) as min_raw, MAX(soil_raw) as max_raw "
-        "FROM sensor_log WHERE zone_id = ? AND ts >= datetime('now','localtime', ?)",
+        "FROM sensor_log WHERE zone_id = ? AND ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?)",
         (zone_id, f"-{hours} hours"),
     ).fetchone()
     conn.close()
@@ -1406,14 +1406,14 @@ def get_server_health_history(hours: int = 24) -> list[dict]:
             "SELECT strftime('%Y-%m-%dT%H:00:00',ts) as ts, "
             "ROUND(AVG(disk_pct),2) as disk_pct, ROUND(AVG(db_size_mb),3) as db_size_mb, "
             "ROUND(AVG(cpu_temp_c),1) as cpu_temp_c "
-            "FROM server_health_log WHERE ts >= datetime('now','localtime', ?) "
+            "FROM server_health_log WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?) "
             "GROUP BY strftime('%Y-%m-%dT%H',ts) ORDER BY ts",
             (cutoff,),
         ).fetchall()
     else:
         rows = conn.execute(
             "SELECT ts, disk_pct, db_size_mb, cpu_temp_c "
-            "FROM server_health_log WHERE ts >= datetime('now','localtime', ?) ORDER BY ts",
+            "FROM server_health_log WHERE ts >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime', ?) ORDER BY ts",
             (cutoff,),
         ).fetchall()
     conn.close()

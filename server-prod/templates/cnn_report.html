@@ -44,6 +44,12 @@ th{color:var(--text2);font-weight:600}
 
 <div class="kpis" id="kpis"></div>
 
+<section class="card" aria-labelledby="insights-heading">
+  <h2 id="insights-heading">Operational insights</h2>
+  <div class="sub" id="insightsStatus" role="status" aria-live="polite">Loading insights...</div>
+  <div class="kpis" id="insightsKpis"></div>
+</section>
+
 <div class="card">
   <h2>Live CNN accuracy by model version</h2>
   <div class="muted" style="font-size:.78rem;margin-bottom:8px">
@@ -128,6 +134,35 @@ fetch('/api/cam/cnn-report').then(function(r){if(!r.ok)throw new Error('Could no
 }).catch(function(e){reportError(e.message||'Could not load report.');});
 }
 loadReport();
+
+function insightsError(message){
+  var s=document.getElementById('insightsStatus');
+  s.setAttribute('role','alert');
+  s.innerHTML=esc(message)+' <button type="button" id="insightsRetry">Retry insights</button>';
+  document.getElementById('insightsRetry').addEventListener('click',loadInsights);
+  document.getElementById('insightsKpis').innerHTML='';
+}
+function loadInsights(){
+  var s=document.getElementById('insightsStatus');
+  s.setAttribute('role','status');s.textContent='Loading insights...';
+  document.getElementById('insightsKpis').innerHTML='';
+  fetch('/api/cam/cnn-insights').then(function(r){
+    if(!r.ok)throw new Error('Could not load insights (HTTP '+r.status+').');
+    return r.json();
+  }).then(function(d){
+    if(!d||typeof d!=='object'||typeof d.generated_at!=='string'||!d.insights||typeof d.insights!=='object'){
+      throw new Error('Insights data has an unexpected format.');
+    }
+    var aq=d.insights.archive_quality||{}, q1=aq.last_1h||{}, trend=d.insights.cnn_trend||{}, backfill=d.insights.strict_backfill||{};
+    s.textContent='Generated '+d.generated_at+'.';
+    document.getElementById('insightsKpis').innerHTML=
+      kpi(Number.isFinite(Number(q1.trusted_pct))?Number(q1.trusted_pct).toFixed(1)+'%':'—','Trusted archive frames, last hour')+
+      kpi(Number.isFinite(Number(trend.recent_7d_acc_pct))?Number(trend.recent_7d_acc_pct).toFixed(1)+'%':'—','CNN accuracy, recent 7 days')+
+      kpi(backfill.running?'Running':'Idle','Strict backfill')+
+      kpi((d.stats&&d.stats.reader)||'—','Active reader');
+  }).catch(function(e){insightsError(e.message||'Could not load insights.');});
+}
+loadInsights();
 
 function kpi(v,l,cls){ return '<div class="kpi"><div class="v '+(cls||'')+'">'+v+'</div><div class="l">'+l+'</div></div>'; }
 </script>

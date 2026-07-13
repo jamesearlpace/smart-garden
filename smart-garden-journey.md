@@ -75,7 +75,7 @@ Verification note: `smart-garden-server` live API and tower HTTP services were s
 >
 > **Known limitation of the tool:** A single frame's sharpness score cannot distinguish "out of focus because too near" vs "too far" — it only knows better/worse per twist. Could add a one-time near/far calibration if desired.
 >
-> **Deploy pattern (this service):** local edits in `C:\MyCode\smart-garden\server-prod\` → backup on server (`cp ...bak.<tag>-<ts>`) → `scp templates/cam_focus.html jamesearlpace@192.168.0.109:~/smart-garden-server/templates/` → `ssh ... "echo 'KeepingP@ce8!' | sudo -S systemctl restart smart-garden-server"` → authed smoke test via session-cookie python. Also mirror to `C:\MyCode\smart-garden-server-live\`. Port 5125.
+> **Deploy pattern (this service):** local edits in `C:\MyCode\smart-garden\server-prod\` → backup on server (`cp ...bak.<tag>-<ts>`) → `scp templates/cam_focus.html jamesearlpace@192.168.0.109:~/smart-garden-server/templates/` → `ssh ... "sudo -n systemctl restart smart-garden-server"` → authed smoke test via session-cookie python. Also mirror to `C:\MyCode\smart-garden-server-live\`. Port 5125.
 
 > **2026-06-12 (evening) — Water-meter cam is now a self-correcting, AI-verified reading pipeline + a new Flow/Leak monitor.** See the dated entry "Meter OCR overhaul + vision-LLM oracle + Flow/Leak monitor" below, and repo memory `/memories/repo/water-meter-ocr.md` for full implementation detail. Headline: per-digit 7-segment OCR + physical odometer model + GPT-4o vision oracle (auto-re-anchor, low-conf fallback, gold training labels) + new **/flow** page (per-zone GPM learned from the real meter, leak/overrun/high-flow detection via ntfy). Known limitation: cam WiFi ~30% packet loss → late/stale frames (hardware; relocate/antenna). No trainable model yet — oracle is collecting the gold dataset for a future per-digit CNN.
 
@@ -1213,7 +1213,7 @@ Correlates the live meter register with which zone the controller has ON to do f
 ```
 Copilot → SSH Acer (192.168.0.109) → curl ESP32 (192.168.0.150) → valve actuates
 ```
-SSH: `jamesearlpace@192.168.0.109` password `KeepingP@ce8!` (key auth configured, no prompt).
+SSH: `jamesearlpace@192.168.0.109` uses key authentication; run privileged commands with `sudo -n`.
 
 ### Common commands
 ```powershell

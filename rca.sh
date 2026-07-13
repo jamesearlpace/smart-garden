@@ -35,4 +35,4 @@ arp -n | grep 150
 echo ""
 echo "=== 7. TCPDUMP - 10 sec capture of ESP32 traffic ==="
 timeout 10 tcpdump -i any -n -c 30 "host 192.168.0.150 and port 80" 2>/dev/null || echo "tcpdump needs root - trying sudo"
-echo "KeepingP@ce8!" | sudo -S timeout 10 tcpdump -i any -n -c 30 "host 192.168.0.150 and port 80" 2>/dev/null
+sudo -n timeout 10 tcpdump -i any -n -c 30 "host 192.168.0.150 and port 80" 2>/dev/null

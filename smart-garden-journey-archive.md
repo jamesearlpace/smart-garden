@@ -153,7 +153,7 @@ ssh jamesearlpace@192.168.0.109 "curl -s -X POST 'http://192.168.0.150/api/close
 ```
 
 - `id=0` = Zone 1 (Garden drip), `id=1` = Zone 2 (Grapes), etc. — zero-indexed
-- SSH password: `KeepingP@ce8!`
+- SSH uses key authentication; do not store passwords in repository files.
 - Returns `"OK"` on success
 
 ### Web Dashboard
@@ -181,7 +181,7 @@ Internet → Ziply Fiber ONT → Netgear GS305E switch (192.168.0.107)
 | **Buck Converter** | LM2596 | 12V → 5V for ESP32 VIN pin |
 | **Motor Drivers** | L298N H-Bridge | Each board drives 2 valves. Need 5 boards for 10 valves |
 | **Solenoid Valves** | Orbit 57861 DC latching | Brief pulse opens, reverse pulse closes, holds with no power |
-| **Home Server** | Acer Aspire A314-23P | Linux Mint 22.1, SSH: jamesearlpace / KeepingP@ce8! |
+| **Home Server** | Acer Aspire A314-23P | Linux Mint 22.1, SSH key authentication as jamesearlpace |
 
 ### Power Wiring
 ```

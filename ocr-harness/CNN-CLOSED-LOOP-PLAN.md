@@ -175,7 +175,7 @@ on forever (cheap insurance against confident drift).
 ### Key facts
 - 9 digits, decimal 3 from the right: `094100762` = 94,100.762 ft³. 1 ft³ = 7.48052 gal.
 - Frames stored UPSIDE-DOWN (camera mount) — rotate 180° to read.
-- Acer: `jamesearlpace@192.168.0.109`, sudo `KeepingP@ce8!`, service `smart-garden-server`.
+- Acer: `jamesearlpace@192.168.0.109`, SSH key authentication with `sudo -n`, service `smart-garden-server`.
 - ⚠️ Server `dashboard.py` + `config.yaml` DRIFT ahead of local — diff before deploying.
 - OpenAI key at `/etc/smart-garden/cam-env`. 30K tokens/min cap; ~$0.002/read.
 

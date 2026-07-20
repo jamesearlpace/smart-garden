@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the smart-garden meter-camera improvement loop every six hours
+
+[Timer]
+OnCalendar=*-*-* 02/6:35:00
+Persistent=true
+AccuracySec=1min
+Unit=smart-garden-meter-improvement.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Evidence-driven Codex improvement loop for smart-garden meter-camera accuracy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/home/john
+Environment=CODEX_HOME=/home/john/.codex
+ExecStart=/home/john/codex-workspace/smart-garden-meter/ops/codex-meter-improvement/run-cycle.sh
+TimeoutStartSec=1h20m
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+UMask=0077

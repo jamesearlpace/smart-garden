@@ -642,3 +642,15 @@ Issues: **#40** (no raw read — closed), **#41** (graph≠OCR — closed), **#4
 - **Build additively, prove it reconciles.** The ledger took zero risk (own DB, read-only of legacy) and was proven against reality (0.7 gal/16d) before anything was re-pointed.
 - **I over-claimed once** ("it's all working") and had to retract after measuring. Verify scope with data before reassuring; self-consistency ≠ correctness.
 - **PS→ssh gotcha:** a `(` in a remote command makes PowerShell strip inner double-quotes → bash syntax error. Keep remote commands paren-free or scp a script.
+
+## 2026-07-20 — Scheduled evidence-driven meter improvement loop
+
+**Context:** James wants the meter-camera system to keep investigating accuracy failures and improving over months. Prior work proves that blind retraining, random frame splits, smoothing, and confidence-threshold relaxation can produce convincing but false progress.
+
+**Changes:** Added `ops/codex-meter-improvement/` with three independent ChatGPT-authenticated Codex stages every six hours: a read-only event-contract audit, an independent single-experiment gate, and a shadow-only executor. Runs use the NUC's shared Codex overlap lock, retain structured evidence and a cumulative experiment journal, and read the Acer live tree plus tower model state without writing either host. The executor may improve only its persistent offline lab and run artifacts during this first phase.
+
+**Decisions:** Optimize event-authority accuracy, not cosmetic frame-level accuracy. Chronological photo-backed truth, explicit unknown/rejection, and zero false accepts outrank coverage. The job cannot change watering behavior, live databases, accepted readings, labels, thresholds, checkpoints, services, provider budgets, or Git. Automatic live promotion remains locked until a chronological benchmark and at least 30 new shadow events prove the documented gate.
+
+**State:** The systemd service/timer, schemas, runner, current RCA/success-criteria context, authentication registration, and shared overlap protection are installed on the NUC. A bounded first cycle is used only to validate read-only evidence collection and offline artifact creation.
+
+**Next:** Accumulate chronological cycles and shadow experiments. Consider a separate promotion workflow only after the permanent journal proves zero false accepts across the required new-event gate and the canonical source-mirror problem is resolved.

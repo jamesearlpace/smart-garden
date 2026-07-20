@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "hypothesis", "experiment", "rationale", "safety"],
+  "properties": {
+    "decision": {"type": "string", "enum": ["run_experiment", "no_change", "blocked"]},
+    "hypothesis": {"type": "string"},
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scope", "inputs", "method", "success_metrics", "stop_conditions"],
+      "properties": {
+        "id": {"type": "string"},
+        "scope": {"type": "string"},
+        "inputs": {"type": "array", "items": {"type": "string"}},
+        "method": {"type": "array", "items": {"type": "string"}},
+        "success_metrics": {"type": "array", "items": {"type": "string"}},
+        "stop_conditions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "rationale": {"type": "string"},
+    "safety": {"type": "array", "items": {"type": "string"}}
+  }
+}

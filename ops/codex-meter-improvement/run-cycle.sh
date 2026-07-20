@@ -72,11 +72,11 @@ if [[ ! -s "$RUN/audit.json" ]]; then
 fi
 
 EVAL_PROMPT=$(cat <<PROMPT
-You are stage 2 of the recurring smart-garden water-meter camera improvement loop. Independently evaluate $RUN/audit.json and choose at most one bounded offline experiment. Do not modify files, databases, Git, services, timers, models, labels, or remote state.
+You are stage 2 of the recurring smart-garden water-meter camera improvement loop. Independently evaluate $RUN/audit.json and choose one bounded improvement workstream. This evaluation stage is read-only, but it may approve stage 3 to implement and deploy a proven meter-camera/OCR or Water Usage fix under the executor's promotion gates.
 
-Read the same context documents listed by stage 1 plus relevant implementation and existing artifacts under $LAB. Validate important claims with at most 10 bounded read-only commands. Reject blind CNN retraining, lower confidence thresholds, frame-random train/test splits, circular ground truth, smoothing presented as accuracy, paid-oracle calls, and any change to irrigation control. Prefer chronological holdouts, immutable photo-backed truth, zero false accepts, explicit rejection, and reusable benchmark improvements. If evidence is insufficient or no novel safe experiment exists, choose no_change or blocked.
+Read the same context documents listed by stage 1 plus relevant live implementation and existing artifacts under $LAB. Validate important claims with at most 10 bounded read-only commands. Reject blind CNN retraining, lower confidence thresholds, frame-random train/test splits, circular ground truth, smoothing presented as accuracy, and any change to irrigation control. Prefer chronological holdouts, immutable photo-backed truth, zero false accepts, explicit rejection, and changes that improve what James can see on the live Water Usage site. If prior lab evidence already proves a deterministic data-contract or presentation fix, approve implementation, deployment, and verification in this cycle rather than requesting another equivalent offline experiment.
 
-The experiment must be executable entirely under $LAB and $RUN using read-only copies or reads from Acer/tower. It may not write Acer/tower, restart services, alter live databases, deploy product code, commit/push Git, or change watering behavior. Return only the required structured evaluation JSON.
+The initial experiment and all pre-deployment validation must be executable under $LAB and $RUN using copies or read-only Acer/tower evidence. The approved workstream may then authorize the executor to edit and deploy allowlisted meter-camera/OCR or Water Usage files, restart only the required measurement/web service, and verify production under the executor's backup, idle-valve, test, rollback, and zero-false-accept rules. Paid vision use is allowed only when already configured and budget-safe; never change provider budgets. Return only the required structured evaluation JSON.
 PROMPT
 )
 run_stage 15m "$RUN/evaluation.json" "$RUN/evaluation.log" "$EVAL_PROMPT" \
@@ -89,7 +89,7 @@ fi
 EXEC_PROMPT=$(cat <<PROMPT
 You are stage 3 of the recurring smart-garden water-meter camera improvement loop. Read $RUN/audit.json and $RUN/evaluation.json, all named context documents, relevant implementation, and prior lab artifacts.
 
-If evaluation.decision is run_experiment, execute that experiment first. When its result supports another concrete, safe, non-repeating experiment in the same meter-accuracy workstream, continue immediately rather than waiting for the next scheduled cycle. Use the remaining call budget productively and stop only when there is no evidence-backed next action, a safety/promotion gate blocks progress, or less than five minutes remain.
+If evaluation.decision is run_experiment, execute that workstream. Reuse prior successful lab artifacts instead of repeating them. When evidence supports an allowlisted production improvement, implement, deploy, and verify it during this cycle rather than stopping at a report. Continue with directly related, non-repeating work while runtime remains; stop only when there is no evidence-backed next action, a concrete promotion gate blocks progress, or less than five minutes remain.
 
 Offline experimentation may create or update experiment code, copied inputs, manifests, and results under $LAB and $RUN. Preserve failures and rejected candidates, compare every iteration with the prior baseline, and require zero false accepts; higher coverage is not an improvement if any false accept appears.
 

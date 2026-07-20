@@ -126,6 +126,7 @@ printf 'status=%s\naudit_rc=%s\nevaluation_rc=%s\nexecution_rc=%s\ncompleted=%s\
   "$([[ "$AUDIT_RC" -eq 0 && "$EVAL_RC" -eq 0 && "$EXEC_RC" -eq 0 ]] && echo success || echo failed)" \
   "$AUDIT_RC" "$EVAL_RC" "$EXEC_RC" "$(date --iso-8601=seconds)" "$RUN/execution.md" >"$RUN/status"
 
-find "$STATE/runs" -mindepth 1 -maxdepth 1 -type d -mtime +365 -exec rm -rf -- {} +
+# Preserve all run history. Future supervisors and experiment gates need old
+# artifacts to distinguish real progress from repeated or regressed hypotheses.
 
 [[ "$AUDIT_RC" -eq 0 && "$EVAL_RC" -eq 0 && "$EXEC_RC" -eq 0 ]]

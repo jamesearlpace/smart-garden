@@ -8,7 +8,7 @@ Type=oneshot
 Environment=HOME=/home/john
 Environment=CODEX_HOME=/home/john/.codex
 ExecStart=/home/john/codex-workspace/smart-garden-meter/ops/codex-meter-improvement/run-cycle.sh
-TimeoutStartSec=1h20m
+TimeoutStartSec=2h
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6

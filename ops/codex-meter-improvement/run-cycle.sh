@@ -89,12 +89,25 @@ fi
 EXEC_PROMPT=$(cat <<PROMPT
 You are stage 3 of the recurring smart-garden water-meter camera improvement loop. Read $RUN/audit.json and $RUN/evaluation.json, all named context documents, relevant implementation, and prior lab artifacts.
 
-If evaluation.decision is run_experiment, execute exactly that one experiment. You may create or update only experiment code, copied inputs, manifests, and results under $LAB and $RUN. Remote Acer/tower access is read-only. Never modify live files or databases; never restart/enable/disable a service or timer; never open a valve; never change irrigation behavior, labels, accepted readings, canonical meter data, model checkpoints, Git state, or provider budgets; never call a paid vision provider. Do not weaken confidence, physical-consistency, chronological-holdout, or zero-false-accept gates.
+If evaluation.decision is run_experiment, execute that experiment first. When its result supports another concrete, safe, non-repeating experiment in the same meter-accuracy workstream, continue immediately rather than waiting for the next scheduled cycle. Use the remaining call budget productively and stop only when there is no evidence-backed next action, a safety/promotion gate blocks progress, or less than five minutes remain.
 
-Measure the declared metrics, preserve failures and rejected candidates, compare with the prior baseline, and state whether the hypothesis was supported. A higher coverage number is not an improvement if any false accept appears. If blocked or no_change, make no experimental change and explain why. Write a durable Markdown report with: Outcome; New evidence; Experiment and hypothesis; Dataset/provenance; Results versus baseline; Failure analysis; Safety; Reusable artifacts; Decision; Next non-repeating experiment. Include exact paths and commands but redact secrets and household details.
+Offline experimentation may create or update experiment code, copied inputs, manifests, and results under $LAB and $RUN. Preserve failures and rejected candidates, compare every iteration with the prior baseline, and require zero false accepts; higher coverage is not an improvement if any false accept appears.
+
+You may automatically deploy a proven live meter-camera/OCR fix to Acer or the tower only when every applicable gate below passes:
+
+1. The change is limited to camera capture, OCR/model inference, meter provenance, event authority, meter health, or Water Usage presentation. Never change irrigation.py, valve control, ET/water-balance decisions, schedules, zone enablement, automatic/manual modes, watering thresholds, or provider budgets.
+2. Reproduce the defect and prove the candidate on chronological photo-backed holdouts. Recognition/model/acceptance changes require zero false accepts plus the RCA's required new-event shadow gate (at least 30 new physical events unless the context explicitly documents that this gate already passed). Pure deterministic data-contract or presentation fixes may use focused tests plus exact historical/live contract replays when no recognition authority changes.
+3. Do not lower confidence, physical-consistency, independent-evidence, chronological-holdout, or rejection gates. Do not use circular labels, smoothing, propagated locks, or the candidate reader as ground truth.
+4. Immediately before mutation, prove no valve is active. If watering is active or state is uncertain, do not wait and do not deploy; retain the proven candidate for a future idle cycle.
+5. Back up every live file before replacement. Do not write a live SQLite database unless the approved fix strictly requires it; then stop smart-garden-server first, back up the exact DB, use a transaction, and restore/restart automatically on any failure.
+6. Deploy only the allowlisted measurement files needed for the proven fix: vision_oracle.py, meter_archive.py, meter_ledger.py, meter_phase_tracker.py, verified_run_meter.py, flow_monitor.py, meter-specific tools, meter-specific templates, or tower meter-cnn service/model files. dashboard.py is allowed only for meter-camera or Water Usage code with focused tests proving unrelated routes unchanged. No other live file is authorized.
+7. Run focused tests before deployment, then verify smart-garden-server, /login, camera freshness, reader health, exact Water Usage contracts, service restart count, and the measured defect. Roll back automatically if any verification fails.
+8. Save the candidate patch, pre/post hashes, backups, commands, tests, deployment manifest, and rollback instructions under $RUN and $LAB. Never expose credentials or unrelated household data. Do not commit unrelated work. Because the Windows canonical checkout is dirty, leave a clean patch artifact for later reconciliation instead of force-merging or overwriting that checkout.
+
+If blocked or no_change, explain why. Write a durable Markdown report with: Outcome; New evidence; Experiments and hypotheses; Dataset/provenance; Results versus baseline; Promotion-gate assessment; Live changes or why none; Tests and post-deploy verification; Backups and rollback; Failure analysis; Reusable artifacts; Decision; Next non-repeating action. Include exact paths and commands but redact secrets and household details.
 PROMPT
 )
-run_stage 30m "$RUN/execution.md" "$RUN/execution.log" "$EXEC_PROMPT"
+run_stage 60m "$RUN/execution.md" "$RUN/execution.log" "$EXEC_PROMPT"
 EXEC_RC=$?
 if [[ ! -s "$RUN/execution.md" ]]; then
   printf '# Outcome\n\nExecution failed with exit code %s. Review `%s/execution.log`; no live state was changed.\n' "$EXEC_RC" "$RUN" >"$RUN/execution.md"

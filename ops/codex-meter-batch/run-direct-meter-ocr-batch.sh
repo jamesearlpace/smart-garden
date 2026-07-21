@@ -41,6 +41,7 @@ if [[ -z "$EVENT_IDS" ]]; then
   printf 'status=complete\nreason=backlog_empty\n' >"$RUN/status"
   exit 0
 fi
+python3 -c 'import json,sys; import chronological_meter_benchmark as b; inv=b.inventory(); corp=json.load(open(b.ARTIFACTS/"benchmark_corpus.json")); ids=list(map(int,sys.argv[1:])); c=dict(corp); c["holdout_event_ids"]=[]; c["calibration_event_ids"]=[]; c["recoverable_queue_event_ids"]=ids; b.build_packs(inv,c,0,len(ids))' $EVENT_IDS
 timeout 8m python3 run_shadow_backlog_batch_085316.py $EVENT_IDS >"$RUN/output.json" 2>"$RUN/error.log" || RC=$?
 RC=${RC:-0}
 printf 'status=%s\nexit_code=%s\ncompleted=%s\n' "$([[ $RC -eq 0 ]] && echo success || echo failed)" "$RC" "$(date --iso-8601=seconds)" >"$RUN/status"

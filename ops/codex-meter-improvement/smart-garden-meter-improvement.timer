@@ -2,7 +2,10 @@
 Description=Run the smart-garden meter-camera improvement loop every six hours
 
 [Timer]
-OnCalendar=*-*-* 02/6:35:00
+# The hourly home-net-watch UI audit starts at :19 and recent successful
+# runs often finish around :32-:38. Start after that common tail so this
+# six-hour loop does not predictably skip on the shared Codex lock.
+OnCalendar=*-*-* 02/6:41:00
 Persistent=true
 AccuracySec=1min
 Unit=smart-garden-meter-improvement.service

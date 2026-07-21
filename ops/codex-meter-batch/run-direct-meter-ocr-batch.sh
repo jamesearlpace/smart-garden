@@ -9,7 +9,8 @@ unset OPENAI_API_KEY AZURE_OPENAI_API_KEY ANTHROPIC_API_KEY || true
 
 STATE=/home/john/.local/share/smart-garden-meter-ocr-batch
 LAB=/home/john/.local/share/smart-garden-meter-improvement/lab/chronological_codex_sequence_meter_authority_benchmark_20260721
-SUMMARY="$LAB/artifacts/boundary_nearest_holdout_expansion_summary_20260721-073745.json"
+SUMMARY=/home/john/.local/share/smart-garden-meter-improvement/runs/20260721-085316/artifacts/guarded_boundary_policy_v2_summary_20260721-085316.json
+RESUME="$LAB/backlog_attempts/backlog_resume_state.json"
 mkdir -p "$STATE/runs"
 STAMP=$(date +%Y%m%d-%H%M%S)
 RUN="$STATE/runs/$STAMP"
@@ -32,12 +33,15 @@ if (( FALSE_ACCEPTS > 0 )); then
   exit 0
 fi
 
-# Validation mode only. The engineering job must explicitly publish a
-# zero-false-accept holdout summary before historical backlog calls can begin.
 cd "$LAB"
 export METER_STAGE3_COMPACT_REASONING=low
 export METER_STAGE3_COMPACT_TIMEOUT_SEC=180
-timeout 8m python3 run_compact_boundary_holdout_batch.py 891 901 >"$RUN/output.json" 2>"$RUN/error.log" || RC=$?
+EVENT_IDS=$(python3 -c 'import json,sys; print(" ".join(map(str,json.load(open(sys.argv[1])).get("next_recommended_batch_event_ids",[])[:2])))' "$RESUME")
+if [[ -z "$EVENT_IDS" ]]; then
+  printf 'status=complete\nreason=backlog_empty\n' >"$RUN/status"
+  exit 0
+fi
+timeout 8m python3 run_shadow_backlog_batch_085316.py $EVENT_IDS >"$RUN/output.json" 2>"$RUN/error.log" || RC=$?
 RC=${RC:-0}
 printf 'status=%s\nexit_code=%s\ncompleted=%s\n' "$([[ $RC -eq 0 ]] && echo success || echo failed)" "$RC" "$(date --iso-8601=seconds)" >"$RUN/status"
 exit "$RC"

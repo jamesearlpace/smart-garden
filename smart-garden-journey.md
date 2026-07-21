@@ -1,7 +1,13 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-07-08 (water-meter history re-repaired from real photos, guardrails added, and OCR path reframed — details in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+**Last Updated:** 2026-07-21 (Codex OCR batch runner status bookkeeping repaired; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+
+## 2026-07-21 - Codex OCR batch status bookkeeping
+
+The NUC Codex supervisor found that `smart-garden-meter-ocr-batch.timer` and `smart-garden-meter-improvement.timer` had been stopped/disabled even though their installed units still matched source and the auth watchdog was healthy. It restored only timer state with `systemctl --user enable --now smart-garden-meter-improvement.timer smart-garden-meter-ocr-batch.timer`.
+
+The supervisor also fixed `ops/codex-meter-batch/run-direct-meter-ocr-batch.sh` so every skipped, blocked, complete, failed, or successful direct OCR batch writes a `completed=` timestamp. Previously global-lock skips such as `20260721-125041` lacked completion time, and the same-job lock branch could leave the latest run without any status. Validation under the supervisor-held global lock wrote `/home/john/.local/share/smart-garden-meter-ocr-batch/runs/20260721-125301/status` with `status=skipped`, `reason=other_codex_job_active`, and `completed=2026-07-21T12:53:01-07:00`. This was runner bookkeeping only: no irrigation behavior, production files, databases, model weights, OCR policy, or backlog decisions changed.
 
 ## 2026-07-08 - Meter data repair + OCR next step pointer
 

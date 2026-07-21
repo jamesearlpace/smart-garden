@@ -1,0 +1,11 @@
+[Unit]
+Description=Run direct meter OCR worker every 30 minutes
+
+[Timer]
+OnCalendar=*:08,38
+Persistent=true
+AccuracySec=10s
+Unit=smart-garden-meter-ocr-batch.service
+
+[Install]
+WantedBy=timers.target

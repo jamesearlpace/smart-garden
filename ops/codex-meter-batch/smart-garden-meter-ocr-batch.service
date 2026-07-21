@@ -1,0 +1,15 @@
+[Unit]
+Description=Direct checkpointed Codex OCR validation/batch worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/home/john
+Environment=CODEX_HOME=/home/john/.codex
+ExecStart=/home/john/codex-workspace/smart-garden-meter/ops/codex-meter-batch/run-direct-meter-ocr-batch.sh
+TimeoutStartSec=10m
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+UMask=0077

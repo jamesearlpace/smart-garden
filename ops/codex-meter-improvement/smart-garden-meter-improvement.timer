@@ -1,14 +1,10 @@
 [Unit]
-Description=Run the smart-garden meter-camera improvement loop every six hours
+Description=Run meter OCR engineering agent daily
 
 [Timer]
-# The hourly UI audit starts at :19 and recent successful runs often finish
-# around :32-:38, while top-of-hour telemetry starts at :00. A :41 start let
-# the 20260721-024117 cycle run 20m44s and skip 03:00 telemetry, so keep this
-# in the narrow post-UI/pre-telemetry slot with tight timer accuracy.
-OnCalendar=*-*-* 02/6:38:50
+OnCalendar=*-*-* 03:38:50
 Persistent=true
-AccuracySec=5s
+AccuracySec=10s
 Unit=smart-garden-meter-improvement.service
 
 [Install]

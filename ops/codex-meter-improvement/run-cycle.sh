@@ -19,6 +19,7 @@ JOURNAL="$STATE/meter-improvement-journey.md"
 
 mkdir -p "$RUN" "$LAB" /home/john/.local/share/codex-jobs
 chmod 700 "$STATE" "$STATE/runs" "$RUN" "$LAB"
+ln -sfn "$RUN" "$STATE/latest"
 
 exec 9>"$STATE/cycle.lock"
 if ! flock -n 9; then
@@ -31,9 +32,6 @@ if ! flock -n 8; then
   printf 'status=skipped\nreason=other_codex_job_active\ncompleted=%s\n' "$(date --iso-8601=seconds)" >"$RUN/status"
   exit 0
 fi
-
-ln -sfn "$RUN" "$STATE/latest"
-
 sanitize_stream() {
   sed -E \
     -e 's/(Authorization: Bearer )[A-Za-z0-9._~+=\/-]+/\1[REDACTED]/g' \

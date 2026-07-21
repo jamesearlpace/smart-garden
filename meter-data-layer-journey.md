@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-07-20 - NUC supervisor repair for meter-improvement skipped-run bookkeeping
+
+Context: The NUC Codex-job supervisor found that the scheduled meter-improvement runner wrote skipped status artifacts when the shared global Codex lock was busy, but left `/home/john/.local/share/smart-garden-meter-improvement/latest` pointing at the older successful `20260720-081136` run. The concrete skipped example was `/home/john/.local/share/smart-garden-meter-improvement/runs/20260720-203500/status`, which recorded `status=skipped` and `reason=other_codex_job_active`.
+
+Change: `ops/codex-meter-improvement/run-cycle.sh` now updates `latest` immediately after creating the run directory, before same-job or global-lock skip exits. This is Codex job bookkeeping only. It does not change irrigation behavior, schedules, valves, OCR/model thresholds, provider budgets, live databases, or Acer product files.
+
+Validation: `bash -n` passed for the runner, JSON schemas parsed, and temporary dry-run simulations proved the skip branches now leave `latest` pointing at the skipped run while preserving skipped status fields. Backup: `/home/john/.local/share/codex-job-repair-backups/20260720-2205-skipped-run-latest-symlink/`.
+
+---
+
 ## TL;DR of the whole sequence
 
 A click on the water-usage graph showed the graph value (`095029.589`) disagreeing with the photo's AI read (`095229.678`) — which surfaced, step by step, that the system had **no clean data foundation**: usage and photos came from two different stores that drifted apart, the raw OCR read was never persisted, and numbers weren't traceable to evidence. We diagnosed it, logged it, patched the symptoms, then **stopped patching and built the foundation**: a canonical, append-only, auditable ledger, and re-pointed the charts onto it.

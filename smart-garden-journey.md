@@ -1,7 +1,15 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-07-21 (Codex OCR batch runner status bookkeeping repaired; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+**Last Updated:** 2026-07-21 (Codex OCR batch timer moved to the hourly idle window; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+
+## 2026-07-21 - Codex OCR batch timer idle slot
+
+The NUC Codex supervisor found that the direct OCR batch worker was healthy when it got a slot, but its timer was scheduled at `*:08,38`, which repeatedly collided with the shared Codex lock held by the top-of-hour home-net-watch telemetry audit and the `*:19` home-net-watch UI audit. Evidence captured before the change showed the 2026-07-21 direct OCR batch statuses as `5` success, `20` skipped for `other_codex_job_active`, `2` blocked for the verified holdout false-accept gate, and `2` failed during earlier manual/catch-up work. Recent successful runs completed in about 78-91 seconds and processed two backlog events without promotion; the runner's internal batch timeout remains 8 minutes.
+
+Changed only `ops/codex-meter-batch/smart-garden-meter-ocr-batch.timer`: the timer now runs once per hour at `*:50`, with a comment documenting the home-net-watch audit windows and the 8-minute worker budget. This should turn predictable collision attempts into a bounded idle-window batch while preserving the global no-overlap lock. No irrigation behavior, production services, databases, model weights, OCR policy, backlog state, prompt content, or live smart-garden files changed.
+
+Pre-change backups and evidence are under `/home/john/.local/share/codex-job-repair-backups/20260721-2158-smart-garden-ocr-idle-slot/`.
 
 ## 2026-07-21 - Codex OCR batch status bookkeeping
 

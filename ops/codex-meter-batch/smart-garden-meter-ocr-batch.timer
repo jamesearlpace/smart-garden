@@ -5,7 +5,9 @@ Description=Run direct meter OCR worker during the hourly Codex idle window
 # Top-of-hour telemetry and :19 UI audits usually hold the shared Codex
 # lock through the first half of each hour. The worker has an 8 minute
 # internal timeout, so :50 gives it a bounded slot before the next audit.
-OnCalendar=*-*-* *:50:00
+# The Codex job supervisor runs every three hours at :45; omit those
+# supervisor hours so this worker does not create predictable no-op runs.
+OnCalendar=*-*-* 01,02,04,05,07,08,10,11,13,14,16,17,19,20,22,23:50:00
 Persistent=true
 AccuracySec=10s
 Unit=smart-garden-meter-ocr-batch.service

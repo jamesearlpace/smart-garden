@@ -1,7 +1,15 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-07-22 (Codex OCR batch runner records bounded no-output calls as blocked; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+**Last Updated:** 2026-07-22 (Codex OCR batch avoids supervisor-hour no-op slots and records bounded no-output calls as blocked; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+
+## 2026-07-22 - Codex OCR batch supervisor-hour skips
+
+The NUC Codex supervisor found that the direct OCR batch worker's `*:50` idle slot was healthy when it ran, but it also fired during the separate Codex job supervisor's `00/3:45` window. Because both jobs correctly use the shared global Codex lock, those attempts became predictable no-op runs instead of useful backlog work. Evidence from 2026-07-22 showed `status=skipped reason=other_codex_job_active` at `00:50`, `03:50`, `06:50`, `09:50`, and the live supervisor-overlap run at `12:50`, while neighboring non-supervisor slots processed events successfully in about 13-56 seconds.
+
+Changed only `ops/codex-meter-batch/smart-garden-meter-ocr-batch.timer`: it still uses the `:50` bounded idle window, but now omits the supervisor hours `00,03,06,09,12,15,18,21`. This removes recurring useless timer activations while preserving the shared no-overlap lock and the successful worker path. No irrigation behavior, production services, databases, model weights, OCR guard policy, prompts, backlog promotion, or live smart-garden files changed.
+
+Pre-change backups and evidence are under `/home/john/.local/share/codex-job-repair-backups/20260722-1250-smart-garden-ocr-supervisor-slot/`.
 
 ## 2026-07-22 - Codex OCR batch no-output handling
 

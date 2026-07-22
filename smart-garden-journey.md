@@ -1,7 +1,15 @@
 # Smart Garden — Journey Doc
 
 **Status:** ✅ **System operational + actively self-managing.** Sync-groups live (overlapping turf zones water together, deep+infrequent). ET₀ water-balance brain is the decision-maker. Soil sensors are observe-only supporting "eyes" (not the brain) with full server-side calibration UI. Dashboard de-cluttered.
-**Last Updated:** 2026-07-21 (Codex OCR batch timer moved to the hourly idle window; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+**Last Updated:** 2026-07-22 (Codex OCR batch runner records bounded no-output calls as blocked; water-meter history and OCR details remain in **`meter-data-layer-journey.md`** and **`meter-cnn-journey.md`**)
+
+## 2026-07-22 - Codex OCR batch no-output handling
+
+The NUC Codex supervisor found that the `*:50` direct OCR batch timer was reaching its intended idle slot, but the 2026-07-21 23:50 run failed the systemd service after processing event 0528 and timing out without a final Codex JSON output for event 0529. Evidence: `/home/john/.local/share/smart-garden-meter-ocr-batch/runs/20260721-235007/status` had `status=failed exit_code=1`; its `error.log` ended in `FileNotFoundError` for event 0529 `codex_output.json`; the preserved call manifest recorded `status=timeout_no_final_output`, `timeout_sec=180`, and `output_path=null`. The preceding `22:50` run completed successfully in about 90 seconds, so this was not a timer collision regression.
+
+Changed only `ops/codex-meter-batch/run-direct-meter-ocr-batch.sh`: the direct worker now attempts one event per hourly idle slot by default, gives that event a 420-second compact Codex budget inside the existing 8-minute wrapper timeout, and records known missing `codex_output.json`/`pack_manifest.json` outcomes as `status=blocked` with the event IDs instead of leaving systemd failed. This is runner bookkeeping and cadence control only: no irrigation behavior, production services, databases, model weights, OCR guard policy, prompts, backlog promotion, or live smart-garden files changed.
+
+Pre-change backups and evidence are under `/home/john/.local/share/codex-job-repair-backups/20260722-0050-smart-garden-ocr-no-output-block/`.
 
 ## 2026-07-21 - Codex OCR batch timer idle slot
 

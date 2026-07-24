@@ -7,7 +7,9 @@ Description=Run direct meter OCR worker during the hourly Codex idle window
 # internal timeout, so :50 gives it a bounded slot before the next audit.
 # The Codex job supervisor runs every three hours at :45; omit those
 # supervisor hours so this worker does not create predictable no-op runs.
-OnCalendar=*-*-* 01,02,04,05,07,08,10,11,13,14,16,17,19,20,22,23:50:00
+# The daily meter improvement loop owns the 01:22 maintenance window and may
+# still be running at 01:50, so omit that batch slot too.
+OnCalendar=*-*-* 02,04,05,07,08,10,11,13,14,16,17,19,20,22,23:50:00
 Persistent=true
 AccuracySec=10s
 Unit=smart-garden-meter-ocr-batch.service

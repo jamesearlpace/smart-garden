@@ -2,10 +2,10 @@
 Description=Run meter OCR engineering agent daily
 
 [Timer]
-# Start after the top-of-hour telemetry audit's observed high-water runtime and
-# before the :50 direct OCR batch. The old 03:38 slot repeatedly crossed 04:00
-# and caused the home-net-watch telemetry audit to skip on the global Codex lock.
-OnCalendar=*-*-* 01:21:30
+# Run in the daily Codex maintenance window. The home-net-watch UI audit omits
+# 01:22 and the direct OCR batch omits 01:50 so this longer improvement loop
+# does not create predictable global-lock no-op runs.
+OnCalendar=*-*-* 01:22:30
 Persistent=true
 AccuracySec=10s
 Unit=smart-garden-meter-improvement.service
